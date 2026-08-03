@@ -1,0 +1,28 @@
+include: package:flutter_lints/flutter.yaml
+
+linter:
+  rules:
+    prefer_const_constructors: true
+    prefer_const_declarations: true
+    avoid_print: true
+    prefer_single_quotes: true
+    unawaited_futures: true
+    always_declare_return_types: true
+    prefer_final_locals: true
+    sort_child_properties_last: true
+    use_key_in_widget_constructors: true
+    prefer_const_literals_to_create_immutables: true
+    require_trailing_commas: true
+    avoid_catches_without_on_clauses: true
+    use_super_parameters: true
+    sort_constructors_first: true
+    no_leading_underscores_for_local_identifiers: false
+    library_private_types_in_public_api: false
+
+analyzer:
+  errors:
+    invalid_annotation_target: ignore
+    missing_return: error
+    dead_code: warning
+  exclude:
+    - "**/*.g.dart"
