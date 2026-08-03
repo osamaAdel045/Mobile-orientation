@@ -1,0 +1,139 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Testing Only in Browser
+
+Browser testing gives a false sense of security. iOS WKWebView enforces stricter memory limits, different scroll physics, and limited localStorage guarantees.
+
+```typescript
+// WRONG — works in Chrome desktop, crashes on iOS WebView
+const heavyList = new Array(10000).fill(null).map((_, i) => ({
+  id: i, data: new Array(5000).fill('x').join('')
+}))
+```
+
+```typescript
+// RIGHT — virtual scrolling renders only visible DOM nodes
+import { IonVirtualScroll } from '@ionic/angular'
+// Always profile memory with Safari Web Inspector on a physical iOS device
+```
+
+### Heavy DOM Manipulation
+
+Animating layout properties like `width`, `height`, or `top` triggers layout recalculations that cause frame drops on iOS WKWebView.
+
+```css
+/* WRONG — animating layout properties */
+.card { transition: width 0.3s, height 0.3s, top 0.3s; }
+```
+
+```css
+/* RIGHT — animate compositor-only properties */
+.card { transition: transform 0.3s, opacity 0.3s; will-change: transform; }
+```
+
+### Unconfigured Content Security Policy
+
+WebViews need explicit CSP headers. Without them, inline styles fail, scripts inject, and connections may be blocked by the WebView.
+
+```html
+<meta http-equiv="Content-Security-Policy"
+  content="default-src 'self'; style-src 'self' 'unsafe-inline';
+    connect-src 'self' https://api.example.com;
+    img-src 'self' data:; media-src 'self' https://cdn.example.com" />
+```
+
+### Forgetting Capacitor Plugin Native Setup
+
+Installing a plugin with npm is only half the work. Each plugin may require native project configuration files.
+
+```bash
+# WRONG — install alone without native sync
+npm install @capacitor/camera
+# No npx cap sync — plugin won't work on device
+```
+
+```bash
+# RIGHT — always sync after installing plugins
+npm install @capacitor/camera @capacitor/preferences
+npx cap sync
+# Verify: npx cap open ios → check Info.plist permission strings
+#         npx cap open android → check AndroidManifest.xml
+```
+
+<Callout type="warning">
+  Silent failures are the most dangerous class of bug in Capacitor. A plugin lacking native config throws an opaque runtime error or returns `null` on device while working perfectly in the browser. Always open both native projects and verify the build after adding any new plugin. Common missing entries: NSCameraUsageDescription (iOS), NSPhotoLibraryUsageDescription (iOS), camera/gps permissions (Android manifest).
+</Callout>
+
+### Assuming JIT Compilation on iOS
+
+iOS WKWebView has no JIT for JavaScript. Heavy synchronous computation blocks the main thread and drops frames.
+
+```typescript
+// WRONG — blocking the main thread
+processHugeDataset(data: number[]) {
+  const result = data.map(expensiveTransform) // UI freezes for seconds
+  this.data = result
+}
+```
+
+```typescript
+// RIGHT — offload to Web Worker
+const worker = new Worker('./heavy.worker.js', { type: 'module' })
+worker.postMessage(data)
+worker.onmessage = ({ data }) => this.data = data
+```
+
+### Ignoring Mobile Keyboard Handling
+
+Mobile keyboards resize the viewport differently on iOS vs Android. Ionic's Keyboard plugin provides lifecycle hooks.
+
+```typescript
+import { Keyboard } from '@capacitor/keyboard'
+
+Keyboard.addListener('keyboardWillShow', ({ keyboardHeight }) => {
+  document.activeElement?.scrollIntoView({ block: 'center' })
+  document.body.style.setProperty('--kb-height', `${keyboardHeight}px`)
+})
+
+Keyboard.addListener('keyboardWillHide', () => {
+  document.body.style.removeProperty('--kb-height')
+})
+```
+
+### Overusing Legacy Cordova Plugins
+
+Many Cordova plugins are unmaintained and incompatible with Capacitor. Always prefer the Capacitor-native equivalent.
+
+```bash
+# WRONG — deprecated Cordova approach
+cordova plugin add cordova-plugin-file
+```
+
+```bash
+# RIGHT — Capacitor-native equivalent
+npm install @capacitor/filesystem && npx cap sync
+```
+
+<Callout type="tip">
+  Before adding any community plugin, check its GitHub: last commit date, open issues, and Capacitor version compatibility. The official plugin list at capacitorjs.com/docs/plugins is the safest starting point. For missing functionality, generate a plugin scaffold with `npx @capacitor/plugin@latest generate`.
+</Callout>
+
+### Not Testing on Low-End Android
+
+Chromium WebView performance varies dramatically across Android devices. What runs at 60fps on a Pixel 9 may stutter on a Moto G.
+
+```typescript
+import { Device } from '@capacitor/device'
+
+const info = await Device.getInfo()
+if (info.memUsed && info.memUsed > 2000) {
+  document.documentElement.classList.add('low-end')
+}
+```
+
+```css
+.low-end .animated-element {
+  animation: none !important;
+  transition: none !important;
+}
+```

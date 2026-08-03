@@ -1,0 +1,142 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    ### Quick Stats on Networking
+
+    <StatGrid columns={3}>
+      <StatItem value="43K+" label="GitHub stars for Retrofit" />
+      <StatItem value="5x" label="HTTP/2 multiplexing vs HTTP/1.1 throughput" />
+      <StatItem value="100%" label="of top 100 apps use OkHttp under the hood" />
+    </StatGrid>
+
+    ### Retrofit + OkHttp Architecture
+
+    Retrofit turns a Kotlin interface into a full REST client. Under the hood, OkHttp handles all network I/O: connection pooling, timeouts, interceptors, caching, and HTTP/2 multiplexing. Kotlin Serialization converts JSON to Kotlin objects at compile time with zero reflection.
+
+    ```kotlin
+    // implementation("com.squareup.retrofit2:retrofit:2.11.0")
+    // implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    // implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
+    // implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+
+    interface OrderApi {
+        @GET("api/v3/orders")
+        suspend fun getOrders(
+            @Query("status") status: String? = null,
+            @Query("page") page: Int = 1,
+            @Query("limit") limit: Int = 20
+        ): List<OrderDto>
+
+        @POST("api/v3/orders")
+        suspend fun createOrder(@Body order: CreateOrderRequest): OrderDto
+
+        @GET("api/v3/orders/{id}")
+        suspend fun getOrderById(@Path("id") orderId: String): OrderDto
+    }
+    ```
+
+    ### Interceptor Chain
+
+    OkHttp's interceptor chain has two types: **application interceptors** (`addInterceptor()`) run once regardless of redirects; **network interceptors** (`addNetworkInterceptor()`) run per network request.
+
+    ```kotlin
+    class AuthInterceptor(private val tokenProvider: () -> String?) : Interceptor {
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val original = chain.request()
+            val token = tokenProvider() ?: return chain.proceed(original)
+            return chain.proceed(original.newBuilder()
+                .header("Authorization", "Bearer $token")
+                .header("X-Device-Id", DeviceId.get())
+                .build())
+        }
+    }
+
+    val client = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .addInterceptor(AuthInterceptor { sessionManager.accessToken })
+        .addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.HEADERS })
+        .cache(Cache(cacheDir, 10L * 1024 * 1024)) // 10 MB disk cache
+        .build()
+    ```
+
+    <Callout title="Interceptor Order">
+      Application interceptors see the original request first. Network interceptors run after
+      retry-and-follow and see intermediate requests. Use application interceptors for auth headers;
+      use network interceptors for caching and logging actual network bytes.
+    </Callout>
+
+    ### Repository Pattern with Offline Caching
+
+    ```kotlin
+    class OrderRepositoryImpl(
+        private val api: OrderApi,
+        private val dao: OrderDao,
+        private val connectivityManager: ConnectivityManager
+    ) : OrderRepository {
+        override fun observeOrders(): Flow<Result<List<Order>>> = flow {
+            val cached = dao.observeOrders().first()
+            emit(Result.success(cached.map { it.toDomain() }))
+
+            if (hasNetwork()) {
+                try {
+                    val remote = api.getOrders()
+                    dao.replaceAll(remote.map { it.toEntity() })
+                } catch (e: Exception) { emit(Result.failure(e)) }
+            }
+        }.catch { e -> emit(Result.failure(e)) }
+
+        private fun hasNetwork(): Boolean {
+            val network = connectivityManager.activeNetwork ?: return false
+            val caps = connectivityManager.getNetworkCapabilities(network) ?: return false
+            return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }
+    }
+    ```
+
+    ### Error Handling with Sealed Class
+
+    ```kotlin
+    sealed interface NetworkError {
+        data class HttpError(val code: Int, val body: String?) : NetworkError
+        data class IOException(val throwable: java.io.IOException) : NetworkError
+        data object NetworkUnavailable : NetworkError
+        data object Timeout : NetworkError
+        data class Unknown(val throwable: Throwable) : NetworkError
+    }
+
+    sealed interface ApiResult<out T> {
+        data class Success<T>(val data: T) : ApiResult<T>
+        data class Error(val error: NetworkError) : ApiResult<Nothing>
+    }
+
+    suspend inline fun <reified T> safeApiCall(crossinline call: suspend () -> T): ApiResult<T> = try {
+        ApiResult.Success(call())
+    } catch (e: HttpException) {
+        ApiResult.Error(NetworkError.HttpError(e.code(), e.response()?.errorBody()?.string()))
+    } catch (e: java.io.IOException) {
+        ApiResult.Error(if (e is SocketTimeoutException) NetworkError.Timeout else NetworkError.IOException(e))
+    } catch (e: Throwable) {
+        ApiResult.Error(NetworkError.Unknown(e))
+    }
+    ```
+
+    ### Common Pitfalls
+
+    - **Not cancelling coroutines**: Use `viewModelScope.launch` or `Lifecycle.repeatOnLifecycle` to cancel HTTP connections on screen exit.
+    - **Blocking main thread**: Never call OkHttp's `execute()` from the main thread — use `enqueue()` or suspending extensions.
+    - **Ignoring connection pooling**: Each `OkHttpClient` pools connections. Creating a new client per request defeats reuse and consumes sockets.
+    - **Logging in production**: Set `HttpLoggingInterceptor` to `HEADERS` level or disable it in release builds.
+
+    ### Comparison to Dio and Axios
+
+    <DecisionMatrix
+      scores={[
+        { label: "Type safety (compile-time)", score: 5 },
+        { label: "Interceptor flexibility", score: 4 },
+        { label: "Ecosystem maturity", score: 5 },
+        { label: "Initial setup complexity", score: 2 },
+      ]}
+      pros="Retrofit generates implementations at compile time — mismatches between API spec and code are caught at build. OkHttp's interceptor chain is the most flexible HTTP middleware across mobile platforms."
+      cons="Retrofit requires annotations, converter factories, and OkHttp config — more boilerplate than Dio's single-instance approach. Axios has simpler request/response transforms."
+    />

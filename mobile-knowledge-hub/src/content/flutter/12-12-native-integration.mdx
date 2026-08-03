@@ -1,0 +1,147 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+
+    <StatGrid columns={3}>
+      <StatItem value="MethodChannel" label="Request-response native calls (most common)" />
+      <StatItem value="Pigeon" label="Type-safe code gen — no stringly-typed method names" />
+      <StatItem value="dart:ffi" label="Direct C calls with zero serialization overhead" />
+    </StatGrid>
+
+    ### Platform Channels Architecture
+
+    Flutter communicates with native code through **asynchronous message passing**. The engine serializes Dart messages via `StandardMethodCodec` (MessagePack-based), sends them across a channel, the native side deserializes and executes. Round-trip latency is ~1-5 microseconds for simple calls.
+
+    ```
+         ┌──────────┐     ┌──────────────┐     ┌──────────┐
+         │   Dart    │     │ Flutter Engine│    │  Native  │
+         │           │     │   (C++ codec) │    │ (Kotlin/ │
+         │ channel.  │────►│ serialize &  │───►│ method   │
+         │ invoke    │     │ send via buf │    │ handler  │
+         │           │◄────│ deserialize  │◄───│ .success │
+         │ Future<T> │     │              │    │          │
+         └──────────┘     └──────────────┘     └──────────┘
+    ```
+
+    ### MethodChannel: Complete Example
+
+    ```dart
+    class BatteryChannel {
+      static const _channel = MethodChannel('com.app/battery');
+      Future<int> getBatteryLevel() async {
+        try {
+          final level = await _channel
+              .invokeMethod<int>('getBatteryLevel')
+              .timeout(const Duration(seconds: 5));
+          if (level == null) throw PlatformException(code: 'NULL_RESULT');
+          return level;
+        } on PlatformException catch (e) {
+          throw BatteryException('Battery failed: ${e.message}');
+        } on TimeoutException {
+          throw BatteryException('Channel timed out');
+        }
+      }
+    }
+    // Android (Kotlin)
+    // MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.app/battery")
+    //   .setMethodCallHandler { call, result ->
+    //     when (call.method) { "getBatteryLevel" -> result.success(level)
+    //       else -> result.notImplemented() } }
+    // iOS (Swift)
+    // channel.setMethodCallHandler { call, result in
+    //   if call.method == "getBatteryLevel" { result(Int(UIDevice.current.batteryLevel * 100)) }
+    //   else { result(FlutterMethodNotImplemented) } }
+    ```
+
+    <Callout title="Always Timeout Platform Channel Calls">
+      If the native side crashes, `invokeMethod` never completes. Wrap in `Future.timeout(Duration(seconds: 5))` to rescue the Dart isolate. Without it, a crashed native callback leaks a pending channel buffer forever.
+    </Callout>
+
+    ### EventChannel: Streaming Native Data
+
+    For continuous streams: sensors, location, battery monitoring. The native side pushes events to a Dart `Stream` via `EventSink`.
+
+    ```dart
+    class SensorStream {
+      static const _channel = EventChannel('com.app/accelerometer');
+      Stream<SensorEvent> get events => _channel
+          .receiveBroadcastStream()
+          .map((data) => SensorEvent.fromList(data as List<dynamic>));
+    }
+    ```
+
+    Use `receiveBroadcastStream()` for multiple listeners. Without a listener, events are dropped — no native buffering.
+
+    ### Pigeon: Type-Safe Code Generation
+
+    Pigeon generates type-safe Kotlin/Swift code from a Dart API definition, eliminating stringly-typed method names and manual argument casting.
+
+    ```dart
+    import 'package:pigeon/pigeon.dart';
+    class BatteryRequest { int? timeoutSeconds; }
+    class BatteryReply { int? level; String? error; }
+    @HostApi()
+    abstract class BatteryApi {
+      @async
+      BatteryReply getBatteryLevel(BatteryRequest request);
+    }
+    ```
+
+    Run `dart run pigeon --input api.dart --dart_out lib/battery.dart --kotlin_out .../plugin.kt --swift_out .../plugin.swift`. The generated code handles serialization, dispatch, and type conversion — no `MethodChannel` strings. The Flutter team recommends Pigeon for all new plugins; it reduces boilerplate by ~60%.
+
+    ### dart:ffi vs Platform Channels
+
+    | Criterion | Platform Channels | dart:ffi |
+    |---|---|---|
+    | Latency | ~1-5 microseconds | ~0.1-0.5 microseconds |
+    | Thread model | Async (platform -> main) | Synchronous, any isolate |
+    | Use case | Platform SDK APIs (camera, biometrics) | CPU-bound compute (crypto, image, ML) |
+    | Safety | Sandboxed by platform | Unsafe (segfault risk) |
+
+    ### FFI Example: C Library Binding
+
+    ```dart
+    import 'dart:ffi';
+    import 'package:ffi/ffi.dart';
+    typedef C_Encrypt = Pointer<Uint8> Function(
+      Pointer<Uint8> input, Int32 inputLen, Pointer<Int32> outputLen);
+    typedef Encrypt = Pointer<Uint8> Function(
+      Pointer<Uint8> input, int inputLen, Pointer<Int32> outputLen);
+    void main() {
+      final dylib = DynamicLibrary.open('libcrypto.so');
+      final encrypt = dylib.lookupFunction<C_Encrypt, Encrypt>('encrypt');
+      final input = 'hello'.toNativeUtf8();
+      final outLen = calloc<Int32>();
+      final result = encrypt(input.cast<Uint8>(), 5, outLen);
+      calloc.free(input); calloc.free(outLen);
+    }
+    ```
+
+    Use `package:ffigen` to generate FFI bindings from C headers — analogous to Pigeon but for the C ABI.
+
+    ### Testing Platform Channels
+
+    ```dart
+    void main() {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      const channel = MethodChannel('com.app/battery');
+      channel.setMockMethodCallHandler((call) async {
+        if (call.method == 'getBatteryLevel') return 75;
+        return null;
+      });
+      test('returns battery level', () async {
+        expect(await BatteryChannel().getBatteryLevel(), 75);
+      });
+      channel.setMockMethodCallHandler(null);
+    }
+    ```
+
+    For EventChannels, use `setMockStreamHandler(...)`. For Pigeon, inject a mock of the generated API interface.
+
+    <Callout title="When to Write vs Use Existing">
+      Search `pub.dev` first — ecosystem covers camera, location, biometrics, sensors. Write a custom plugin only when: (a) you need a proprietary SDK, (b) performance exceeds existing plugins, or (c) you bridge ARKit/CoreML/MLKit. Always use Pigeon and publish a federated structure if spanning Android + iOS + macOS + Web.
+    </Callout>
+
+    ### Comparison: React Native / Native
+
+    React Native's bridge uses JSON serialization over the JS thread (~5-15ms latency) — Flutter's binary codec is significantly faster. SwiftUI calls native APIs directly (fastest but single-platform). Kotlin Multiplatform uses Kotlin for shared logic with native UI per platform, avoiding the bridge for shared layers but requiring platform UI code.

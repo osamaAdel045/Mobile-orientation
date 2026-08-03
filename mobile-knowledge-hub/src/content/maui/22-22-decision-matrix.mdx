@@ -1,0 +1,85 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Overview
+
+.NET MAUI is a cross-platform framework for building iOS, Android, macOS, tvOS, and Windows apps from a single C# and XAML codebase. It replaces Xamarin.Forms and brings deep integration with the .NET ecosystem: NuGet packages, .NET 8+ runtime, and Microsoft tooling (Visual Studio, Azure, Entra ID).
+
+### Scoring Rationale
+
+**Code Sharing (4/5)** — Business logic and data-access layers share 90-100% across platforms. UI shares 70-90% for common forms, but device-specific layouts (tablet vs phone) or platform-native features (iOS widgets, Android shortcuts) require conditional XAML or Handlers. True "write once, run anywhere" is achievable for LOB apps, less so for highly polished consumer UIs.
+
+**Platform Feel (4/5)** — Handlers map controls to platform-native equivalents (e.g., `Entry` -> `UITextField` on iOS, `AppCompatEditText` on Android). The UI renders with native scroll physics, keyboard behavior, and accessibility. Score is 4, not 5, because complex Shell navigation animations and bottom sheets still require per-platform tweaks via `PlatformConfiguration` APIs.
+
+**Performance (3/5)** — Baseline binary is ~15-30 MB (vs ~5 MB Flutter, ~8 MB Kotlin). Startup is 1-3s on modern devices vs sub-1s for native. Compiled bindings and AOT help, but Mono's JIT adds overhead vs Dart's AOT or Kotlin's ART. Standard scrolling is smooth; heavy `GraphicsView` custom drawing drops frames on mid-range Android.
+
+**Ecosystem (3/5)** — NuGet is vast but MAUI-specific packages are limited. CommunityToolkit.Maui, SQLite, Refit, and Polly are stable. Many .NET Standard packages work unmodified. Missing is a rich widget gallery; sophisticated UI demands `Microsoft.Maui.Graphics` drawing or platform-specific code.
+
+**C# Developers (4/5)** — Existing .NET teams face a shallow learning curve: same language, same project system, same debugger. XAML differs from WPF/UWP in compiled bindings and `x:DataType`. Teams new to XAML need ~2-4 weeks ramp-up.
+
+**Maturity (3/5)** — GA since .NET 6 (2022) with improvements in .NET 7 and 8. The API surface is still settling — minor releases sometimes include breaking changes (Shell navigation, `MauiProgram.CreateBuilder`). Tooling (Hot Reload, XAML IntelliSense) is less reliable than Flutter's hot-reload or SwiftUI previews.
+
+<Callout variant="default" title="Bottom Line">
+MAUI excels when your team already knows .NET and Windows is a shipping target. It struggles in size- or performance-constrained scenarios and when you need the latest OS features on day zero.
+</Callout>
+
+<DecisionMatrix
+  title=".NET MAUI Decision Matrix"
+  criteria={[
+    { name: "Code Sharing", weight: 4 },
+    { name: "Platform Feel", weight: 3 },
+    { name: "Performance", weight: 4 },
+    { name: "Ecosystem", weight: 3 },
+    { name: "C# Dev Fit", weight: 5 },
+    { name: "Maturity", weight: 2 },
+  ]}
+  frameworks={[
+    {
+      name: ".NET MAUI",
+      scores: [4, 4, 3, 3, 4, 3],
+      color: "blue",
+    },
+    {
+      name: "Flutter",
+      scores: [4, 5, 5, 5, 2, 5],
+      color: "green",
+    },
+    {
+      name: "React Native",
+      scores: [3, 4, 3, 5, 3, 5],
+      color: "cyan",
+    },
+    {
+      name: "Native (SwiftUI/Jetpack)",
+      scores: [1, 5, 5, 2, 2, 5],
+      color: "purple",
+    },
+  ]}
+/>
+
+### When to Choose .NET MAUI
+
+- Your team ships and maintains C# / .NET code — no context switch to Dart, JS, or Kotlin/Swift.
+- Windows is a primary target alongside iOS/Android; MAUI reuses 80%+ UI code across all three.
+- Enterprise compliance mandates Azure AD auth, Intune MDM, or Visual Studio integration.
+- The app is a data-entry / LOB form (inventory, field service, inspection) rather than a media-rich consumer app.
+- Migration from Xamarin.Forms: same architecture patterns, gradual per-page porting path.
+
+### When NOT to Choose .NET MAUI
+
+- Fast time-to-market is critical — Flutter's hot reload and Dart compilation give faster iteration.
+- Binary size matters — MAUI is 2-3x larger than an equivalent Flutter or native app.
+- Peak UI polish is required — custom animations and platform-chrome blending are harder than in SwiftUI or Compose.
+- The team does not know C# — the .NET learning curve offsets the code-sharing advantage.
+- You target mobile only with no .NET investment — MAUI's Windows advantage goes unused.
+
+### Concrete Decision Scenarios
+
+**Scenario A: Internal field-service app** (forms, offline, Azure-backed) -> Choose MAUI. Strong .NET alignment, Windows target for dispatchers, offline SQLite pattern is mature.
+
+**Scenario B: Consumer social media app** (custom animations, fast startup, 10 MB max) -> Choose Flutter. Smaller binary, faster startup, `AnimationController` for custom transitions.
+
+**Scenario C: Enterprise app with native AR features** -> Choose native (SwiftUI + Compose). MAUI lacks access to ARKit 6 / ARCore on release day.
+
+<Callout variant="info" title="Xamarin.Forms Migration Path">
+Replace Renderers with Handlers: update project files to .NET 8 SDK style, replace `Xamarin.Forms.*` with `Microsoft.Maui.*`, convert multi-target projects to a single-project format, and migrate custom Renderers to `HandlerPropertyMapper` / `CommandMapper` patterns.
+</Callout>

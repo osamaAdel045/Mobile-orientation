@@ -1,0 +1,116 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Shared Logic" label="Crypto/Auth" />
+        <StatItem value="Platform Storage" label="Secrets" />
+        <StatItem value="Per Platform" label="SSL/Biometric" />
+      </StatGrid>
+
+      ### Shared Security Logic in commonMain
+
+      Token parsing, validation, signature verification, and crypto operations
+      using pure Kotlin libraries live fully in `commonMain`.
+
+      ```kotlin
+      // commonMain — token management
+      class TokenManager(private val secureStore: SecureStore) {
+          fun storeAuthToken(token: AuthToken) {
+              require(token.expiresAt > Clock.System.now()) { "Token expired" }
+              secureStore.save("auth_token", token.accessToken)
+              secureStore.save("refresh_token", token.refreshToken)
+              secureStore.save("token_expiry", token.expiresAt.toEpochMilliseconds().toString())
+          }
+
+          fun getValidToken(): String? {
+              val token = secureStore.get("auth_token") ?: return null
+              val expiry = secureStore.get("token_expiry")?.toLongOrNull() ?: return null
+              return if (Clock.System.now().toEpochMilliseconds() < expiry) token else null
+          }
+      }
+      ```
+
+      ### Platform-Specific Secure Storage
+
+      Use expect/actual to bridge to Android Keystore and iOS Keychain.
+
+      ```kotlin
+      // commonMain
+      expect class SecureStore {
+          fun save(key: String, value: String)
+          fun get(key: String): String?
+          fun delete(key: String)
+          fun clear()
+      }
+
+      // androidMain — EncryptedSharedPreferences with AES256-GCM
+      actual class SecureStore(private val context: Context) {
+          private val masterKey = MasterKey.Builder(context)
+              .setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+          private val prefs = EncryptedSharedPreferences.create(
+              context, "secure_prefs", masterKey,
+              EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+              EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+          )
+          actual fun save(key: String, value: String) { prefs.edit().putString(key, value).apply() }
+          actual fun get(key: String): String? = prefs.getString(key, null)
+          actual fun delete(key: String) { prefs.edit().remove(key).apply() }
+          actual fun clear() { prefs.edit().clear().apply() }
+      }
+
+      // iosMain — iOS Keychain
+      actual class SecureStore {
+          actual fun save(key: String, value: String) { /* SecItemAdd */ }
+          actual fun get(key: String): String? { /* SecItemCopyMatching */ }
+          actual fun delete(key: String) { /* SecItemDelete */ }
+          actual fun clear() { /* enumerate + delete */ }
+      }
+      ```
+
+      <Callout title="Keychain Accessibility on iOS">
+        Use `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` for standard keys
+        and `kSecAttrAccessibleWhenPasscodeSetThisDeviceOnly` with
+        `SecAccessControl` for biometric-protected keys. Never use
+        `kSecAttrAccessibleAlways` — it persists when locked and is deprecated.
+      </Callout>
+
+      ### SSL Pinning Per Platform
+
+      ```kotlin
+      // androidMain — OkHttp CertificatePinner
+      actual fun createPinnedClient(): HttpClient = HttpClient(OkHttp) {
+          engine { config {
+              certificatePinner(CertificatePinner.Builder()
+                  .add("api.example.com", "sha256/AAAA...=")
+                  .build())
+          } }
+      }
+
+      // iosMain — Darwin NSURLSession delegate
+      actual fun createPinnedClient(): HttpClient = HttpClient(Darwin) {
+          engine { configureRequest { /* URLSession:didReceiveChallenge */ } }
+      }
+      ```
+
+      ### Obfuscation
+
+      | Platform | Technique | Notes |
+      |----------|-----------|-------|
+      | Android | ProGuard/R8 | Obfuscates shared module class names. Add `consumerProguardFiles` config. |
+      | iOS | Compiler strip | Release builds strip debug symbols via `DEAD_STRIP`. ARM64 binaries still expose symbols via `nm`. |
+
+      ### Comparison: Security Across Frameworks
+
+      | Aspect | KMP | Flutter | React Native |
+      |--------|-----|---------|--------------|
+      | Secure Storage | expect/actual (Keychain/Keystore) | flutter_secure_storage | react-native-keychain |
+      | SSL Pinning | Per-platform engine config | http_client pinning | Native module |
+      | Biometric | expect/actual per platform | local_auth plugin | react-native-biometrics |
+      | Obfuscation | ProGuard + ARM64 strip | dart2js/dart2native | Hermes + Metro |
+
+      ### KMP Insight
+
+      KMP's security model mirrors its architecture: shared token validation
+      and crypto primitives in `commonMain`, platform-native implementations
+      for keystore, keychain, and biometric APIs. Security APIs like Keychain
+      are inherently platform-specific — wrapping them in expect/actual is
+      better than building a cross-platform security framework.

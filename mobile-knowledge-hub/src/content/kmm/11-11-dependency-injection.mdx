@@ -1,0 +1,120 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Koin" label="Recommended DI" />
+        <StatItem value="commonMain" label="Module Location" />
+        <StatItem value="Runtime DSL" label="Approach" />
+      </StatGrid>
+
+      ### Koin — Lightweight Multiplatform DI
+
+      **Koin** is a Kotlin-native DI framework using a DSL — no code generation,
+      no annotation processing, no reflection. This makes it compatible with
+      Kotlin/Native (which lacks runtime reflection) without special config.
+
+      ```kotlin
+      // commonMain — Koin modules
+      val networkModule = module {
+          single { HttpClient(/* platform engine injected at init */) {
+              install(ContentNegotiation) { json() }
+              install(HttpTimeout) { requestTimeoutMillis = 15_000 }
+          } }
+      }
+
+      val repositoryModule = module {
+          single<UserRepository> { UserRepositoryImpl(get(), get()) }
+          single<AuthRepository> { AuthRepositoryImpl(get(), get()) }
+      }
+
+      val viewModelModule = module {
+          factory { LoginViewModel(get(), get()) }
+          factory { DashboardViewModel(get()) }
+      }
+
+      val appModules = listOf(networkModule, repositoryModule, viewModelModule)
+      ```
+
+      ### Platform-Specific Module Extensions
+
+      Platform dependencies (Android Context, iOS NSUserDefaults) are provided
+      through module extensions in platform source sets.
+
+      ```kotlin
+      // androidMain
+      val androidModule = module {
+          single { get<AndroidApplication>().applicationContext }
+          single<Settings> { SharedPreferencesSettings(get()) }
+          single<DatabaseDriverFactory> { AndroidDatabaseDriverFactory(get()) }
+      }
+
+      // iosMain
+      val iosModule = module {
+          single<Settings> { NSUserDefaultsSettings(NSUserDefaults.standardUserDefaults) }
+          single<DatabaseDriverFactory> { NativeDatabaseDriverFactory() }
+      }
+      ```
+
+      ### Platform Initialization
+
+      ```kotlin
+      // androidMain — Application.onCreate
+      class MainApplication : Application() {
+          override fun onCreate() {
+              super.onCreate()
+              startKoin {
+                  androidContext(this@MainApplication)
+                  modules(appModules + androidModule)
+              }
+          }
+      }
+
+      // iosMain — startKoin called from Swift
+      fun initKoin() = startKoin { modules(appModules + iosModule) }
+      ```
+
+      <Callout title="Koin vs Hilt in KMP">
+        Hilt uses Dagger's annotation processor — JVM-only. Koin's runtime DSL
+        is the primary KMP choice because it works everywhere without code
+        generation. For compile-time DI, consider manual constructor injection
+        (AppContainer pattern) or the experimental kotlin-inject (KSP-based).
+      </Callout>
+
+      ### Testing with Swapped Modules
+
+      ```kotlin
+      // commonTest — replace production modules with test doubles
+      val testModule = module {
+          single<UserRepository> { FakeUserRepository() }
+          single<AuthRepository> { FakeAuthRepository() }
+      }
+
+      @BeforeTest
+      fun setup() { startKoin { modules(testModule) } }
+      ```
+
+      ### Comparison to Hilt and GetIt
+
+      | Aspect | Koin | Hilt | GetIt (Flutter) |
+      |--------|------|------|-----------------|
+      | Platforms | All KMP | JVM only | Dart |
+      | Code Gen | None | Annotation-based | None |
+      | Reflection | No | Yes (Dagger) | No |
+      | Scope | single/factory | Activity/ViewModel | Singleton/factory |
+      | Testing | Module swap | Test component | Override |
+
+      ### Pitfall: Module Order
+
+      ```kotlin
+      // WRONG — Koin not started yet
+      init { loadKoinModules(androidModule) }
+      // RIGHT — start first, then load
+      startKoin { modules(appModules) }
+      loadKoinModules(platformModule)
+      ```
+
+      ### KMP Insight
+
+      Koin succeeds in KMP because it uses Kotlin's DSL capabilities rather than
+      annotation processors. The same `module { single { } }` block runs on JVM
+      and Native identically, with module composition making platform differences
+      explicit without conditional code paths.

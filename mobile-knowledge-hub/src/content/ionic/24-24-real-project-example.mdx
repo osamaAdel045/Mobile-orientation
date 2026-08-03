@@ -1,0 +1,129 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Project Overview
+
+TaskFlow is a reference application built with Ionic 8 + Angular 18, Capacitor 6, and SQLite for offline-first task management. It demonstrates a real-world architecture: OAuth2 authentication, local-first data with background sync, push notifications, and a companion PWA.
+
+### Tech Stack
+
+```
+UI Layer       → Ionic Framework (Stencil Web Components)
+Framework      → Angular 18 (standalone components, Signals)
+State          → RxJS + Angular Signals
+HTTP           → Axios + Capacitor HTTP plugin
+Local DB       → Capacitor SQLite + Ionic Storage @capacitor-community/sqlite
+Auth           → Capacitor Secure Storage + OAuth 2.0 (PKCE)
+Push           → Capacitor Push Notifications (FCM + APNs)
+Secure Store   → @capawesome-team/capacitor-secure-storage
+Maps           → Capacitor Google Maps plugin
+Payments       → Capacitor Stripe plugin
+Live Update    → Capacitor Live Updates (Appflow alternative)
+CI/CD          → GitHub Actions + Fastlane
+```
+
+### Auth Flow
+
+Authentication uses the OAuth 2.0 Authorization Code flow with PKCE. Tokens are stored in the platform secure store (iOS Keychain, Android Keystore).
+
+```typescript
+// Auth service with PKCE flow
+import { SecureStoragePlugin } from '@capawesome-team/capacitor-secure-storage'
+
+async function loginWithOAuth(): Promise<void> {
+  const { OAuth2 } = await import('./oauth2-pkce')
+
+  const tokens = await OAuth2.authenticate({
+    issuer: 'https://auth.taskflow.example.com',
+    clientId: 'taskflow-ionic-client',
+    redirectUri: 'taskflow://auth/callback',
+    scopes: ['openid', 'profile', 'offline_access'],
+  })
+
+  // Store tokens in platform secure storage
+  await SecureStoragePlugin.set({
+    key: 'refresh_token',
+    value: tokens.refresh_token,
+  })
+}
+```
+
+### Offline-First Data Layer
+
+All data reads come from the local SQLite database. Writes go to SQLite first, then sync to the server in the background.
+
+```typescript
+// Repository pattern with offline-first writes
+class TaskRepository {
+  async createTask(task: NewTask): Promise<Task> {
+    // 1. Write to local SQLite immediately
+    const localTask = await this.db.insertTask({ ...task, synced: false })
+
+    // 2. Queue server sync
+    await this.syncQueue.enqueue({ type: 'CREATE_TASK', payload: localTask })
+
+    // 3. Attempt sync immediately if online
+    if (await Network.getStatus().then(s => s.connected)) {
+      this.syncProcessor.processQueue()
+    }
+
+    return localTask
+  }
+}
+```
+
+<Callout type="info">
+  The offline-first pattern is critical for mobile reliability. Users open the app on the subway, in elevators, or with spotty connectivity. Writes must never fail because of a network error. The SQLite-first approach with a background sync queue ensures data integrity regardless of connection state.
+</Callout>
+
+### Push Notification Integration
+
+Push notifications use Capacitor Push Notifications with Firebase Cloud Messaging (Android) and Apple Push Notification Service (iOS).
+
+```typescript
+import { PushNotifications } from '@capacitor/push-notifications'
+
+async function setupPush(): Promise<string> {
+  const permStatus = await PushNotifications.requestPermissions()
+  if (permStatus.receive !== 'granted') throw new Error('Permission denied')
+
+  await PushNotifications.register()
+
+  PushNotifications.addListener('registration', ({ token }) => {
+    // Send token to your backend for the user's profile
+    api.post('/users/me/device-tokens', { token, platform: device.platform })
+  })
+
+  PushNotifications.addListener('pushNotificationReceived', (notification) => {
+    // Increment badge, show in-app toast
+    this.badgeService.increment()
+  })
+}
+```
+
+### PWA Companion
+
+The same Angular codebase deploys as a PWA using `@angular/service-worker`. The PWA uses `@capacitor/preferences` for storage (falls back to localStorage when Capacitor is unavailable) and skips native-only features like push notifications and secure storage gracefully.
+
+```bash
+# Build for App Store
+ionic build --prod && npx cap sync && npx cap open ios
+
+# Build for Play Store
+ionic build --prod && npx cap sync && npx cap open android
+
+# Build for PWA
+ng build --configuration production --base-href /taskflow/
+```
+
+<Callout type="tip">
+  Use the `capacitor` platform detection in your services to conditionally enable native features. A `PlatformService` that checks `Capacitor.isNativePlatform()` allows the same codebase to gracefully degrade on the web while leveraging full native power on devices.
+</Callout>
+
+### Live Updates Without App Store Review
+
+Capacitor Live Updates pushes new web assets directly to devices, bypassing the 24-48 hour App Store review cycle for UI changes. The native binary only changes when native plugin code or Capacitor core updates.
+
+```bash
+# Deploy web assets instantly to all devices
+npx cap live-update deploy --channel production
+```

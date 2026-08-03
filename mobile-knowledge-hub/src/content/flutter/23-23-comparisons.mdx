@@ -1,0 +1,119 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+    <StatGrid columns={3}>
+        <StatItem value="1M+ apps" label="Flutter adoption" />
+        <StatItem value="50K+ packages" label="pub.dev ecosystem" />
+        <StatItem value="88% sharing" label="Avg code reuse across platforms" />
+    </StatGrid>
+
+    ### Flutter vs React Native
+
+    **Rendering architecture** is the fundamental difference. Flutter uses Impeller, a custom GPU-accelerated renderer that draws every widget as a direct Skia/Impeller canvas instruction. React Native uses the Fabric renderer, which maps React components to native platform widgets (UIView on iOS, View on Android) via a JavaScript-to-native bridge. This architectural divergence creates measurable performance differences: Flutter maintains consistent 60fps on mid-range Android devices for complex animations, while React Native's bridge-based communication introduces a ~10-15ms round-trip latency per frame that manifests as dropped frames during heavy UI updates. Flutter's Impeller eliminates shader compilation jank entirely through AOT shader compilation — React Native still experiences first-frame jank as native views are created on first render.
+
+    **Language and safety model.** Dart with sound null safety provides compile-time memory safety guarantees that TypeScript cannot match. A Dart `String` is provably never null at runtime — the compiler enforces this. TypeScript's `strictNullChecks` is a lint-level check that can be bypassed with `!` assertions or loose `@types` packages. In a large React Native project (100K+ lines of TypeScript), null reference errors in production are a recurring class of bugs. Flutter eliminates this category entirely. However, TypeScript offers a richer type-level programming model (conditional types, mapped types, template literal types) that Dart's type system lacks — advanced generic patterns that are ergonomic in TypeScript require verbose boilerplate in Dart.
+
+    ```dart
+    // Flutter: AnimatedContainer with implicit animation
+    AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      width: _expanded ? 200 : 100,
+      height: _expanded ? 200 : 100,
+      color: _expanded ? Colors.blue : Colors.red,
+    );
+    ```
+
+    ```javascript
+    // React Native: same animation requires Animated API or Reanimated
+    const animatedValue = useRef(new Animated.Value(0)).current;
+
+    const animate = () => {
+      Animated.timing(animatedValue, {
+        toValue: 1,
+        duration: 300,
+        useNativeDriver: true,
+      }).start();
+    };
+    ```
+
+    **Ecosystem and hiring.** React Native inherits the full npm ecosystem (2M+ packages) and JavaScript's vast developer pool (12M+ JS devs globally). Flutter's pub.dev hosts 50K+ packages, and the global Dart developer count is estimated at ~1M. For common needs (analytics, crash reporting, CI/CD), both platforms have mature solutions. For niche requirements (specialized payment gateways, regional payment providers, industry-specific SDKs), React Native is more likely to have a direct binding. Hiring reflects this: a React Native developer requisition receives 5-10x more applicants than a Flutter role. However, Flutter developers tend to have stronger native platform knowledge because Flutter's platform channel API requires understanding Android/iOS native development for any platform-specific integration.
+
+    | Dimension | Flutter | React Native |
+    |---|---|---|
+    | Rendering | Custom (Impeller/Skia) | Fabric (native controls) |
+    | Language | Dart 3.x (sound null safety) | TypeScript 5.x |
+    | Compilation | AOT to native ARM | Hermes bytecode + JIT |
+    | Startup (cold) | 300-800ms | 400-1200ms |
+    | Binary Size | ~4.5 MB min | ~6 MB min (with Hermes) |
+    | UI Thread | Single (Dart, native) | JS thread + UI thread (bridge) |
+    | Animation | Implicit (AnimatedContainer) | Explicit (Animated API/Reanimated) |
+    | OTA Updates | No | Yes (CodePush) |
+    | Ecosystem | 50K+ packages | 2M+ npm packages |
+    | Dev Pool | ~1M Dart devs | ~12M+ JS/TS devs |
+    | Mature Apps | Google Pay, Alibaba, BMW | Meta, Shopify, Pinterest |
+
+    <Callout title="Tiebreaker Framework">
+        Team knows JS → React Native will ship faster initially. Need heavy animation or custom UI → Flutter is more productive long-term. App primarily displays native platform controls (Apple Maps, native date pickers) → React Native's bridge to native controls is an advantage. App has complex custom UI (design system, brand-specific components) → Flutter's custom renderer eliminates fighting native control customization limits.
+    </Callout>
+
+    ### Flutter vs Native (Swift/Kotlin)
+
+    Native development provides immediate access to every iOS 18 or Android 15 API on release day, zero toolchain dependencies beyond the platform SDK, and the smallest possible binary size (1-2 MB for a simple app). Flutter requires a platform channel implementation for any non-trivial native API that lacks a community plugin, and the engine adds 3.5 MB to the binary. For apps that deeply integrate with platform features (Apple Pay, HealthKit, ARKit, Camera2 API, NFC), Flutter adds a layer of abstraction that occasionally leaks — platform channel bugs, threading mismatches, and memory management differences between Dart and native code.
+
+    The counter-argument is development velocity. A Flutter team of 3 can maintain an iOS and Android app that a native team of 6 (3 iOS + 3 Android) would struggle to match in feature velocity. The feature parity gap widens over time — native teams coordinating across platforms inevitably fall behind a single Flutter team. Bug fixes, UI tweaks, and new features ship simultaneously on both platforms in Flutter, whereas native teams require separate PRs, reviews, and QA cycles.
+
+    ```
+              Feature Velocity Over 12 Months
+    ┌──────────────────────────────────────────┐
+    │                                          │
+    │  Flutter (3 devs)  ████████████████████  │
+    │  Native (6 devs)   ████████████          │
+    │                                          │
+    │  Months      3    6    9    12           │
+    └──────────────────────────────────────────┘
+    ```
+
+    ### Flutter vs Kotlin Multiplatform (KMP)
+
+    Kotlin Multiplatform shares Flutter's code-sharing philosophy but draws a sharp boundary: KMP shares only business logic (domain, data layers) while each platform implements its own UI natively. Flutter shares UI + logic — the entire stack. KMP's approach is philosophically aligned with "platform excellence": you get native UI, native navigation, native animations — but you write UI code twice. Flutter's approach prioritizes development efficiency: write once, run anywhere — but the UI is Flutter's rendering, not native.
+
+    **Where KMP wins:** apps that need deep platform integration (health/fitness, camera-heavy, AR), apps where native navigation patterns are critical (complex gesture-driven navigation, transition animations), and teams with Kotlin expertise already invested in the Android ecosystem.
+
+    **Where Flutter wins:** apps with custom design systems (Flutter's UI flexibility exceeds what KMP's platform-separate approach delivers), startups needing speed, and teams that don't want to maintain separate codebases for UI.
+
+    ```kotlin
+    // KMP: shared business logic (expect/actual pattern)
+    // commonMain
+    expect class Platform() {
+        val name: String
+    }
+
+    class Greeting {
+        fun greet(): String = "Hello from ${Platform().name}"
+    }
+
+    // androidMain
+    actual class Platform actual constructor() {
+        actual val name: String = "Android"
+    }
+    ```
+
+    ### Flutter vs Ionic (Capacitor)
+
+    Ionic wraps a web application in a WebView and bridges the native APIs through Capacitor plugins. The rendering is standard web (HTML/CSS/React/Angular/Vue) running in the platform WebView (WKWebView on iOS, Android WebView on Android). This is fundamentally different from Flutter's custom renderer — Ionic's performance ceiling is the WebView's performance ceiling, which is lower than Flutter's for animations and complex scrolling.
+
+    **Performance comparison:** Ionic struggles to maintain 60fps for complex animations, list scrolling with heavy DOM manipulation, and transitions with backdrop filters. Flutter handles these at 120fps on modern devices. For content-focused apps (forms, lists, text), the difference is negligible — Ionic's WebView rendering is sufficient. The overhead: Ionic apps are typically 3-8 MB (including WebView overhead that varies by OS version), while Flutter is a consistent 4.5 MB.
+
+    **Development model:** Ionic developers use standard web tooling (npm, webpack/Vite, Chrome DevTools) and can reuse existing web components. Flutter requires its own toolchain and Dart knowledge. For a team with strong web development experience building a content-centric app, Ionic delivers faster time-to-ship. For a team building an animation-rich, design-intensive app, Flutter is the clear choice.
+
+    ### Flutter vs .NET MAUI
+
+    .NET MAUI (Multi-platform App UI) is Microsoft's cross-platform framework, offering C#/.NET development for iOS, Android, Windows, and macOS. MAUI renders to native platform controls through a handler architecture — similar in concept to React Native's bridge. Flutter's custom renderer vs MAUI's native control mapping creates the same performance divergence: Flutter wins on animation consistency, MAUI wins on native look-and-feel with less customization effort.
+
+    **Ecosystem maturity:** Flutter (released 2018, stable 1.0 in 2019) is significantly more mature than .NET MAUI (released 2022, GA with .NET 6). MAUI has suffered from post-release bugs, incomplete features, and slower adoption — as of 2025, it remains a niche choice. Flutter's community, documentation, third-party package ecosystem, and Stack Overflow presence dwarf MAUI's.
+
+    **Language comparison:** C# is a more mature language than Dart, with richer metaprogramming (source generators, reflection), broader standard library, and stronger enterprise tooling (Visual Studio, Azure integration, Entity Framework). Dart's advantages are faster iteration (hot reload), simpler concurrency model (isolates vs C# threads/Tasks), and designed-for-UI patterns (reactive state management is built into the framework, not added via ReactiveUI).
+
+    <Callout title="The Honest Bottom Line">
+        Flutter is the right choice for most new cross-platform apps in 2025-2026. It has the best balance of performance, developer experience, and ecosystem maturity among cross-platform frameworks. React Native remains better for JS-heavy teams and apps needing OTA updates. Native remains better for platform-first apps where OS API access and size matter most. KMP is a compelling alternative for teams with Kotlin investment who want native UI. Avoid MAUI for new mobile-first projects unless you're deeply embedded in the Microsoft ecosystem and C#/.NET is non-negotiable.
+    </Callout>

@@ -1,0 +1,257 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+### Quick Stats
+
+<StatGrid columns={3}>
+<StatItem value="200" label="Max Component Lines" />
+<StatItem value="2" label="Minor Versions from Latest" />
+<StatItem value="3" label="Testing Layers" />
+<StatItem value="5ms" label="Target JS Thread Frame" />
+</StatGrid>
+
+### Project Setup
+
+Start every React Native project with TypeScript, ESLint with `@react-native/eslint-config`, and Prettier. Configure pre-commit hooks with Husky to enforce formatting and lint rules before code reaches CI:
+
+```json
+// .husky/pre-commit
+{
+  "hooks": {
+    "pre-commit": "lint-staged"
+  }
+}
+```
+
+Use `react-native.config.js` for library linking configuration and `babel.config.js` with the correct presets for Hermes:
+
+```js
+// babel.config.js
+module.exports = {
+  presets: ['module:@react-native/babel-preset'],
+  plugins: [
+    ['module:react-native-dotenv', { moduleName: '@env', path: '.env' }],
+    'react-native-reanimated/plugin', // must be last
+  ],
+};
+```
+
+### Component Design Principles
+
+Keep components small — under 200 lines. Extract complex logic into custom hooks. Favor composition over inheritance:
+
+```tsx
+// Good: Separation of concerns via custom hook
+function useFeedData(userId: string) {
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ['feed', userId],
+    queryFn: () => apiClient.getFeed(userId),
+  });
+  return { posts: data?.posts ?? [], isLoading, error, refetch };
+}
+
+// Good: Component only handles rendering
+function FeedScreen() {
+  const { posts, isLoading, error, refetch } = useFeedData('current');
+  if (isLoading) return <LoadingSkeleton />;
+  if (error) return <ErrorState message={error.message} onRetry={refetch} />;
+  return (
+    <FlatList
+      data={posts}
+      keyExtractor={(item) => item.id}
+      renderItem={({ item }) => <PostCard post={item} />}
+      onRefresh={refetch}
+      refreshing={isLoading}
+    />
+  );
+}
+```
+
+### State Management Placement
+
+Use a decision tree rather than a one-size-fits-all approach:
+
+- **Local state** (`useState`): Form inputs, toggle visibility, scroll position — UI-only state that no other component needs.
+- **Server state** (React Query / SWR): API data, cache, stale-while-revalidate, optimistic updates. Do NOT duplicate in a global store.
+- **Global client state** (Zustand / Redux / Jotai): Auth tokens, user profile, theme preferences, notification settings — truly shared app-level state.
+- **URL state** (React Navigation params): Screen-specific data passed via navigation params, deep link payloads.
+
+```tsx
+// Anti-pattern: Putting server data in global store
+const useUserStore = create((set) => ({
+  user: null,
+  fetchUser: async (id) => {
+    const user = await api.getUser(id);
+    set({ user }); // Wrong — React Query should manage this
+  },
+}));
+
+// Best practice: Server state in React Query, global state in Zustand
+function ProfileScreen({ userId }) {
+  const { data: user } = useQuery({  // React Query owns server state
+    queryKey: ['user', userId],
+    queryFn: () => api.getUser(userId),
+  });
+  const theme = useThemeStore((s) => s.theme); // Zustand owns client state
+  return <ProfileView user={user} theme={theme} />;
+}
+```
+
+<Callout title="Never put server state in a global store">
+Duplicating API data in Zustand/Redux means managing cache invalidation, stale data, and loading/error states by hand — exactly what React Query was built to solve. Let React Query own the server state and keep global stores for truly cross-cutting client state like auth and theme.
+</Callout>
+
+### Styling Approach
+
+Use `StyleSheet.create` for static component styles — it extracts styles to a shared reference, reducing bridge payload size. For dynamic styles (theme-aware, variant-based), use a design token system:
+
+```tsx
+// Core: Design tokens
+export const tokens = {
+  colors: {
+    primary: '#007AFF',
+    background: '#FFFFFF',
+    text: '#1C1C1E',
+    textSecondary: '#8E8E93',
+    border: '#C6C6C8',
+    error: '#FF3B30',
+  },
+  spacing: { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 },
+  typography: {
+    heading: { fontSize: 24, fontWeight: '700' as const, lineHeight: 32 },
+    body: { fontSize: 16, fontWeight: '400' as const, lineHeight: 22 },
+    caption: { fontSize: 13, fontWeight: '400' as const, lineHeight: 18 },
+  },
+};
+
+// Component: Static styles use StyleSheet.create
+const styles = StyleSheet.create({
+  card: {
+    backgroundColor: tokens.colors.background,
+    padding: tokens.spacing.md,
+    borderRadius: 12,
+    marginVertical: tokens.spacing.xs,
+  },
+  title: { ...tokens.typography.heading, color: tokens.colors.text },
+  body: { ...tokens.typography.body, color: tokens.colors.textSecondary },
+});
+```
+
+### Performance Habits
+
+- **Always use FlatList** (or SectionList) for scrollable content — never ScrollView for dynamic-length data.
+- **Use `useMemo` and `useCallback`** for expensive computations and stable callback references.
+- **Avoid inline functions as props** when the child is wrapped in `React.memo` — each render creates a new reference.
+- **Use `useNativeDriver: true`** for all animated properties that don't affect layout (opacity, transform).
+- **Set `windowSize` and `maxToRenderPerBatch`** on FlatList for very long lists:
+
+```tsx
+<FlatList
+  data={items}
+  renderItem={renderItem}
+  keyExtractor={(item) => item.id}
+  windowSize={5}          // renders 5 screen heights worth of content
+  maxToRenderPerBatch={10}
+  initialNumToRender={8}
+  removeClippedSubviews={true}
+  getItemLayout={(_, index) => ({ length: ITEM_HEIGHT, offset: ITEM_HEIGHT * index, index })}
+/>
+```
+
+### Navigation Best Practices
+
+Use typed navigation with React Navigation 6:
+
+```tsx
+// Typed navigation params
+export type RootStackParamList = {
+  Home: undefined;
+  Profile: { userId: string };
+  Settings: { section?: 'notifications' | 'privacy' };
+  Post: { postId: string; title: string };
+};
+
+declare global {
+  namespace ReactNavigation {
+    interface RootParamList extends RootStackParamList {}
+  }
+}
+
+// Auth flow pattern — conditional navigation
+function RootNavigator() {
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      {isAuthenticated ? (
+        <Stack.Screen name="Main" component={MainTabs} />
+      ) : (
+        <Stack.Screen name="Auth" component={AuthStack} />
+      )}
+    </Stack.Navigator>
+  );
+}
+```
+
+### Testing Discipline
+
+- **Unit tests**: Business logic in hooks, stores, and utilities (Jest)
+- **Component tests**: UI rendering and user interaction (React Native Testing Library)
+- **E2E tests**: Critical flows on real devices (Detox or Maestro)
+
+```tsx
+// Component test with RNTL
+import { render, screen, userEvent } from '@testing-library/react-native';
+
+test('toggles favorite status when heart icon pressed', async () => {
+  const onToggle = jest.fn();
+  render(<PostCard post={mockPost} onToggleFavorite={onToggle} />);
+
+  const heartButton = screen.getByRole('button', { name: /favorite/i });
+  await userEvent.press(heartButton);
+  expect(onToggle).toHaveBeenCalledWith(mockPost.id);
+});
+```
+
+### Accessibility
+
+Add `accessibilityLabel`, `accessibilityRole`, and `accessibilityState` to all interactive elements. Test with screen readers (VoiceOver on iOS, TalkBack on Android):
+
+```tsx
+<TouchableOpacity
+  accessibilityRole="button"
+  accessibilityLabel="Delete item"
+  accessibilityState={{ disabled: isDeleting }}
+  onPress={handleDelete}
+>
+  <TrashIcon />
+</TouchableOpacity>
+```
+
+### Upgrade Strategy
+
+Stay within 2 minor versions of the latest React Native release. Use `react-native upgrade-helper` to review breaking changes between your current and target version. Run through the New Architecture migration checklist when upgrading across versions that change the architecture.
+
+<Callout title="Upgrade frequently, upgrade incrementally">
+Skipping multiple major versions (e.g., 0.70 to 0.76) compounds breaking changes and makes debugging nearly impossible. Aim for upgrades every 3-4 months. Each minor version upgrade takes 1-2 days; skipping to a version 6+ ahead takes weeks.
+</Callout>
+
+### Monorepo Considerations
+
+For monorepo setups (Turborepo, Nx), share TypeScript types, design tokens, and API client code across mobile and web packages. Configure Metro's `watchFolders` and `nodeModulesPaths` to resolve packages correctly:
+
+```js
+// metro.config.js for monorepo
+const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
+const path = require('path');
+
+const config = {
+  watchFolders: [path.resolve(__dirname, '../../packages')],
+  resolver: {
+    nodeModulesPaths: [path.resolve(__dirname, 'node_modules'), path.resolve(__dirname, '../../node_modules')],
+  },
+};
+```
+
+### Flutter Comparison
+
+Flutter's widget system makes component size naturally smaller because widgets are composed rather than configured, but testing patterns (widget tests vs RNTL) are less integrated with the broader testing ecosystem. RN's JS testing toolchain (Jest, Testing Library, Maestro) is more mature and better documented than Flutter's integration test story.

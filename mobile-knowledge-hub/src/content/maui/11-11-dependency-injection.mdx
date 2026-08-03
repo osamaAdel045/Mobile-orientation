@@ -1,0 +1,115 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Container" value="Microsoft.Extensions.DependencyInjection" />
+  <StatItem label="Registration" value="MauiProgram.cs" />
+  <StatItem label="Lifetimes" value="Singleton / Scoped / Transient" />
+  <StatItem label="Injection" value="Constructor injection (auto)" />
+</StatGrid>
+
+### Built-in DI Container
+
+NET MAUI bundles `Microsoft.Extensions.DependencyInjection`, the same container used by ASP.NET Core. It supports constructor injection, service resolution, and lifetime management out of the box. Register all services, pages, and ViewModels in `MauiProgram.cs`.
+
+```csharp
+public static MauiApp CreateMauiApp()
+{
+    var builder = MauiApp.CreateBuilder();
+    builder
+        .UseMauiApp&lt;App&gt;()
+        .ConfigureFonts(fonts =>
+        {
+            fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
+        });
+
+    // Register services
+    builder.Services.AddSingleton&lt;IWeatherApi, WeatherApi&gt;();
+    builder.Services.AddTransient&lt;WeatherService&gt;();
+
+    // Register pages and ViewModels
+    builder.Services.AddSingleton&lt;MainPage&gt;();
+    builder.Services.AddTransient&lt;WeatherViewModel&gt;();
+    builder.Services.AddTransient&lt;WeatherPage&gt;();
+
+    return builder.Build();
+}
+```
+
+### Constructor Injection
+
+Pages resolve their dependencies through constructor parameters. MAUI's `MauiApp` acts as the service provider — when you navigate to a page registered in DI, the container automatically injects its dependencies and those of nested ViewModels.
+
+```csharp
+public class WeatherViewModel
+{
+    private readonly WeatherService _service;
+
+    public WeatherViewModel(WeatherService service)
+    {
+        _service = service;
+    }
+
+    public ObservableCollection&lt;WeatherRecord&gt; Records { get; } = new();
+}
+
+public class WeatherPage : ContentPage
+{
+    public WeatherPage(WeatherViewModel vm)
+    {
+        InitializeComponent();
+        BindingContext = vm;
+    }
+}
+```
+
+<Callout type="info">
+  Avoid calling `new` on ViewModels inside page constructors — that bypasses
+  the DI container and prevents `IHttpClientFactory`, `ILogger&lt;T&gt;`, and other
+  framework services from being resolved automatically.
+</Callout>
+
+### Service Lifetimes
+
+Choose the correct lifetime for each registration:
+
+| Lifetime | Instance Created | Best For |
+|---|---|---|
+| **Singleton** | Once per app lifetime | HTTP clients, DB connections, settings |
+| **Transient** | Every time it's requested | ViewModels, short-lived services |
+| **Scoped** | Once per scope (rare in MAUI) | Unit-of-work patterns |
+
+```csharp
+// Singleton — one instance for the app's lifetime
+builder.Services.AddSingleton&lt;IDatabaseService, SqliteService&gt;();
+
+// Transient — fresh instance per injection
+builder.Services.AddTransient&lt;ILocationService, LocationService&gt;();
+
+// Scoped — shared within a scope (maps to navigation stack)
+builder.Services.AddScoped&lt;IShoppingCart, ShoppingCart&gt;();
+```
+
+<Callout type="warning">
+  **Scoped** lifetimes behave differently in MAUI than in ASP.NET Core. MAUI
+  does not create a new scope per page navigation by default. To get scoped
+  behavior, manually create `IServiceScope` instances — for example, when
+  launching a modal workflow where you want a fresh set of services.
+</Callout>
+
+### Replacing the Container
+
+If you need advanced features (property injection, decorators, interception), replace the default `IServiceProviderFactory`. This example registers Autofac as the backing container, keeping the `IServiceCollection` registration syntax you already use.
+
+```csharp
+builder.ConfigureContainer(new AutofacServiceProviderFactory(), container =>
+{
+    container.RegisterType&lt;WeatherService&gt;().As&lt;IWeatherService&gt;();
+});
+```
+
+<Callout type="tip">
+  For testability, register `Mock&lt;IWeatherApi&gt;` or `NullWeatherApi` in the
+  `UseMauiApp&lt;App&gt;` builder's test host, using the same constructor-injected
+  ViewModels. No ViewModel refactoring is needed — swapping the registration
+  is sufficient.
+</Callout>

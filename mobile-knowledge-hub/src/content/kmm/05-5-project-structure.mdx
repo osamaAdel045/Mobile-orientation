@@ -1,0 +1,119 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="shared/" label="Core Module" />
+        <StatItem value="androidMain" label="Android Source Set" />
+        <StatItem value="iosMain" label="iOS Source Set" />
+      </StatGrid>
+
+      ### KMP Project Anatomy
+
+      A standard KMP project organizes code into source sets by platform. The
+      `commonMain` source set holds all cross-platform code. Platform-specific source
+      sets (`androidMain`, `iosMain`) hold implementations that depend on platform
+      SDKs. The UI modules (`androidApp`, `iosApp`) are standard native app projects
+      that depend on the shared module.
+
+      ```swift
+      KMPProject/
+      ├── shared/                          # Kotlin Multiplatform library
+      │   ├── src/
+      │   │   ├── commonMain/kotlin/       # Cross-platform: models, api, repo, di
+      │   │   ├── androidMain/kotlin/      # actual implementations for Android
+      │   │   └── iosMain/kotlin/          # actual implementations for iOS
+      │   └── build.gradle.kts
+      ├── androidApp/                      # Android application module
+      │   ├── src/main/kotlin/             # Compose UI, Android-specific
+      │   └── build.gradle.kts
+      ├── iosApp/                          # Xcode project directory
+      │   ├── iosApp/                      # SwiftUI views, iOS-specific
+      │   ├── iosApp.xcodeproj
+      │   └── Frameworks/                  # Embedded .xcframework
+      ├── build.gradle.kts                 # Root project configuration
+      ├── settings.gradle.kts              # Module declarations
+      └── gradle.properties                # Kotlin/Gradle properties
+      ```
+
+      ### Source Sets Explained
+
+      Each KMP target gets its own source set. Source sets form a hierarchy – every
+      platform source set (`androidMain`, `iosMain`) extends `commonMain` automatically.
+      Additional intermediate source sets (e.g., `appleMain` shared by iOS and macOS)
+      can be defined to share code across Apple targets without duplication.
+
+      ```kotlin
+      // shared/build.gradle.kts — source set configuration
+      kotlin {
+          androidTarget()
+          iosX64()
+          iosArm64()
+          iosSimulatorArm64()
+
+          sourceSets {
+              commonMain.dependencies {
+                  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+                  implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.0")
+              }
+              val appleMain = sourceSets.create("appleMain") {
+                  dependsOn(commonMain.get())
+              }
+              iosX64().compilations.getByName("main").defaultSourceSet {
+                  dependsOn(appleMain)
+              }
+              iosArm64().compilations.getByName("main").defaultSourceSet {
+                  dependsOn(appleMain)
+              }
+          }
+      }
+      ```
+
+      <Callout title="Source Set Hierarchy">
+        Source sets form a tree rooted at `commonMain`. Dependencies declared in
+        `commonMain` are available to all platform source sets. Platform-specific
+        dependencies (e.g., `ktor-client-okhttp` for Android, `ktor-client-darwin`
+        for iOS) go in the respective source set. The Kotlin compiler resolves the
+        correct source set for each target at compile time with no runtime cost.
+      </Callout>
+
+      ### expect/actual in the Project Structure
+
+      expect declarations live in `commonMain` with matching actuals in each platform
+      source set. The directory structure mirrors the source set hierarchy:
+
+      ```kotlin
+      // shared/src/commonMain/kotlin/com/app/Platform.kt
+      expect fun getPlatformName(): String
+
+      // shared/src/androidMain/kotlin/com/app/Platform.android.kt
+      actual fun getPlatformName(): String = "Android ${Build.VERSION.SDK_INT}"
+
+      // shared/src/iosMain/kotlin/com/app/Platform.ios.kt
+      actual fun getPlatformName(): String = UIDevice.currentDevice.systemVersion
+      ```
+
+      ### Shared Module API Surface Design
+
+      The shared module should expose a **narrow API** to platform consumers. Hide
+      implementation details behind repository interfaces and use-case classes.
+      Platform code should only interact with use cases, ViewModels, and state holders.
+
+      ```kotlin
+      // commonMain — narrow API surface
+      class GetUserUseCase(private val repo: UserRepository) {
+          suspend operator fun invoke(id: String): Flow<UserState> {
+              return repo.observeUser(id)
+          }
+      }
+
+      // Common mistake: exposing internal types
+      // WRONG — exposes Retrofit/Ktor types to UI layer
+      // RIGHT — domain models only cross the shared module boundary
+      ```
+
+      ### KMP Insight
+
+      The project structure separates concerns by platform at the file system level.
+      Unlike Flutter where Dart files mix platform concerns through conditional
+      imports, KMP's source set hierarchy makes platform boundaries explicit in the
+      directory tree. Any file in `commonMain` must compile on all targets — this
+      discipline keeps the shared module genuinely cross-platform.

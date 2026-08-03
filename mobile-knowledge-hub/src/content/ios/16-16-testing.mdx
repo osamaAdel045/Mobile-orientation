@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+      <StatItem value="XCTest" label="Traditional (2008)" />
+      <StatItem value="Swift Testing" label="Modern (2024)" />
+      <StatItem value="XCUITest" label="UI Automation" />
+      <StatItem value="Snapshot" label="Visual Diff" />
+    </StatGrid>
+
+    ### XCTest — The Established Framework
+
+    Tests are `XCTestCase` subclasses with `setUp`/`tearDown`. Async via `XCTestExpectation`
+    or Swift async test methods (Xcode 13.3+). Performance tests use `measure` with `XCTMetric`.
+
+    ```swift
+    import XCTest
+    @testable import MyApp
+
+    final class AuthServiceTests: XCTestCase {
+        var sut: AuthService!
+
+        override func setUp() async throws {
+            sut = AuthService()
+            try await sut.configure()
+        }
+
+        override func tearDown() async throws { sut = nil }
+
+        func testLoginReturnsToken() async throws {
+            let token = try await sut.login(email: "test@example.com", password: "pass")
+            XCTAssertFalse(token.isEmpty)
+            XCTAssertEqual(token.count, 40)
+        }
+
+        func testLoginInvalidEmailThrows() async {
+            await XCTAssertThrowsError(try await sut.login(email: "bad", password: "pass"))
+        }
+
+        func testTokenPerformance() throws {
+            measure(metrics: [XCTCPUMetric(), XCTMemoryMetric()]) {
+                _ = sut.validateToken("abc123")
+            }
+        }
+    }
+    ```
+
+    Baselines are stored per-device/OS; drift alerts the team to regressions.
+
+    ### Swift Testing Framework (Xcode 16+, Swift 6)
+
+    A ground-up replacement using `@Test`, `#expect`, and parameterized tests — no class hierarchy.
+
+    ```swift
+    import Testing
+    @testable import MyApp
+
+    struct AuthServiceTests {
+        let sut = AuthService()
+
+        @Test("Login with valid credentials")
+        func validLogin() async throws {
+            let token = try await sut.login(email: "test@example.com", password: "pass")
+            #expect(!token.isEmpty)
+            #expect(token.count == 40)
+        }
+
+        @Test("Login with invalid email", .tags(.auth, .validation))
+        func invalidEmail() async {
+            await #expect(throws: AuthError.self) {
+                try await sut.login(email: "bad", password: "pass")
+            }
+        }
+
+        @Test("Various invalid inputs", arguments: [
+            ("", "pass"), ("bad", ""), ("bad", "short"),
+        ])
+        func invalidInputs(email: String, password: String) async {
+            await #expect(throws: AuthError.self) {
+                try await sut.login(email: email, password: password)
+            }
+        }
+    }
+    ```
+
+    `#expect` captures source location automatically. Parameterized tests eliminate loop
+    boilerplate. Tags enable fine-grained test-plan filtering.
+
+    <Callout title="Swift Testing Over XCTest for New Projects">
+      Swift Testing's `#expect` macro, parameterization, and async-native design produce more
+      expressive tests. XCTest remains canonical for XCUITest UI tests and projects targeting iOS 15 or earlier.
+    </Callout>
+
+    ### XCUITest — UI Automation
+
+    Launches the full app and simulates user interactions against the accessibility tree.
+
+    ```swift
+    import XCTest
+
+    final class LoginUITests: XCTestCase {
+        let app = XCUIApplication()
+
+        override func setUp() {
+            continueAfterFailure = false
+            app.launchEnvironment = ["UITesting": "true"]
+            app.launch()
+        }
+
+        func testLoginCompletes() {
+            app.textFields["email-input"].tap()
+            app.textFields["email-input"].typeText("test@example.com")
+            app.secureTextFields["password-input"].tap()
+            app.secureTextFields["password-input"].typeText("pass")
+            app.buttons["login-button"].tap()
+            XCTAssertTrue(app.staticTexts["welcome"].waitForExistence(timeout: 5))
+        }
+    }
+    ```
+
+    Use `launchEnvironment` to inject mock data. Xcode's UI Test recording generates skeleton
+    code but needs manual cleanup for robust selectors.
+
+    ### Snapshot Testing
+
+    `swift-snapshot-testing` (Point-Free) captures a view as PNG and compares pixel-by-pixel:
+
+    ```swift
+    import SnapshotTesting
+    import XCTest
+
+    final class ProfileCardSnapshotTests: XCTestCase {
+        func testDefaultAppearance() {
+            assertSnapshot(of: ProfileCard(user: .preview), as: .image(layout: .sizeThatFits))
+        }
+        func testDarkMode() {
+            let view = ProfileCard(user: .preview).environment(\.colorScheme, .dark)
+            assertSnapshot(of: view, as: .image(layout: .sizeThatFits))
+        }
+    }
+    ```
+
+    Failing snapshots produce a diff image. CI with `FAIL_ON_EMPTY_REFERENCE=1` prevents
+    accidental greenfield passes. Run tests via `xcodebuild test -workspace ... -scheme ...`.
+
+    ### Cross-Platform Comparison
+
+    Android's **JUnit + Espresso** mirrors XCTest + XCUITest. Flutter's `flutter_test` provides
+    `testWidgets` — Swift has no direct widget-test equivalent; snapshot testing fills the gap.
+    Swift Testing's `#expect(performing:metrics:)` offers first-class performance assertions
+    missing from JUnit 5 and partially covered by Flutter's `benchmark` packages.

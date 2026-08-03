@@ -1,0 +1,135 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="StateFlow" label="Shared Primitive" />
+        <StatItem value="Shared ViewModel" label="Architecture" />
+        <StatItem value="SKIE AsyncSequence" label="iOS Consumption" />
+      </StatGrid>
+
+      ### Two-Layer State Management
+
+      KMP divides state management into two distinct layers. The **shared layer**
+      (commonMain) models business state using Kotlin `StateFlow` and sealed classes.
+      The **UI layer** (platform-specific) maps that state to native widgets. This
+      separation ensures the shared module has zero UI dependencies while each platform
+      can render state in its idiomatic way.
+
+      ```kotlin
+      // commonMain — shared UI state sealed class
+      sealed class AuthState {
+          data object Idle : AuthState()
+          data object Loading : AuthState()
+          data class Authenticated(val user: User, val token: String) : AuthState()
+          data class Error(val message: String) : AuthState()
+      }
+
+      // commonMain — shared ViewModel
+      class AuthViewModel(
+          private val authRepo: AuthRepository,
+          private val scope: CoroutineScope
+      ) {
+          private val _state = MutableStateFlow<AuthState>(AuthState.Idle)
+          val state: StateFlow<AuthState> = _state.asStateFlow()
+
+          fun login(email: String, password: String) {
+              _state.value = AuthState.Loading
+              scope.launch {
+                  try {
+                      val user = authRepo.login(email, password)
+                      _state.value = AuthState.Authenticated(user, user.token)
+                  } catch (e: Exception) {
+                      _state.value = AuthState.Error(e.message ?: "Unknown error")
+                  }
+              }
+          }
+      }
+      ```
+
+      ### Android Consumption — Jetpack Compose
+
+      Android observes `StateFlow` with Compose's `collectAsStateWithLifecycle()`,
+      which respects the Android lifecycle — collecting stops when the composable
+      leaves the composition and restarts when it re-enters.
+
+      ```kotlin
+      // androidApp — Compose consumption
+      @Composable
+      fun AuthScreen(viewModel: AuthViewModel) {
+          val state by viewModel.state.collectAsStateWithLifecycle()
+          when (val s = state) {
+              is AuthState.Idle -> LoginForm(onLogin = viewModel::login)
+              is AuthState.Loading -> CircularProgressIndicator()
+              is AuthState.Authenticated -> Dashboard(s.user)
+              is AuthState.Error -> ErrorBanner(s.message)
+          }
+      }
+      ```
+
+      ### iOS Consumption — SwiftUI with SKIE
+
+      On iOS, SKIE converts `StateFlow` into a `Swift AsyncSequence`. SwiftUI's `task`
+      modifier iterates over the async sequence and updates the view when state changes.
+
+      ```swift
+      // iosApp — SwiftUI with SKIE AsyncSequence
+      struct AuthScreen: View {
+          let viewModel: AuthViewModel
+          @State private var state: AuthState = .idle
+
+          var body: some View {
+              Group {
+                  switch state {
+                  case .idle:        LoginForm { email, pass in viewModel.login(email, pass) }
+                  case .loading:     ProgressView()
+                  case .authenticated(let user, _): DashboardView(user: user)
+                  case .error(let msg): ErrorView(message: msg)
+                  }
+              }
+              .task {
+                  for await s in viewModel.state.asyncSequence {
+                      state = s
+                  }
+              }
+          }
+      }
+      ```
+
+      <Callout title="ViewModel Lifecycle in Common Code">
+        KMP ViewModels cannot use Android's `ViewModel` class (JVM-only). Instead,
+        use manual `CoroutineScope` management or the `kmp-viewmodel` library
+        (from IceRock) which provides a KMP-compatible ViewModel base class with
+        automatic scope cancellation. On iOS, the ViewModel is created in Swift
+        and its scope ties to the SwiftUI view lifecycle via `@StateObject`.
+      </Callout>
+
+      ### Comparison: KMP State vs Flutter/Redux
+
+      | Aspect | KMP (StateFlow) | Flutter (Riverpod) | Redux |
+      |--------|-----------------|--------------------|-------|
+      | State Type | StateFlow | StateNotifier | Store |
+      | Immutability | copy() with data class | copyWith() | Reducer pure fn |
+      | Side Effects | suspend function | AsyncNotifier | Middleware |
+      | Platform Bridge | SKIE AsyncSequence | Dart (direct) | JS Bridge |
+      | Lifecycle | CoroutineScope | Widget lifecycle | Subscriptions |
+
+      ### Pitfall: Shared Mutable State
+
+      ```kotlin
+      // WRONG — mutable state exposed directly to both platforms
+      class WrongViewModel {
+          var count = 0
+      }
+
+      // RIGHT — immutable state via StateFlow
+      class RightViewModel {
+          private val _state = MutableStateFlow(0)
+          val state: StateFlow<Int> = _state.asStateFlow()
+      }
+      ```
+
+      ### KMP Insight
+
+      State management in KMP treats the shared module as a **state producer** and
+      each platform as a **state consumer**. The boundary is the `StateFlow` type
+      — which SKIE translates into Swift's `AsyncSequence` and Android observes
+      natively with `Flow.collect()`. No serialization, no bridge overhead.

@@ -1,0 +1,143 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Angular" value="RxJS + Signals or NgRx" />
+  <StatItem label="React" value="Zustand / Redux Toolkit" />
+  <StatItem label="Vue" value="Pinia (preferred)" />
+  <StatItem label="Framework-Agnostic" value="MobX, XState" />
+  <StatItem label="Ionic Lifecycle" value="ionViewWillEnter, etc." />
+</StatGrid>
+
+### Framework-Agnostic Principle
+
+Ionic does not prescribe a state management library — it integrates with whatever your host framework provides. The Ionic web components (built with Stencil) manage their own local state via `@State()` and `@Prop()` decorators, but application-level state is entirely your framework's responsibility.
+
+### Angular: RxJS + Signals
+
+Angular projects typically use **RxJS Subjects** or **BehaviorSubjects** inside injectable services, combined with the `async` pipe in templates. Angular 16+ adds **Signals** for fine-grained reactivity without zone.js overhead.
+
+```typescript
+import { Injectable } from '@angular/core';
+import { BehaviorSubject, Observable } from 'rxjs';
+import { Signal, signal } from '@angular/core';
+
+@Injectable({ providedIn: 'root' })
+export class AuthStateService {
+  // RxJS approach
+  private userSubject = new BehaviorSubject<User | null>(null);
+  user$: Observable<User | null> = this.userSubject.asObservable();
+
+  // Signals approach (Angular 16+)
+  readonly isAuthenticated: Signal<boolean> = signal(false);
+
+  login(user: User) {
+    this.userSubject.next(user);
+    this.isAuthenticated.set(true);
+  }
+}
+```
+
+For larger applications, **NgRx** provides a Redux-inspired store with actions, reducers, selectors, and effects. The tradeoff is boilerplate — NgRx is best suited for apps with complex cross-feature state synchronization.
+
+### React: Zustand and React Query
+
+React + Ionic apps favor lightweight solutions. **Zustand** provides a hook-based store with no provider nesting, while **React Query (TanStack Query)** handles server state with caching, refetching, and optimistic updates.
+
+```typescript
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+
+interface CartState {
+  items: CartItem[];
+  addItem: (item: CartItem) => void;
+  totalItems: () => number;
+}
+
+export const useCartStore = create<CartState>()(
+  persist(
+    (set, get) => ({
+      items: [],
+      addItem: (item) => set((state) => ({ items: [...state.items, item] })),
+      totalItems: () => get().items.length,
+    }),
+    { name: 'cart-storage' },
+  ),
+);
+```
+
+Zustand's `persist` middleware writes state to `localStorage` automatically — useful for Ionic apps where the WebView persists between cold starts. **Redux Toolkit** is an alternative for teams that prefer the Redux pattern with reduced boilerplate via `createSlice`.
+
+### Vue: Pinia
+
+Vue's official state management is **Pinia**, which replaces Vuex. Pinia supports both the Options API and Composition API, and includes first-class TypeScript support.
+
+```typescript
+import { defineStore } from 'pinia';
+import { ref, computed } from 'vue';
+
+export const useSessionStore = defineStore('session', () => {
+  const token = ref<string | null>(null);
+  const isLoggedIn = computed(() => token.value !== null);
+
+  function login(newToken: string) {
+    token.value = newToken;
+  }
+
+  function logout() {
+    token.value = null;
+  }
+
+  return { token, isLoggedIn, login, logout };
+});
+```
+
+Pinia stores are lazily loaded and can be used outside of Vue components, which is useful in route guards and service files.
+
+<Callout type="info">
+State that must survive app backgrounding or device rotation should be persisted to `localStorage` (via Zustand middleware, NgRx meta-reducer, or Pinia plugin). Avoid relying on in-memory state alone — mobile OSes can terminate the WebView process at any time when the app is backgrounded.
+</Callout>
+
+### IonRouterOutlet Page Lifecycle Events
+
+Ionic fires custom lifecycle events on pages managed by `ion-router-outlet`. These are distinct from the framework's own lifecycle hooks and must be used for view-specific state operations.
+
+```typescript
+// Angular — IonLifecycleHooks interface
+import { IonLifecycleHooks } from '@ionic/angular';
+
+export class DashboardPage implements IonLifecycleHooks {
+  ionViewWillEnter() { /* Page about to become active — fetch data, refresh state */ }
+  ionViewDidEnter()  { /* Page fully entered — start animations, analytics */ }
+  ionViewWillLeave() { /* Page about to leave — save drafts, cancel subscriptions */ }
+  ionViewDidLeave()  { /* Page left — cleanup, stop timers */ }
+}
+```
+
+```typescript
+// React — useIonViewWillEnter hook
+import { useIonViewWillEnter } from '@ionic/react';
+
+function Dashboard() {
+  useIonViewWillEnter(() => {
+    // Refresh store data when user navigates back to this tab
+    useCartStore.getState().refresh();
+  });
+}
+```
+
+These lifecycle events fire every time the page becomes visible, unlike Angular's `ngOnInit` which runs once. Use them to refresh state from APIs or check auth status on each visit.
+
+<Callout type="warning">
+Do not place heavy computation inside `ionViewWillEnter` — it blocks the page transition animation on slower devices. Use `ionViewDidEnter` for non-blocking work like analytics or prefetching data for the next view.
+</Callout>
+
+### Decision: When to Use Each Approach
+
+<DecisionMatrix
+  items={[
+    { feature: "Cross-feature state", angular: "NgRx", react: "Redux Toolkit", vue: "Pinia" },
+    { feature: "Server data caching", angular: "RxJS + switchMap", react: "React Query", vue: "Pinia + async actions" },
+    { feature: "Form state", angular: "ReactiveForms", react: "Zustand / Formik", vue: "v-model + Pinia" },
+    { feature: "Persisted state", angular: "NgRx meta-reducer", react: "Zustand persist", vue: "pinia-plugin-persistedstate" },
+  ]}
+/>

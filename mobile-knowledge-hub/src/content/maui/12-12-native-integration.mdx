@@ -1,0 +1,124 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Handler API" value="Mapper.AppendToMapping" />
+  <StatItem label="Platform Access" value="Direct (#if ANDROID / #if IOS)" />
+  <StatItem label="Legacy Bridge" value="DependencyService (obsolete)" />
+  <StatItem label="Native Bindings" value=".jar / .aar / .xcframework" />
+</StatGrid>
+
+### Custom Handler Creation
+
+Handlers are the modern way to customize native controls in .NET MAUI. Each handler maps a cross-platform `IView` to platform-specific native views through a `Mapper` that processes property changes.
+
+```csharp
+// Custom handler for a borderless Entry on Android and iOS
+public class BorderlessEntryHandler : EntryHandler
+{
+    protected override void ConnectHandler(EntryPlatformView platformView)
+    {
+        base.ConnectHandler(platformView);
+
+#if ANDROID
+        platformView.SetBackgroundColor(Android.Graphics.Color.Transparent);
+        platformView.SetPadding(0, 0, 0, 0);
+#elif IOS || MACCATALYST
+        platformView.BorderStyle = UIKit.UITextBorderStyle.None;
+        platformView.BackgroundColor = UIKit.UIColor.Clear;
+#endif
+    }
+
+    protected override void DisconnectHandler(EntryPlatformView platformView)
+    {
+        base.DisconnectHandler(platformView);
+        // Clean up native resources here
+    }
+}
+```
+
+### Registering a Custom Handler
+
+Replace the default handler in `MauiProgram.cs` by calling `ConfigureMauiHandlers` on the builder. All `Entry` controls in the app now use your custom handler.
+
+```csharp
+builder.ConfigureMauiHandlers(handlers =>
+{
+    handlers.AddHandler&lt;Entry, BorderlessEntryHandler&gt;();
+});
+```
+
+### Platform-Specific Code — #if Directives
+
+Use `#if ANDROID`, `#if IOS`, `#if MACCATALYST`, or `#if WINDOWS` for short platform-specific blocks inside shared code. For larger blocks, use partial classes in the `Platforms/` folder.
+
+```csharp
+public string GetDeviceModel()
+{
+#if ANDROID
+    return $"{Android.OS.Build.Manufacturer} {Android.OS.Build.Model}";
+#elif IOS
+    return UIKit.UIDevice.CurrentDevice.Model;
+#elif WINDOWS
+    return Environment.GetEnvironmentVariable("COMPUTERNAME") ?? "Windows";
+#else
+    return "Unknown";
+#endif
+}
+```
+
+<Callout type="warning">
+  `#if` blocks are checked at compile time — conditional code that is not
+  enclosed in the correct directive produces a build error on the excluded
+  platform. Use class-level `[Platform(typeof(Android))]` or partial classes in
+  `Platforms/` folders to avoid littering shared code with preprocessor
+  branches.
+</Callout>
+
+### .NET for Android / iOS Bindings
+
+Consume third-party native SDKs by creating binding libraries. For Android, reference a `.aar` or `.jar`; for iOS, an `.xcframework` or static library. MAUI generates C# bindings automatically from the native metadata.
+
+```csharp
+// Inside a binding project — the metadata.xml maps native APIs
+&lt;metadata&gt;
+    &lt;remove-node path="/api/package[@name='com.thirdparty.internal']" /&gt;
+    &lt;attr path="/api/package[@name='com.thirdparty']/class[@name='SdkClient']"
+          name="visibility"&gt;public&lt;/attr&gt;
+&lt;/metadata&gt;
+```
+
+<Callout type="info">
+  The **Platform Class** approach (`Platforms/Android/`, `Platforms/iOS/`) is
+  preferred over `#if` for entire files — the build system compiles only the
+  files matching the target platform, keeping the shared project clean.
+</Callout>
+
+### Comparison — Native Integration Patterns
+
+| Feature | .NET MAUI | Flutter | React Native |
+|---|---|---|---|
+| API access | **Direct** (no serialization) | Platform Channels (MethodChannel) | Bridge (JSON serialization) |
+| Custom control | Handler + Mapper | `PlatformView` widget | `NativeView` wrapper |
+| SDK binding | `.aar` / `.xcframework` → C# bindings | `pigeon` (code-gen) | Turbo Module (C++) |
+| Performance | Near-native (JIT/AOT) | Near-native (Impeller) | JS bridge overhead |
+
+### DependencyService — Legacy Approach
+
+Prior to handlers, MAUI used `DependencyService` for platform resolution — a static registrar that finds `[assembly: Dependency(typeof(...))]`-decorated implementations at runtime. This approach is now considered obsolete.
+
+```csharp
+// Avoid this pattern — prefer constructor injection with platform abstractions
+[assembly: Dependency(typeof(AndroidTextToSpeech))]
+public class AndroidTextToSpeech : ITextToSpeech { ... }
+
+// Registration-free alternative — register interfaces in DI instead
+builder.Services.AddSingleton&lt;ITextToSpeech, AndroidTextToSpeech&gt;();
+```
+
+<Callout type="tip">
+  For **deep platform integration** (background services, push notifications,
+  Bluetooth LE), write a shared interface in your app project and the
+  platform implementation in the `Platforms/` folder. Register the
+  implementation via DI — no `DependencyService`, no manual `#if` in your
+  ViewModel layer.
+</Callout>

@@ -1,0 +1,87 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      <StatGrid>
+<StatItem value="Ionic (Indep.)" label="Company" />
+        <StatItem value="JS / TS" label="Language" />
+        <StatItem value="2013/2019" label="Released" />
+        <StatItem value="MIT" label="License" />
+        <StatItem value="Angular / React / Vue" label="Host Framework" />
+        <StatItem value="Capacitor" label="Native Bridge" />
+        <StatItem value="iOS / Android / PWA" label="Targets" />
+</StatGrid>
+      
+### The Web-Native Philosophy
+
+Ionic's core bet is that the web platform is sufficient for most mobile app use cases — and improves every year. Unlike Flutter (which builds a custom rendering engine using Skia) or React Native (which bridges to native UIKit/Android widgets), Ionic embeds a full WebView and renders your app as a web page inside it. Your UI is HTML, CSS, and JavaScript — the exact stack every web developer already knows.
+
+The critical differentiator: Ionic does not have a custom renderer, and it does not use native widgets. Every pixel on screen is rendered by the WebView's standard browser engine (WKWebView on iOS, Chromium WebView on Android). This means any web library, any CSS framework, any JavaScript tool works inside an Ionic app without modification. A React component you built for the web renders identically inside an Ionic app.
+
+```typescript
+// A typical Ionic page is just a web component with CSS styling
+import { Component } from '@angular/core'
+
+@Component({
+  selector: 'app-home',
+  template: `
+    <ion-header>
+      <ion-toolbar color="primary">
+        <ion-title>Dashboard</ion-title>
+      </ion-toolbar>
+    </ion-header>
+    <ion-content class="ion-padding">
+      <ion-card>
+        <ion-card-header>
+          <ion-card-title>Welcome</ion-card-title>
+        </ion-card-header>
+        <ion-card-content>
+          <p>This runs inside WKWebView — exactly like a browser tab.</p>
+        </ion-card-content>
+      </ion-card>
+    </ion-content>
+  `
+})
+export class HomePage {}
+```
+
+<Callout variant="info">
+  Ionic apps are also Progressive Web Apps. The same codebase deployed to a web server works as a PWA in any modern browser. This is impossible with Flutter (web target is a separate canvas-based build) or React Native (no browser target at all). Ionic's web-first architecture means your mobile app and your web app share the same code from the same repository — no separate compilation targets needed.
+</Callout>
+
+### Capacitor as the Native Bridge
+
+Capacitor is Ionic's native runtime layer, providing JavaScript APIs for device features — camera, geolocation, file system, biometrics, and hundreds more through a plugin registry. Each plugin follows a consistent pattern: a TypeScript interface defines the JavaScript API, and the native side (Swift for iOS, Kotlin for Android) implements the functionality.
+
+```typescript
+// Calling a native Capacitor plugin from TypeScript
+import { Camera, CameraResultType } from '@capacitor/camera'
+
+async function takePhoto() {
+  const image = await Camera.getPhoto({
+    resultType: CameraResultType.DataUrl,
+    quality: 90,
+    allowEditing: false,
+  })
+  // image.dataUrl contains the base64-encoded photo
+  const img = document.getElementById('photo') as HTMLImageElement
+  img.src = image.dataUrl!
+}
+```
+
+The bridge is Promise-based from the developer's perspective, but under the hood Capacitor serializes calls across the JavaScript-to-native boundary using WKWebView's message handlers on iOS and Android's JavascriptInterface on Android. Each call resolves asynchronously without blocking the UI thread.
+
+### Host Framework Choice
+
+Ionic does not dictate your UI framework. The UI components (ion-button, ion-list, ion-modal, etc.) are Web Components built with Stencil, so they work natively with any framework — or no framework at all. Angular gets full integration with NgModules and lazy routing. React users get hooks and functional component wrappers. Vue developers get the Composition API. You can even use Ionic with vanilla JavaScript and the customElements API directly.
+
+### When to Use Ionic
+
+Ionic excels for teams that are already web developers, for content-focused apps (news, social, e-commerce), for PWAs that need app store distribution, and for prototypes that ship fast. The development cycle is rapid: hot-reload works in the browser and on device, there is no native compilation step, and Capacitor live reload lets you iterate without rebuilding the native binary. If your team knows React but not Swift, Ionic removes the iOS learning curve entirely.
+
+### When NOT to Use Ionic
+
+Ionic is the wrong choice for apps requiring sustained 60fps animations on every frame (games, chart-heavy dashboards, video editors), apps needing deep native integration beyond plugin APIs, or apps where the native look-and-feel is critical. The WebView adds baseline memory overhead of approximately 50-100MB, and on iOS, JavaScript execution lacks JIT compilation — making CPU-heavy JavaScript 3-5x slower than on Android or native code.
+
+<Callout variant="warning">
+  **Performance ceiling**: Ionic apps cannot match native rendering performance for complex animations or low-latency interactions. Each frame traverses the entire WebView rendering pipeline (DOM to CSSOM to Layout to Paint to Composite). On iOS, JavaScriptCore runs in interpreter-only mode inside WKWebView — Apple reserves the JIT entitlement exclusively for Safari. If your app requires sustained 60fps with heavy DOM manipulation, profile early on low-end iOS devices and consider offloading heavy computation to native Capacitor plugins.
+</Callout>

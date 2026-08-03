@@ -1,0 +1,121 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Hot Reload Apply Time" value="200-800ms" />
+  <StatItem label="dotnet-counters Metrics" value="30+" />
+  <StatItem label="Live Visual Tree Platforms" value="3" />
+  <StatItem label="ILogger Sinks Available" value="50+" />
+</StatGrid>
+
+### Visual Studio Debugger and Hot Reload
+
+The Visual Studio debugger for MAUI supports breakpoints, watch windows, immediate window evaluation, and conditional breakpoints across all target platforms. .NET Hot Reload applies C# method body edits without restarting the app — supported on Android emulator, iOS simulator, and Windows. XAML Hot Reload re-renders the UI tree on every live change to XAML files, enabling iterative UI tuning. Hot Reload is triggered on save when the debugger is attached. Limitations: adding new types, modifying lambdas that close over new locals, or changing generic method signatures requires a full rebuild.
+
+### Live Visual Tree
+
+The Live Visual Tree tool (Debug > Windows > Live Visual Tree) in Visual Studio attaches to a running MAUI app and displays the full element hierarchy. You can inspect each `VisualElement`, read its properties (Width, Height, Margin, BackgroundColor), and modify values at runtime to test layout changes. The tree mirrors the `IVisualTreeElement` interface that every `VisualElement` implements. Use the selection toggle in the running app to highlight the element under your cursor. Property edits are transient — use them to experiment, then apply changes to XAML.
+
+### dotnet CLI Diagnostics
+
+The .NET diagnostics toolchain (`dotnet-trace`, `dotnet-counters`, `dotnet-gcdump`, `dotnet-dump`) works with MAUI apps on Android, iOS, and Windows. These tools attach to the running process via EventPipe — a cross-platform tracing infrastructure that emits events with minimal overhead (sub-microsecond per event).
+
+```bash
+# Capture a startup trace (JIT, GC, contentious events)
+dotnet trace collect --profile gc-verbose \
+  --output startup.nettrace \
+  -- ./your-app.apk
+
+# Stream real-time GC and CPU counters
+dotnet counters monitor \
+  --counters System.Runtime \
+  --name MauiApp
+
+# Capture a GC heap snapshot for memory leak analysis
+dotnet gcdump collect \
+  --process-id 12345 \
+  --output heap.gcdump
+
+# Capture a full process dump (Android requires root)
+dotnet dump collect \
+  --process-id 12345 \
+  --type mini
+```
+
+View `.nettrace` files in Visual Studio Performance Profiler or PerfView on Windows. On macOS, use `dotnet trace convert --format speedscope` to produce Speedscope-format JSON for web-based flame graph visualization.
+
+### ILogger Setup for Structured Logging
+
+MAUI supports `Microsoft.Extensions.Logging` out of the box. Configure `ILogger` in `MauiProgram.cs` to capture structured log output to file, console, or remote services.
+
+```csharp
+using Microsoft.Extensions.Logging;
+using Serilog;
+
+public static MauiApp CreateMauiApp()
+{
+    Log.Logger = new LoggerConfiguration()
+        .MinimumLevel.Debug()
+        .WriteTo.File(
+            Path.Combine(FileSystem.AppDataDirectory, "app.log"),
+            rollingInterval: RollingInterval.Day,
+            retainedFileCountLimit: 7)
+        .WriteTo.Debug()
+        .CreateLogger();
+
+    var builder = MauiApp.CreateBuilder();
+    builder.UseMauiApp<App>()
+           .ConfigureFonts(fonts => fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular"))
+           .Logging.AddSerilog(Log.Logger);
+
+    return builder.Build();
+}
+```
+
+Inject `ILogger<T>` into any page or service via constructor DI. At runtime, logs flow to file (for post-mortem analysis) and Debug output (for live inspection). Avoid `Console.WriteLine` — use structured logging with named placeholders: `logger.LogInformation("User {UserId} logged in at {Time}", id, DateTime.UtcNow);`
+
+### App Center Diagnostics and Crash Reporting
+
+Visual Studio App Center (retired March 2025) previously offered crash reporting, analytics, and distributed testing. The recommended replacements are Sentry.Maui for crash reporting and Application Insights (Azure Monitor) for telemetry. Sentry integrates via a single NuGet package and captures unhandled exceptions, breadcrumbs, and native crashes (signal-based and Objective-C exception handlers on iOS).
+
+```bash
+dotnet add package Sentry.Maui
+```
+
+Configure in `MauiProgram.cs`: `builder.UseSentry("https://dsn@sentry.io/xxx")`. Sentry automatically captures MAUI-specific context: device model, OS version, app version, memory pressure, and the view hierarchy (if you enable `AttachScreenshot` and `AttachViewHierarchy`).
+
+<Callout type="warning" title="Hot Reload Limitations on Physical Devices">
+  .NET Hot Reload and XAML Hot Reload are only supported on Android emulators and iOS simulators — they do not work on physical iOS devices or physical Android devices. For device debugging, rely on full rebuilds, `dotnet-trace` for performance, and `dotnet-gcdump` for memory analysis. Plan your Hot Reload workflow around emulator/simulator testing only.
+</Callout>
+
+### XAML Debugging Tips
+
+Enable XAML binding error logging by setting `MauiControls.SetBindingErrorLogging` to `true` in the Android `MainActivity.OnCreate` or iOS `AppDelegate.FinishedLaunching`. Binding errors (mismatched paths, null sources, type cast failures) silently fail by default — enabling this writes them to the debug console. Use `Debugger.IsAttached` to gate verbose logging in debug builds only. For layout debugging, temporarily set `BackgroundColor` on parent containers to visualize bounds, or use the `LiveVisualTree` debug window to inspect margin/padding calculations at runtime.
+
+### Crash Logging Flow
+
+```
+  Unhandled Exception
+       |
+       v
+  AppDomain.CurrentDomain.UnhandledException
+       |
+       v
+  Sentry / ILogger / Custom Handler
+       |
+       v
+  Capture: stack trace, device info, breadcrumbs, memory
+       |
+       v
+  Write to local file + send to remote endpoint
+       |
+       v
+  Optionally: save crash dump for repro
+```
+
+### Pitfalls
+
+**Binding errors are silent by default:** A binding to a non-existent property produces no error — the control renders with its default value. Enable `MauiControls.SetBindingErrorLogging` or use compiled bindings (`x:DataType`) to catch these at build time. **Release mode hides logs:** `Debug.WriteLine` and `Console.WriteLine` are stripped in Release builds on all platforms. Route all logging through `ILogger` or a dedicated logging service. **EventPipe diagnostics require matching runtime version:** `dotnet-trace` version must match the .NET runtime version in the app. Mismatch produces `The specified runtime configuration is invalid` on attach.
+
+### Framework Insight: Debugging Tooling Maturity
+
+MAUI's debugging toolchain is significantly more mature than Flutter's in the area of memory analysis (`dotnet-gcdump`, `dotnet-dump`) and runtime tracing (`dotnet-trace` with EventPipe). Flutter offers DevTools with widget inspector, timeline, and memory, but lacks the equivalent of a post-mortem managed heap analyzer. However, Flutter's Hot Reload is faster (~200ms vs MAUI's 500-800ms) and supports more code change types. Native platform debugging (Xcode Instruments for iOS, Android Studio Profiler for Android) remains the gold standard for platform-level GPU and energy profiling — neither MAUI nor Flutter tools replace platform-native instrument suites.

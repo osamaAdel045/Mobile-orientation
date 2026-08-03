@@ -1,0 +1,126 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+
+    <StatGrid columns={3}>
+      <StatItem value="GoRouter" label="Declarative, URL-based, recommended by Flutter team" />
+      <StatItem value="Navigator 2.0" label="Pages-based API for deep linking & web URL sync" />
+      <StatItem value="ShellRoute" label="Persistent layout with bottom/tab navigation" />
+    </StatGrid>
+
+    ### Navigator 1.0 (Imperative Stack)
+
+    Flutter's original navigation is a simple stack: `Navigator.push(context, MaterialPageRoute(...))` and `Navigator.pop(context)`. This API breaks down under four production requirements: deep linking, web URL sync, auth redirect guards, and state restoration. The `arguments` parameter is `dynamic` — no type safety. Only suitable for trivial apps or prototypes.
+
+    ```dart
+    Navigator.pushNamed(context, '/product', arguments: productId);
+    Navigator.pop(context, 'updated');
+    Navigator.pushAndRemoveUntil(context,
+      MaterialPageRoute(builder: (_) => const HomeScreen()),
+      (route) => false);
+    ```
+
+    ### Navigator 2.0: Why It Exists
+
+    Navigator 2.0 decouples route configuration from the stack via a `Router` widget backed by `RouteInformationParser` (parses URLs) and `RouterDelegate` (builds the page list). The app holds a `List<Page>` — changing it declaratively rebuilds the stack. This is the standard for web URL sync and deep linking, but raw Navigator 2.0 is verbose (~200 lines for a basic app). GoRouter was built on top to reclaim ergonomics while preserving deep-link support.
+
+    ### GoRouter: Deep Dive
+
+    ```dart
+    final router = GoRouter(
+      initialLocation: '/',
+      redirect: (context, state) {
+        final loggedIn = authProvider.isLoggedIn;
+        final onLogin = state.matchedLocation == '/login';
+        if (!loggedIn && !onLogin) return '/login';
+        if (loggedIn && onLogin) return '/';
+        return null;
+      },
+      routes: [
+        GoRoute(path: '/', builder: (_, __) => const HomeScreen()),
+        GoRoute(
+          path: '/product/:id',
+          builder: (_, state) => ProductScreen(
+            id: int.parse(state.pathParameters['id']!),
+          ),
+          routes: [
+            GoRoute(path: 'details', builder: (_, state) =>
+              ProductDetailsScreen(productId: int.parse(state.pathParameters['id']!)),
+            ),
+          ],
+        ),
+      ],
+    );
+    ```
+
+    **Type-safe parameters**: Add `go_router_builder` with `TypedGoRoute<RouteData>` annotations to generate typed route classes.
+
+    <Callout title="Redirect Guards Are Pre-Navigation">
+      The `redirect` callback fires before every navigation. Keep it pure — never perform async calls inside redirect (check cached auth state only). For role-based gating, check roles against `state.matchedLocation` prefix. Redirect also fires on initial load, making it the single place to gate entry.
+    </Callout>
+
+    ### ShellRoute for Bottom Navigation
+
+    ```dart
+    ShellRoute(
+      builder: (context, state, child) => MainShell(child: child),
+      routes: [
+        GoRoute(path: '/feed', builder: (_, __) => const FeedScreen()),
+        GoRoute(path: '/search', builder: (_, __) => const SearchScreen()),
+        GoRoute(path: '/profile', builder: (_, __) => const ProfileScreen()),
+      ],
+    ),
+    ```
+
+    `ShellRoute` preserves the builder widget (your `Scaffold` with `BottomNavigationBar`) across tab switches. The inner routes render in the `child` slot. Each tab maintains its own navigation stack.
+
+    ### Deep Linking & State Restoration
+
+    ```yaml
+    # Android: <intent-filter><data android:scheme="myapp" android:host="product"/>
+    # iOS: <key>com.apple.developer.associated-domains</key><array><string>applinks:myapp.com</string></array>
+    ```
+
+    GoRouter handles incoming deep links when `PlatformDispatcher.instance.onPlatformViewCreated` routes them to the `Router` widget. For restoration, provide `restorationScopeId: 'app'` on GoRouter and wrap `MaterialApp.router` in a `RestorationScope`.
+
+    ```
+        ┌─────────────────────────────────┐
+        │       GoRouter                  │
+        │  ┌────────────────┐             │
+        │  │  redirect      │────► auth   │
+        │  │  (pre-route)   │     guard   │
+        │  └───────┬────────┘             │
+        │          ▼                      │
+        │  ┌────────────────┐             │
+        │  │  ShellRoute    │────► tabs   │
+        │  │  (layout)      │     persist │
+        │  └───────┬────────┘             │
+        │          ▼                      │
+        │  ┌────────────────┐             │
+        │  │  GoRoute       │────► nested │
+        │  │  (sub-routes)  │     stacks  │
+        │  └────────────────┘             │
+        └─────────────────────────────────┘
+    ```
+
+    <Callout title="Route Organization">
+      Define routes in one `lib/app/router.dart` top-level getter. For large apps, split into `lib/app/routes/` (one file per feature module: `auth_routes.dart`, `products_routes.dart`) and compose into the parent list. Avoid route definitions in widget files — makes redirect logic untestable. Use `RouterTestHarness` from go_router to test without the full app.
+    </Callout>
+
+    ### Passing Complex Objects
+
+    Pass primitive IDs through path parameters. For complex objects, store them in a `Provider` or `InheritedWidget` keyed by ID — the `extra` parameter does not survive deep links or state restoration.
+
+    <DecisionMatrix
+      scores={[
+        { label: "GoRouter", score: 5 },
+        { label: "AutoRoute", score: 4 },
+        { label: "Beamer", score: 3 },
+      ]}
+      pros="GoRouter: official Flutter team package, auth redirects, ShellRoute for tabs, type-safe code-gen. AutoRoute: annotation-based with declarative guards."
+      cons="GoRouter: no annotation-based generation out of the box. AutoRoute: code gen needed after every route change. Beamer: smaller community."
+    />
+
+    ### Comparison: React Navigation / Native
+
+    React Navigation uses similar `Stack.Navigator` / `Tab.Navigator` patterns but needs `Linking` module config for deep links. Android Jetpack Navigation with `NavHost` is closest: single `NavController`, deep links, compile-time argument safety. Flutter's core difference: GoRouter wraps Navigator 2.0's delegate API, so all navigation is URL-driven by default.

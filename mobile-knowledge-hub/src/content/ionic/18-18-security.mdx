@@ -1,0 +1,104 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="WebView Surface" value="Larger Attack Area" description="JS bundle is plaintext; CSP is primary defense layer" />
+  <StatItem label="Secure Storage" value="OS-Encrypted" description="Keychain (iOS) / EncryptedSharedPreferences (Android)" />
+  <StatItem label="SSL Pinning" value="Plugin-Based" description="Capacitor SSL Pinning plugin prevents MITM attacks" />
+  <StatItem label="XSS Risk Vector" value="eval() + innerHTML" description="Avoid these; use framework sanitization instead" />
+</StatGrid>
+
+### WebView Attack Surface
+
+Ionic apps inherit the entire WebView attack surface. Unlike native apps whose logic is compiled to machine code, your JavaScript bundle is shipped as plaintext, readable with any decompression tool. API endpoints, authentication logic, and business rules are fully exposed. Accept this as a constraint — the server is your trust boundary, not the client code. All security-sensitive operations must be enforced server-side.
+
+### Content Security Policy
+
+CSP is the single most important security defense for an Ionic app. It restricts which sources can execute scripts, connect to APIs, and load resources. A restrictive CSP prevents cross-site scripting even if an attacker injects a script tag. Configure CSP via a `<meta>` tag in `index.html` or as HTTP headers.
+
+```html
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self';
+               script-src 'self';
+               connect-src 'self' https://api.example.com;
+               style-src 'self' 'unsafe-inline';
+               img-src 'self' data:;">
+```
+
+Note that `unsafe-inline` for styles is often required because Ionic components inject inline styles. For scripts, never use `unsafe-inline` or `unsafe-eval` — they fully defeat CSP's protection. The `connect-src` directive is critical: restrict it to only the API domains your app communicates with.
+
+### CORS Configuration
+
+Capacitor apps make HTTP requests from `capacitor://localhost` (iOS) or `http://localhost` (Android). In production, the WebView loads from `ionic://app` or a custom scheme. Your API server must include these origins in its CORS headers. Use a per-environment CORS policy that is strictest in production.
+
+### Capacitor Secure Storage
+
+Sensitive data — tokens, keys, credentials — must never be stored in `localStorage`, `sessionStorage`, or plain JavaScript variables. The `@capacitor/preferences` plugin provides unencrypted key-value storage only. For secrets, use a plugin that wraps iOS Keychain and Android EncryptedSharedPreferences.
+
+```typescript
+import { SecureStorage } from '@aparajita/capacitor-secure-storage';
+
+// Store a JWT token in OS-level encrypted storage
+await SecureStorage.set({ key: 'auth_token', value: jwtToken });
+
+// Retrieve it when needed
+const { value } = await SecureStorage.get({ key: 'auth_token' });
+```
+
+### SSL Pinning
+
+SSL pinning prevents man-in-the-middle attacks by verifying the server's certificate matches a known copy bundled with the app. Without pinning, a compromised certificate authority or a debugging proxy like Charles or Fiddler can intercept traffic undetected. The `capacitor-ssl-pinning` plugin or `@capacitor-community/http` with pinning support enforces this at the native networking layer, before data reaches the WebView.
+
+### WebView Security Layers
+
+```
+┌────────────────────────────────┐
+│     JavaScript Bundle          │
+│     (Plaintext, visible)       │
+├────────────────────────────────┤
+│     Content Security Policy    │  ← Blocks XSS and data injection
+├────────────────────────────────┤
+│     CORS Enforcement           │  ← Restricts API origins
+├────────────────────────────────┤
+│     SSL Pinning                │  ← Prevents MITM at transport layer
+├────────────────────────────────┤
+│     Secure Storage             │  ← Encrypts data at rest via OS Keychain
+└────────────────────────────────┘
+```
+
+<Callout type="critical">
+  Never hardcode API keys, secrets, or credentials in your JavaScript bundle. The bundle is fully visible to anyone who unpacks your app APK/IPA or uses a debugging proxy. Use a backend proxy layer or serverless functions (Firebase Functions, AWS Lambda) to wrap third-party API calls. Inject environment-specific secrets into native configuration files during CI/CD build — android/app/build.gradle for Android, ios/App/App/Info.plist for iOS.
+</Callout>
+
+### XSS and JavaScript Injection
+
+Cross-site scripting in a WebView is more dangerous than in a browser because the attacker gains access to Capacitor plugin capabilities — camera, microphone, file system, and contacts. A single `innerHTML` injection point can escalate to full device compromise. Both Angular and React provide automatic output sanitization; never bypass it without careful auditing.
+
+```typescript
+// Angular: bypass the sanitizer only when absolutely necessary
+this.sanitizer.bypassSecurityTrustHtml(userProvidedValue);
+
+// React: the equivalent red flag
+<div dangerouslySetInnerHTML={{ __html: userInput }} />
+```
+
+Stick to framework-safe interpolation (`{{ }}` in Angular, `{ }` in JSX) for all user data. Additionally, avoid passing user data to `eval()`, `setTimeout(string)`, or the `Function` constructor — these bypass CSP and create direct code injection vectors.
+
+### WebView Version Fragmentation
+
+WebView capabilities vary by OS version. iOS uses WKWebView, which is sandboxed per app — each app runs its own WebKit process, isolated from others. Android uses Android System WebView, which updates independently through Google Play. Older Android devices may have outdated WebView versions missing critical security patches. Use the `@capacitor/browser` plugin to open sensitive flows like OAuth in the system browser rather than the WebView, ensuring the latest security patches handle authentication.
+
+### Framework Insight: Angular vs React Security
+
+Angular's built-in sanitization is more restrictive by default than React's. Angular blocks all URLs and HTML it cannot verify unless explicitly bypassed via `bypassSecurityTrustHtml`. React renders JSX safely by default but `dangerouslySetInnerHTML` opens the same vector. Neither framework automatically protects against prototype pollution or mutation XSS. Always pair framework sanitization with a strong Content Security Policy for defense in depth, regardless of framework choice.
+
+### Security Layer Comparison
+
+<DecisionMatrix
+  items={[
+    { layer: "CSP", protects: "XSS, data injection", config: "Meta tag or HTTP header", bypassRisk: "unsafe-eval or unsafe-inline" },
+    { layer: "CORS", protects: "Unauthorized API origins", config: "Server HTTP headers", bypassRisk: "Permissive wildcard origins" },
+    { layer: "SSL Pinning", protects: "MITM attacks", config: "Plugin known certificates", bypassRisk: "Disabled in debug builds" },
+    { layer: "Secure Storage", protects: "Data at rest", config: "OS Keychain / EncryptedPrefs", bypassRisk: "Fallback to localStorage" },
+    { layer: "Input Sanitization", protects: "DOM-based XSS", config: "Framework template binding", bypassRisk: "dangerouslySetInnerHTML" },
+  ]}
+/>

@@ -1,0 +1,330 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="AES-256" label="Default storage encryption" />
+  <StatItem value="SHA-256" label="Certificate pinning hash" />
+  <StatItem value="2" label="Platform sandboxes inherited" />
+  <StatItem value="3" label="Biometric policies (iOS)" />
+  <StatItem value="TLS 1.3" label="Minimum TLS recommended" />
+  <StatItem value="99+%" label="Jailbreak detection accuracy" />
+</StatGrid>
+
+### Flutter Security Model
+
+Flutter apps inherit the security model of their host platform. On iOS, the Dart runtime runs inside the app's sandbox under App Sandbox entitlements — no access to other app data, restricted file system access, and mandatory code signing. On Android, the app runs within an Android Application Sandbox (SELinux-enforced, UID-isolated) with Android's permission model gating access to sensitive APIs. The Dart runtime itself adds no additional sandbox — all security boundaries are enforced by the operating system. This means Flutter app security is fundamentally about two things: properly using the platform's security APIs (Keychain, Keystore, BiometricPrompt) and not introducing vulnerabilities in Dart code (injection, insecure data exposure, improper certificate validation).
+
+```dart
+// The Dart runtime provides no sandbox beyond the platform's
+// Every security decision relies on platform API integration
+```
+
+### Secure Storage Deep Dive
+
+The `flutter_secure_storage` package wraps iOS Keychain Services and Android EncryptedSharedPreferences, providing AES-256-GCM encryption at rest:
+
+```dart
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+final storage = const FlutterSecureStorage();
+
+// iOS configuration — access group enables sharing between apps from same dev team
+final iOSOptions = IOSOptions(
+  accessibility: KeychainAccessibility.first_unlock, // unlocked after first device unlock
+  authenticationType: AuthenticationType.biometrics, // requires biometrics to read
+);
+
+// Android configuration — EncryptedSharedPreferences with AES256-GCM
+final androidOptions = AndroidOptions(
+  encryptedSharedPreferences: true,             // use AndroidX Security library
+  keyGuardRequired: true,                       // requires device lock screen
+  // For older Android (< 6.0), falls back to AES with generated key in KeyStore
+);
+
+// Write
+await storage.write(
+  key: 'auth_token',
+  value: jwtToken,
+  iOptions: iOSOptions,
+  aOptions: androidOptions,
+);
+
+// Read
+final token = await storage.read(key: 'auth_token');
+
+// Delete
+await storage.delete(key: 'auth_token');
+await storage.deleteAll();
+```
+
+<Callout title="Never use SharedPreferences for secrets">
+  SharedPreferences stores data as **plaintext XML** on both platforms. On Android, the file is world-readable if the device is rooted. On iOS, it's within the app sandbox but accessible via device backup. `flutter_secure_storage` encrypts values with platform-Keychain-backed keys and optionally requires biometric authentication on every read. The rule: configuration in SharedPreferences, secrets in flutter_secure_storage.
+</Callout>
+
+**Limitations to understand:**
+- On Android < 6.0, EncryptedSharedPreferences is unavailable; storage falls back to AES encryption with a key stored in the Android KeyStore (available since 4.3 via `AndroidKeyStore` provider). This is still more secure than plaintext but uses older cryptography.
+- On iOS, Keychain data persists across app reinstalls unless you configure `accessibility: .when_unlocked_this_device_only` with `kSecAttrSynchronizable: false`.
+- `flutter_secure_storage` values are encrypted at rest but decrypted in Dart memory — if an attacker can read Dart process memory, they can read the decrypted value. This is a fundamental limitation of mobile app security.
+
+### Certificate Pinning
+
+Certificate pinning prevents man-in-the-middle attacks even if a trusted CA is compromised or a user-installed root CA is present:
+
+```dart
+// Dio interceptor with SHA-256 pinning
+import 'package:dio/dio.dart';
+
+class PinningInterceptor extends Interceptor {
+  final List<String> allowedFingerprints = [
+    'sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',  // primary
+    'sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=',  // backup
+  ];
+
+  @override
+  void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
+    // Configure HttpClient with certificate pinning
+    (options.httpClientAdapter as IOHttpClientAdapter).onHttpClientCreate =
+        (client) {
+      client.badCertificateCallback = (X509Certificate cert, String host, int port) {
+        // Compute SHA-256 fingerprint of the server certificate
+        final fingerprint = _computeSha256(cert.pem);
+        return allowedFingerprints.contains(fingerprint);
+      };
+      return client;
+    };
+    handler.next(options);
+  }
+
+  String _computeSha256(String pem) {
+    // Use dart:crypto to compute SHA-256
+    final bytes = utf8.encode(pem);
+    final digest = sha256.convert(bytes);
+    return base64.encode(digest.bytes);
+  }
+}
+```
+
+For native-level pinning, configure platform security directly:
+
+```xml
+<!-- android/app/src/main/res/xml/network_security_config.xml -->
+<network-security-config>
+  <domain-config cleartextTrafficPermitted="false">
+    <domain includeSubdomains="true">api.example.com</domain>
+    <pin-set expiration="2028-12-31">
+      <pin digest="SHA-256">AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=</pin>
+      <pin digest="SHA-256">BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=</pin>
+    </pin-set>
+  </domain-config>
+</network-security-config>
+```
+
+```objc
+// iOS: TrustKit for declarative pinning
+// Info.plist — TrustKit configuration
+// (configured via flutter_trustkit or native TrustKit pod)
+```
+
+<Callout title="Always pin at least two certificates">
+  Pin your primary certificate AND a backup (typically your CA's intermediate). When you rotate certs, the backup serves as the transition bridge. If you only pin one and it expires, your app can't connect until you ship an update. Set a PIN expiration date in your platform config and rotate well before it expires.
+</Callout>
+
+### Code Obfuscation
+
+```bash
+# Dart obfuscation and symbol stripping
+flutter build apk --release \
+  --obfuscate \
+  --split-debug-info=build/debug-info/
+
+# --obfuscate renames Dart symbols (classes, functions, enums) to short random names
+# --split-debug-info strips source mappings into a separate file
+# Without the debug-info file, reverse-engineering Dart symbols is very difficult
+
+# Mapping file for deobfuscating crash stacktraces
+# build/debug-info/android-arm64-symbols/
+# Store this file securely for each release!
+
+# R8/ProGuard on Android — additional Java/Kotlin layer obfuscation
+# android/app/proguard-rules.pro
+-keep class io.flutter.app.** { *; }
+-keep class com.yourcompany.app.** { *; }
+```
+
+**What obfuscation protects against:** Renaming classes from `LoginService` to `a`, methods from `authenticateUser` to `b`. This makes reverse engineering significantly harder but not impossible — determined attackers can still reconstruct logic from control flow. It does NOT protect strings or API keys (see below).
+
+### API Key Protection
+
+```dart
+// NEVER hardcode API keys — use envied for compile-time obfuscation
+import 'package:envied/envied.dart';
+
+part 'env.g.dart';
+
+@Envied(path: '.env')
+abstract class Env {
+  @EnviedField(varName: 'API_KEY', obfuscate: true)
+  static const String apiKey = _Env.apiKey;
+
+  @EnviedField(varName: 'SENTRY_DSN', obfuscate: true)
+  static const String sentryDsn = _Env.sentryDsn;
+}
+```
+
+```bash
+# .env file (never committed to git)
+API_KEY=sk_prod_abc123def456
+SENTRY_DSN=https://key@org.ingest.sentry.io/project
+
+# CI injects the real values
+flutter build apk --release --dart-define=API_KEY=$API_KEY
+
+# gitignore
+.env
+*.g.dart
+```
+
+<Callout title="Obfuscation is deterrence, not security">
+  Client-side secrets are ultimately extractable. Obfuscation and envied raise the cost of extraction from "read the file" to "reverse-engineer the binary," but a determined attacker with a rooted device can still extract them. The only true security for secrets is to not ship them to clients at all — use a backend proxy that holds secrets and issues short-lived, scoped tokens to the app. This is the principle of least privilege applied to mobile architecture: your app should never possess secrets it doesn't need at that moment.
+</Callout>
+
+### Biometric Authentication
+
+```dart
+import 'package:local_auth/local_auth.dart';
+
+final auth = LocalAuthentication();
+
+// Check if biometrics are available
+final canCheck = await auth.canCheckBiometrics;
+final available = await auth.getAvailableBiometrics();
+// iOS: [BiometricType.face, BiometricType.fingerprint]
+// Android: [BiometricType.face, BiometricType.fingerprint, BiometricType.iris]
+
+// Authenticate with biometric-only policy (no fallback to device PIN)
+try {
+  final authenticated = await auth.authenticate(
+    localizedReason: 'Access your secure vault',
+    options: const AuthenticationOptions(
+      biometricOnly: true,       // no device PIN fallback
+      stickyAuth: true,          // re-authenticate on app resume
+      sensitiveTransaction: true, // iOS: LAPolicyDeviceOwnerAuthenticationWithBiometrics
+    ),
+  );
+  if (authenticated) {
+    // Access sensitive data
+  }
+} on PlatformException catch (e) {
+  if (e.code == 'LockedOut') {
+    // Too many failed attempts — biometrics locked
+  }
+}
+```
+
+### Root/Jailbreak Detection
+
+```dart
+import 'package:flutter_jailbreak_detection/flutter_jailbreak_detection.dart';
+
+Future<bool> isDeviceSecure() async {
+  try {
+    final jailbroken = await FlutterJailbreakDetection.jailbroken;
+    final isRealDevice = await FlutterJailbreakDetection.isRealDevice;
+
+    if (jailbroken || !isRealDevice) {
+      return false;  // device is compromised
+    }
+    return true;
+  } catch (e) {
+    // If detection fails, assume compromised
+    return false;
+  }
+}
+
+// Response strategy — tiered based on sensitivity
+Future<void> checkSecurityForFeature(String feature) async {
+  final secure = await isDeviceSecure();
+  if (!secure) {
+    switch (feature) {
+      case 'read_only':
+        // Warn but allow browsing
+        showDialog(builder: (ctx) => AlertDialog(
+          title: const Text('Unsecured Device'),
+          content: const Text('Your device appears to be jailbroken.'),
+        ));
+        break;
+      case 'transactions':
+        // Block high-sensitivity operations
+        throw SecurityException('This operation requires a secure device.');
+      case 'all':
+        // Refuse to run
+        WidgetsBinding.instance.performAppExit();
+    }
+  }
+}
+```
+
+### Secure Networking
+
+```dart
+// TLS configuration with HSTS
+final dio = Dio(BaseOptions(
+  baseUrl: 'https://api.example.com',
+  connectTimeout: const Duration(seconds: 10),
+  receiveTimeout: const Duration(seconds: 10),
+));
+
+// Enforce TLS 1.2+ only
+(dio.httpClientAdapter as IOHttpClientAdapter).onHttpClientCreate = (client) {
+  // Dart's HttpClient enforces TLS 1.2+ by default on modern platforms
+  client.connectionTimeout = const Duration(seconds: 10);
+  return client;
+};
+```
+
+```xml
+<!-- Android: enforce TLS 1.2+ and cleartext prohibition -->
+<!-- android/app/src/main/res/xml/network_security_config.xml -->
+<network-security-config>
+  <base-config cleartextTrafficPermitted="false">
+    <trust-anchors>
+      <certificates src="system" />
+    </trust-anchors>
+  </base-config>
+  <domain-config cleartextTrafficPermitted="false">
+    <domain includeSubdomains="true">api.example.com</domain>
+    <trust-anchors>
+      <certificates src="system" />
+    </trust-anchors>
+  </domain-config>
+</network-security-config>
+```
+
+### App Integrity Verification
+
+```dart
+// Google Play Integrity API — verify app authenticity at runtime
+import 'package:play_integrity/play_integrity.dart';
+
+Future<bool> verifyAppIntegrity() async {
+  final integrity = PlayIntegrity();
+  try {
+    final response = await integrity.requestIntegrityToken(
+      cloudProjectNumber: 1234567890,
+      // Nonce from your backend
+      nonce: 'random_nonce_from_server',
+    );
+    // Send response.token() to your backend for verification
+    // Backend validates the token signature and checks:
+    //   - appRecognitionVerdict: PLAY_RECOGNIZED
+    //   - deviceIntegrity: MEETS_DEVICE_INTEGRITY
+    //   - accountDetails: appLicensingVerdict = LICENSED
+    return true;
+  } on IntegrityException catch (e) {
+    return false;  // integrity check failed
+  }
+}
+```
+
+### Comparison: Flutter vs React Native vs Native Security
+
+React Native apps face the same mobile security challenges but inherit an additional attack surface: the JavaScript engine and bridge. If an attacker compromises the JS context (via prototype pollution or malicious native module), they can read in-memory data regardless of secure storage. Native Swift/Kotlin apps have the most mature security ecosystem — Apple's App Attestation, Android's Play Integrity API, and platform-native certificate pinning with `AppTransportSecurity`. Flutter sits between these: it provides Dart-level abstractions that are easier to use correctly than raw platform APIs (reducing developer error) but adds the Dart VM/heap as an attack surface. The Dart VM is memory-safe by design (no buffer overflows, no use-after-free), which eliminates entire classes of vulnerabilities that plague C/C++ engine code. Practical guidance: Flutter security is as strong as your correct usage of platform APIs — the framework doesn't weaken it, but it doesn't automatically enforce good practices either.

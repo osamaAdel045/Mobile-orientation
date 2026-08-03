@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={3}>
+      <StatItem value="ViewModel" label="State Holder" />
+      <StatItem value="StateFlow" label="Reactive Stream" />
+      <StatItem value="Process Death" label="Survivable" />
+    </StatGrid>
+
+    ### ViewModel + StateFlow (The Recommended Pattern)
+
+    Google's recommended architecture uses `ViewModel` as the state holder with `StateFlow` as the reactive stream. The ViewModel survives configuration changes because it is scoped to the `ViewModelStoreOwner` lifecycle. `onCleared()` releases resources when the screen goes away permanently.
+
+    ```kotlin
+    data class HomeUiState(
+        val isLoading: Boolean = true,
+        val articles: List<Article> = emptyList(),
+        val error: String? = null
+    )
+
+    class HomeViewModel(
+        private val repository: ArticleRepository,
+        private val savedStateHandle: SavedStateHandle
+    ) : ViewModel() {
+        private val _uiState = MutableStateFlow(HomeUiState())
+        val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+
+        init { loadArticles() }
+
+        private fun loadArticles() {
+            viewModelScope.launch {
+                repository.getArticles()
+                    .onStart { _uiState.update { it.copy(isLoading = true, error = null) } }
+                    .catch { e -> _uiState.update { it.copy(isLoading = false, error = e.message) } }
+                    .collect { articles ->
+                        _uiState.update { it.copy(isLoading = false, articles = articles) }
+                    }
+            }
+        }
+    }
+
+    @Composable
+    fun HomeScreen(viewModel: HomeViewModel = hiltViewModel()) {
+        val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+        when {
+            uiState.isLoading -> CircularProgressIndicator()
+            uiState.error != null -> ErrorMessage(uiState.error!!)
+            else -> ArticleList(articles = uiState.articles)
+        }
+    }
+    ```
+
+    <Callout title="StateFlow vs LiveData">
+      StateFlow is Kotlin-native, requires an initial value, integrates with `flow` operators, and uses structured concurrency. LiveData auto-disconnects on lifecycle destroy. For new projects, use StateFlow — LiveData is legacy for Java interop only.
+    </Callout>
+
+    ### Compose Local State
+
+    For component-local state that doesn't survive process death or cross screens, use Compose's built-in primitives.
+
+    ```kotlin
+    @Composable
+    private fun ExpandableCard(title: String, content: String) {
+        var expanded by remember { mutableStateOf(false) }
+        val showButton by remember { derivedStateOf { content.length > 150 } }
+
+        Card(modifier = Modifier.fillMaxWidth().clickable { expanded = !expanded }) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                AnimatedVisibility(visible = expanded) {
+                    Text(content, style = MaterialTheme.typography.bodyMedium)
+                }
+                if (showButton) {
+                    TextButton(onClick = { expanded = !expanded }) {
+                        Text(if (expanded) "Show less" else "Show more")
+                    }
+                }
+            }
+        }
+    }
+    ```
+
+    ### LaunchedEffect and Side Effects
+
+    `LaunchedEffect` runs a coroutine scoped to the composition lifecycle for one-shot operations. It cancels and restarts when its key changes.
+
+    ```kotlin
+    @Composable
+    fun ProfileScreen(userId: String, viewModel: ProfileViewModel = hiltViewModel()) {
+        val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+        LaunchedEffect(userId) { viewModel.loadProfile(userId) }
+
+        DisposableEffect(Unit) {
+            val lifecycle = LocalLifecycleOwner.current.lifecycle
+            val observer = LifecycleEventObserver { _, _ -> }
+            lifecycle.addObserver(observer)
+            onDispose { lifecycle.removeObserver(observer) }
+        }
+        when {
+            uiState.isLoading -> ShimmerPlaceholder()
+            uiState.error != null -> ErrorBanner(uiState.error!!)
+            else -> ProfileContent(uiState.profile!!)
+        }
+    }
+    ```
+
+    ### State Restoration Across Process Death
+
+    When Android kills your app process (not config change — actual process death), all in-memory state is lost. `rememberSaveable` and `SavedStateHandle` restore the UI.
+
+    ```kotlin
+    // rememberSaveable survives process death via Bundle serialization
+    @Composable
+    fun SearchScreen() {
+        var query by rememberSaveable { mutableStateOf("") }
+        TextField(value = query, onValueChange = { query = it })
+    }
+
+    // SavedStateHandle survives process death in the ViewModel
+    class CheckoutViewModel(
+        private val savedStateHandle: SavedStateHandle
+    ) : ViewModel() {
+        val shippingAddress = savedStateHandle.getStateFlow("shipping_address", "")
+        fun updateAddress(address: String) {
+            savedStateHandle["shipping_address"] = address
+        }
+    }
+    ```
+
+    <Callout title="Process Death Testing">
+      Enable "Don't keep activities" in Developer Options or run `adb shell am kill <package>`. If UI state restores correctly, process death is handled. The most common failure is losing navigation backstack — use `rememberSaveable` for visible state and `SavedStateHandle` for ViewModel state.
+    </Callout>
+
+    ### State Hoisting Principles
+
+    Lifting state upward makes composables stateless and reusable. Replace internal `remember` with parameters.
+
+    | Aspect | Unhoisted | Hoisted (Stateless) |
+    |---|---|---|
+    | Reusability | Single use case | Any parent can control |
+    | Testability | Hard | Easy |
+
+    ### Comparison to Riverpod and Redux
+
+    | Aspect | Android | Riverpod (Flutter) | Redux |
+    |---|---|---|---|
+    | Holders | ViewModel per screen | Providers (auto-scoped) | Global store |
+    | Reactivity | StateFlow collect | ref.watch() | connect/mapState |
+    | Death | SavedStateHandle | Hydrated storage | redux-persist |
+
+    Riverpod's auto-disposal mirrors Android's `viewModelScope.cancel()`. Redux's single global store makes cross-cutting state simple but per-screen state verbose. Android's ViewModel-per-screen pattern hits the sweet spot: per-screen lifecycle, automatic config-change survival, and no global state sync overhead.

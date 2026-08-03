@@ -1,0 +1,149 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid>
+      <StatItem value="Zustand" label="Top Pick (mid-size)" />
+      <StatItem value="RTK Query" label="Top Pick (large)" />
+      <StatItem value="TanStack Query" label="Server State" />
+      <StatItem value="Jotai" label="Atomic State" />
+    </StatGrid>
+
+    ### The Complete State Management Spectrum
+
+    React Native inherits the entire React state ecosystem — there is no RN-specific state manager. The key difference from web React is that RN's rendering pipeline imposes constraints: excessive re-renders still mean Yoga layout passes and native view mutations, even with JSI's synchronous communication.
+
+    The golden rule: **server state belongs in React Query or RTK Query**. Client state (UI toggles, form input, theme) belongs in Zustand, Jotai, or Context. Never put server response data into a Redux or Zustand store.
+
+    ```
+    Local State              Global State            Server State
+    useState ←→ useReducer   useContext             TanStack Query
+    useRef       ↓           Zustand ←→ Jotai       RTK Query
+                 ↓           Redux Toolkit          Apollo Client
+              useCallback    MobX
+    Complexity → choose the least powerful tool that works
+    ```
+
+    <Callout title="Server State Does Not Belong in Redux">
+    The most common RN state management mistake is dispatching API responses into a Redux store. You then write reducers for loading/error states, thunks for deduplication, and manual cache expiry. React Query does all of this automatically: background refetching, stale-while-revalidate caching, pagination, and optimistic updates. Keep your global stores clean — let them hold UI state, not server data.
+    </Callout>
+
+    ### Zustand Deep Dive
+
+    Zustand is a minimal, hook-based store. No Provider wrapper, no action creators, no reducer boilerplate. Recommended default for mid-size apps (5-50 screens). Key features: **selectors with referential equality** (re-render only when slice changes — use `shallow`), **persist middleware** (AsyncStorage, MMKV), and **no Provider overhead** (unlike Context, avoids cascading re-renders).
+
+    ```typescript
+    import { create } from 'zustand';
+    import { persist, createJSONStorage } from 'zustand/middleware';
+    import AsyncStorage from '@react-native-async-storage/async-storage';
+
+    interface CartState {
+      items: { id: string; name: string; price: number; quantity: number }[];
+      addItem: (item: { id: string; name: string; price: number }) => void;
+      removeItem: (id: string) => void;
+      total: () => number;
+    }
+
+    export const useCartStore = create<CartState>()(
+      persist(
+        (set, get) => ({
+          items: [],
+          addItem: (item) =>
+            set((s) => {
+              const existing = s.items.find((i) => i.id === item.id);
+              if (existing) return { items: s.items.map((i) => i.id === item.id ? { ...i, quantity: i.quantity + 1 } : i) };
+              return { items: [...s.items, { ...item, quantity: 1 }] };
+            }),
+          removeItem: (id) => set((s) => ({ items: s.items.filter((i) => i.id !== id) })),
+          total: () => get().items.reduce((sum, i) => sum + i.price * i.quantity, 0),
+        }),
+        { name: 'cart-storage', storage: createJSONStorage(() => AsyncStorage) }
+      )
+    );
+
+    function CartTotal() {
+      const count = useCartStore((s) => s.items.length);
+      return <Text>{count} items</Text>;
+    }
+    ```
+
+    ### Redux Toolkit with RTK Query
+
+    RTK is the standard for large-scale RN apps (50+ screens). RTK Query provides auto-generated hooks with cache invalidation and deduplication:
+
+    ```typescript
+    import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react';
+
+    export const api = createApi({
+      reducerPath: 'api',
+      baseQuery: fetchBaseQuery({ baseUrl: 'https://api.example.com' }),
+      tagTypes: ['Product', 'Order'],
+      endpoints: (builder) => ({
+        getProducts: builder.query<Product[], { category?: string }>({
+          query: (params) => ({ url: '/products', params }),
+          providesTags: (result) =>
+            result ? [...result.map(({ id }) => ({ type: 'Product' as const, id })), { type: 'Product', id: 'LIST' }] : [{ type: 'Product', id: 'LIST' }],
+        }),
+        createOrder: builder.mutation<Order, CreateOrderPayload>({
+          query: (body) => ({ url: '/orders', method: 'POST', body }),
+          invalidatesTags: ['Order'],
+          async onQueryStarted(_, { dispatch, queryFulfilled }) {
+            const patch = dispatch(api.util.updateQueryData('getOrders', {}, (draft) => { draft.push({ id: 'temp', status: 'pending' }); }));
+            try { await queryFulfilled; } catch { patch.undo(); }
+          },
+        }),
+      }),
+    });
+
+    export const { useGetProductsQuery, useCreateOrderMutation } = api;
+    ```
+
+    ### TanStack Query (React Query) Deep Dive
+
+    TanStack Query handles server state with stale-while-revalidate caching, background refetching, and pagination. Use it alongside Zustand for client state:
+
+    ```typescript
+    import { useQuery, useMutation, useQueryClient, QueryClient } from '@tanstack/react-query';
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { staleTime: 5 * 60 * 1000, gcTime: 30 * 60 * 1000, retry: 2, refetchOnWindowFocus: false } },
+    });
+
+    function useProducts(category?: string) {
+      return useQuery<Product[]>({
+        queryKey: ['products', category],
+        queryFn: () => fetch(`/api/products?cat=${category}`).then(r => r.json()),
+      });
+    }
+
+    function useCreateOrder() {
+      const queryClient = useQueryClient();
+      return useMutation({
+        mutationFn: (order) => fetch('/api/orders', { method: 'POST', body: JSON.stringify(order) }),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ['orders'] }),
+        onMutate: async (newOrder) => {
+          await queryClient.cancelQueries({ queryKey: ['orders'] });
+          const previous = queryClient.getQueryData(['orders']);
+          queryClient.setQueryData(['orders'], (old) => [...old, newOrder]);
+          return { previous };
+        },
+        onError: (_, __, context) => queryClient.setQueryData(['orders'], context?.previous),
+      });
+    }
+    ```
+
+    `useInfiniteQuery` with `fetchNextPage` driven by FlatList's `onEndReached` eliminates manual pagination state.
+
+    ### Anti-Patterns
+
+    **Server state in Redux/Zustand:** The most common mistake — you dispatch API data, add loading booleans, and manually handle cache invalidation. Use TanStack Query or RTK Query instead.
+
+    **Prop drilling past 3 levels:** If `theme` passes through 5 component layers, extract into context or Zustand. RN trees are deep (Navigator → Screen → List → Item → Button).
+
+    **Over-normalizing in RN:** On the web, normalised state (entities by ID) is best practice. On RN, Hermes's simpler mark-sweep GC makes repeated denormalisation pressure the heap.
+
+    ### New Architecture Impact on State
+
+    With JSI + Fabric, state-to-native updates skip the Bridge entirely. A Zustand store value bound to a Fabric view prop travels through JSI as a synchronous C++ call — no `JSON.stringify`, no message queue. JS-driven animations that capped at ~30fps due to Bridge latency now reach 60fps for simple value changes.
+
+    ### Comparison: Flutter and SwiftUI
+
+    Flutter's Riverpod and BLoC follow the same reactive pattern as Zustand and Redux: state flows down, events flow up. Riverpod uses compile-time dependency injection; BLoC adds Stream-based processing comparable to Redux middleware. SwiftUI uses `@State`, `@Observable`, and `@Environment` — deeply integrated with the compiler so only changed properties recompute views. RN requires manual `useShallow`/`useMemo` because JS lacks compile-time property tracking. The critical RN advantage: state management code is identical in RN and Next.js apps. SwiftUI state is iOS-only; Flutter state is Flutter-only. RN's "learn once" extends to state management.

@@ -1,0 +1,116 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+    ### Project Organization: Feature-First Structure
+
+    Flutter projects scale best with a feature-first folder layout, where each feature is self-contained with its own widgets, providers, models, and tests. This inverts the layer-first approach (screens/, widgets/, models/ as top-level directories) which becomes unmanageable beyond 15-20 screens.
+
+    ```
+    lib/
+      core/           # constants, errors, network client, theme, router
+      features/
+        auth/
+          data/       # datasources, repositories, models (DTOs)
+          domain/     # entities, repository interfaces
+          presentation/ # screens, widgets, providers
+        products/     # same structure
+      main.dart
+    ```
+
+    <Callout title="One Widget Per File">
+        Except for small private helpers (under 20 lines), every widget gets its own file. This pays dividends in code review diffs, test discoverability, and import readability. A single file with a 400-line build method is the clearest signal of an architecture needing refactoring.
+    </Callout>
+
+    ### Widget Design Principles
+
+    Flutter's composition model rewards small, focused widgets with single responsibility. A product card should not handle checkout navigation — that belongs in the parent. Every widget should accept a `const` constructor (all fields final), enabling Flutter's widget canonicalization where identical `const` widgets at the same tree position reuse the same instance.
+
+    ```dart
+    class ProductCard extends StatelessWidget {
+      const ProductCard({super.key, required this.product, required this.onTap});
+      final Product product;
+      final VoidCallback onTap;
+
+      @override
+      Widget build(BuildContext context) {
+        return Card(
+          child: InkWell(
+            onTap: onTap,
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(product.name, style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 4),
+                  Text('\$${product.price}', style: Theme.of(context).textTheme.bodyLarge),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+    }
+    ```
+
+    ### State Management Placement Decision Tree
+
+    Not all state belongs in a global provider. If the state is only relevant while the widget is visible (scroll offset, form values, animation progress), keep it local with `StatefulWidget` or `ValueNotifier`. If it must survive navigation (auth token, user profile, theme), promote to Riverpod or BLoC. The heuristic: if you're passing state down more than 3 widget layers, scope it to a `ProviderScope` or `BlocProvider` at the route level.
+
+    ### Null Safety and const Constructors
+
+    Sound null safety (Dart 2.12+) makes every type provably non-nullable or explicitly nullable at compile time. Pair this with `const` constructors on every possible widget — enable `prefer_const_constructors` in `flutter_lints` and treat violations as errors. A `const` widget is allocated once and cached; a non-`const` widget creates new instances on every `build()` call. Run `dart fix --apply` regularly to auto-apply missing `const` — this is the single easiest performance optimization in Flutter.
+
+    ### Error Handling with Sealed Classes
+
+    Dart 3 sealed classes enable a compiler-verified `Result` type that exhaustively handles success and failure at every call site.
+
+    ```dart
+    sealed class Result<T> {
+      const Result();
+    }
+    final class Success<T> extends Result<T> {
+      const Success(this.data);
+      final T data;
+    }
+    final class Failure<T> extends Result<T> {
+      const Failure(this.error, [this.stackTrace]);
+      final String error;
+      final StackTrace? stackTrace;
+    }
+
+    // Usage — compiler forces both branches
+    switch (await repository.fetchProduct(id)) {
+      case Success(:final data): return data;
+      case Failure(:final error): throw DisplayableException(error);
+    }
+    ```
+
+    ### Theming Architecture
+
+    Centralize colors, typography, spacing, and component styles in a single `AppTheme` class. Support dark mode through `ThemeData.brightness` branching. Never hardcode colors or font sizes in widgets — every visual property is a theme reference, making global style changes a single-file modification.
+
+    ```dart
+    class AppTheme {
+      static const _light = ColorScheme.light(primary: Color(0xFF6750A4), surface: Color(0xFFFFFBFE));
+      static const _dark = ColorScheme.dark(primary: Color(0xFFD0BCFF), surface: Color(0xFF1C1B1F));
+
+      static ThemeData light() => _theme(_light);
+      static ThemeData dark() => _theme(_dark);
+
+      static ThemeData _theme(ColorScheme colors) => ThemeData(
+        useMaterial3: true, colorScheme: colors,
+        appBarTheme: AppBarTheme(centerTitle: true, elevation: 0, backgroundColor: colors.surface),
+      );
+    }
+    ```
+
+    ### Testing Discipline and Code Generation
+
+    Unit tests cover domain logic (use cases, BLoC transitions) and run in milliseconds — form the bulk of your suite. Widget tests verify rendering with `pumpWidget` and overridden providers. Integration tests cover critical user flows on real devices. Target: 80% coverage on domain, 60% on presentation. Use `mocktail` for mocking (no code generation), `golden_toolkit` for visual regression. For code generation, run `build_runner` as a pre-commit hook: `dart run build_runner build --delete-conflicting-outputs` ensures generated files (freezed, json_serializable, riverpod_generator) stay in sync.
+
+    ### Accessibility, Internationalization, and Code Review Checklist
+
+    Add `Semantics` widgets to custom render objects and gesture detectors — screen readers depend on this metadata. Test with TalkBack (Android) and VoiceOver (iOS) enabled. Use `flutter_localizations` with ARB files for translatable strings — never hardcode user-facing text. Test RTL layouts with `Directionality` and `TextDirection.rtl`.
+
+    **Code review checklist:** Every widget has a `const` constructor? Business logic is outside the widget layer? No `BuildContext` captured across async gaps? All controllers are disposed in `dispose()`? Lint passes with zero violations? Tests accompany new state logic? Hardcoded strings extracted to ARB keys? Platform-specific behavior tested on both OSes?

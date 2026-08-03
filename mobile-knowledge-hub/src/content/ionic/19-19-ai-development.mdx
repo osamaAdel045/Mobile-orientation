@@ -1,0 +1,100 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Training Corpus" value="Massive JS/TS" description="Web dev corpus dwarfs native mobile framework data" />
+  <StatItem label="Ionic Components" value="Well-Known" description="AI knows ionic/* component API, CSS vars, grid system" />
+  <StatItem label="Capacitor APIs" value="Less Known" description="Smaller training footprint; always verify plugin signatures" />
+  <StatItem label="Web-Only APIs" value="Common Hallucination" description="AI suggests navigator APIs unavailable in WebView" />
+</StatGrid>
+
+### Why AI Excels with Ionic
+
+Ionic and Capacitor apps are primarily web code — HTML templates, CSS theming, and TypeScript business logic. AI models are trained on orders of magnitude more web development content than native mobile code. This means an AI assistant generates accurate Ionic component layouts, knows Angular and React component patterns well, and produces correct scoped CSS using Ionic's CSS custom properties. The advantage extends to testing: Jest, Playwright, and Cypress are all well-represented in training data, so AI generates useful test scaffolding.
+
+### Areas of High AI Accuracy
+
+AI performs best on standard Ionic UI patterns: `ion-button`, `ion-card`, `ion-list` with correct attributes and event handlers. CSS theming with Ionic CSS variables is reliably generated because it follows a predictable pattern using `--ion-color-primary` and friends. Routing setup with Angular Router or React Router in an Ionic context is also a strength — AI knows both the framework router API and how Ionic navigation integrates with it.
+
+```typescript
+import { Component } from '@angular/core';
+import { AlertController } from '@ionic/angular';
+
+@Component({
+  selector: 'app-user-profile',
+  template: `
+    <ion-header>
+      <ion-toolbar>
+        <ion-title>Profile</ion-title>
+      </ion-toolbar>
+    </ion-header>
+    <ion-content>
+      <ion-list>
+        <ion-item *ngFor="let user of users">
+          <ion-label>{{ user.name }}</ion-label>
+        </ion-item>
+      </ion-list>
+    </ion-content>
+  `
+})
+export class UserProfilePage {
+  constructor(private alertCtrl: AlertController) {}
+}
+```
+
+### Known AI Limitations with Capacitor
+
+Capacitor plugins have a smaller training footprint than web APIs. AI may generate code that looks correct but references nonexistent plugin methods or incorrect import paths. Common failures include suggesting `navigator.camera` instead of `@capacitor/camera`, or referencing `window.plugins` which is the Cordova pattern, not Capacitor.
+
+```typescript
+// ❌ AI may generate this Cordova-style pattern
+navigator.camera.getPicture(success, fail, options);
+
+// ✅ The correct Capacitor 6+ API
+import { Camera, CameraResultType } from '@capacitor/camera';
+const image = await Camera.getPhoto({
+  resultType: CameraResultType.Uri
+});
+```
+
+Always verify Capacitor plugin imports against the actual plugin documentation. The import path changed between Capacitor major versions — what worked in Capacitor 3 may not exist in Capacitor 6.
+
+### Hallucination Categories
+
+The most common AI hallucination categories for Ionic development, ranked by frequency, are: web-only browser APIs suggested as if they work in a WebView context, incorrect Capacitor plugin import paths (especially across major versions), Angular or React lifecycle methods that do not apply to Ionic page navigation (`ionViewWillEnter` versus `ngOnInit`), and CSS properties unsupported in WKWebView's rendering engine.
+
+### The Web API Trap
+
+```
+AI suggests:     navigator.bluetooth.requestDevice(...)
+                 navigator.usb.requestDevice(...)
+                 navigator.serial.requestPort(...)
+                 navigator.mediaDevices.enumerateDevices(...)
+                 ╲___╱
+These exist in desktop Chrome but NOT in WKWebView
+or Android System WebView. No Capacitor plugin = impossible.
+```
+
+<Callout type="warning">
+  AI models frequently suggest browser APIs that do not exist in a WebView context. `navigator.bluetooth`, `navigator.usb`, `navigator.serial`, and `navigator.share` (before standardization) are common hallucinations. Before accepting AI-generated code that accesses a native feature, verify that a Capacitor plugin exists for it. If no Capacitor plugin exists for a given API, that feature cannot be used from an Ionic app — you would need to write a custom native plugin.
+</Callout>
+
+### The CSS Rendering Gap
+
+WKWebView on iOS does not support every CSS feature that desktop Chrome does. AI may generate `backdrop-filter`, `aspect-ratio`, or container queries that render correctly in a desktop browser but silently fail in the WebView. Test AI-generated CSS on real iOS and Android devices. Ionic's CSS custom properties are safe — `--ion-color-primary` and friends are fully supported across all target platforms.
+
+### Framework Insight: Angular vs React AI Accuracy
+
+AI models generally produce more accurate Ionic Angular code than Ionic React code, likely reflecting Angular's larger presence in enterprise and the Ionic-specific decorator patterns that give the model strong structural cues. React functional component patterns are also well-supported, but AI may confuse React Web syntax with React Native when generating imports, producing invalid code like importing `View` from `react-native` instead of `ion-content` from `@ionic/react`. Always specify the framework explicitly in your prompt: "Generate an Ionic Angular page" rather than just "Generate an Ionic page."
+
+### Comparison: AI Accuracy by Domain
+
+<DecisionMatrix
+  items={[
+    { domain: "Ionic Component Layout", angular: "High", react: "High", vue: "Medium" },
+    { domain: "Capacitor Plugin Usage", angular: "Medium", react: "Medium", vue: "Low" },
+    { domain: "CSS Theming (CSS Vars)", angular: "High", react: "High", vue: "High" },
+    { domain: "Native iOS/Android Code", angular: "Low", react: "Low", vue: "Low" },
+    { domain: "Store Deployment Config", angular: "Low", react: "Low", vue: "Low" },
+    { domain: "Unit/E2E Test Scaffolding", angular: "High", react: "High", vue: "Medium" },
+  ]}
+/>

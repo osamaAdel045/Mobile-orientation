@@ -1,0 +1,144 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    ### Quick Stats on Navigation
+
+    <StatGrid columns={3}>
+      <StatItem value="2.8" label="Average screen depth per navigation graph" />
+      <StatItem value="11" label="Jetpack Navigation releases since 2018" />
+      <StatItem value="90%" label="of new apps use Navigation Compose" />
+    </StatGrid>
+
+    ### Type-Safe Navigation with Kotlin Serialization
+
+    Navigation 2.8 introduced type-safe arguments using `@Serializable` route classes, eliminating string-based route errors.
+
+    ```kotlin
+    @Serializable data object HomeRoute
+    @Serializable data class ProductRoute(val productId: String, val variant: String? = null)
+    @Serializable data class CheckoutRoute(val orderId: String)
+
+    @Composable
+    fun AppNavigation() {
+        val navController = rememberNavController()
+        NavHost(navController = navController, startDestination = HomeRoute) {
+            composable<HomeRoute> {
+                HomeScreen(onNavigateToProduct = { id -> navController.navigate(ProductRoute(id)) })
+            }
+            composable<ProductRoute> { backStackEntry ->
+                val args: ProductRoute = backStackEntry.toRoute()
+                ProductScreen(productId = args.productId, variant = args.variant,
+                    onCheckout = { id -> navController.navigate(CheckoutRoute(id)) })
+            }
+            composable<CheckoutRoute> { backStackEntry ->
+                CheckoutScreen(orderId = backStackEntry.toRoute<CheckoutRoute>().orderId)
+            }
+        }
+    }
+    ```
+
+    <Callout title="Type-Safe NavArgs">
+      Before Navigation 2.8, arguments used string keys with default values — runtime crashes from
+      mismatched types were common. `@Serializable` route classes shift argument validation to
+      compile time via Kotlin serialization plugins. Always prefer type-safe routes in new projects.
+    </Callout>
+
+    ### Deep Links
+
+    Deep links launch the app at a specific destination. Navigation Compose supports URL-based and intent-based deep links working with Android App Links.
+
+    ```kotlin
+    @Serializable data class PromoRoute(val code: String, val campaignId: String = "default")
+
+    NavHost(navController = navController, startDestination = HomeRoute) {
+        composable<PromoRoute>(
+            deepLinks = listOf(
+                deepLink { uriPattern = "https://example.com/promo/{code}?campaign={campaignId}" }
+            )
+        ) { backStackEntry ->
+            val args: PromoRoute = backStackEntry.toRoute()
+            PromoScreen(promoCode = args.code, campaignId = args.campaignId)
+        }
+    }
+
+    // NavDeepLinkRequest.Builder.fromUri("https://example.com/promo/SAVE50".toUri())
+    //     .build().let { navController.createDeepLink().setRequest(it).createPendingIntent() }
+    ```
+
+    ### Nested Navigation Graphs
+
+    Nesting graphs isolates navigation scope and enables independent back stacks — essential for onboarding wizards or settings hierarchies.
+
+    ```kotlin
+    NavHost(navController = navController, startDestination = HomeRoute) {
+        composable<HomeRoute> { HomeScreen(onSettings = { navController.navigate(SettingsRoute) }) }
+
+        navigation<SettingsRoute>(startDestination = SettingsHomeRoute) {
+            composable<SettingsHomeRoute> { SettingsHomeScreen(
+                onProfile = { navController.navigate(SettingsProfileRoute(it)) },
+                onNotifications = { navController.navigate(SettingsNotificationsRoute) }
+            ) }
+            composable<SettingsProfileRoute> { SettingsProfileScreen(it.toRoute<SettingsProfileRoute>().userId) }
+            composable<SettingsNotificationsRoute> { SettingsNotificationsScreen() }
+        }
+    }
+    ```
+
+    ### Bottom Navigation
+
+    Bottom navigation persists across tab switches using `saveState` and `restoreState` flags.
+
+    ```kotlin
+    val tabs = listOf(HomeRoute, SearchRoute, CartRoute, ProfileRoute("me"))
+
+    @Composable
+    fun MainScreen() {
+        val navController = rememberNavController()
+        val navBackStackEntry by navController.currentBackStackEntryAsState()
+        val currentDestination = navBackStackEntry?.destination
+
+        Scaffold(bottomBar = {
+            NavigationBar {
+                tabs.forEach { tab ->
+                    NavigationBarItem(
+                        selected = currentDestination?.hasRoute(tab::class) == true,
+                        onClick = {
+                            navController.navigate(tab) {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        icon = { Icon(tab.icon, contentDescription = tab.label) },
+                        label = { Text(tab.label) }
+                    )
+                }
+            }
+        }) { padding ->
+            NavHost(navController, HomeRoute, Modifier.padding(padding)) {
+                composable<HomeRoute> { HomeScreen() }
+                composable<SearchRoute> { SearchScreen() }
+                composable<CartRoute> { CartScreen() }
+                composable<ProfileRoute> { ProfileScreen() }
+            }
+        }
+    }
+    ```
+
+    ### Common Pitfalls
+
+    - **Deep link collision**: Overlapping URI patterns cause `IllegalArgumentException`. Test with `adb shell am start -d "https://..."`.
+    - **Save/restore miss**: `restoreState = true` without `saveState = true` on tab navigation won't restore the tab's stack.
+    - **Single top abuse**: `launchSingleTop = true` on regular navigation can swallow legitimate screen pushes.
+
+    ### Comparison to GoRouter and React Navigation
+
+    <DecisionMatrix
+      scores={[
+        { label: "Type safety", score: 5 },
+        { label: "Deep link support", score: 5 },
+        { label: "Animation customization", score: 3 },
+        { label: "Cross-platform reusability", score: 1 },
+      ]}
+      pros="Navigation Compose enforces type-safe arguments at compile time. Deep links integrate natively with Android App Links without additional packages."
+      cons="Limited to Android — zero cross-platform code sharing. Animation customization requires lower-level Compose animation APIs. GoRouter supports redirect guards natively."
+    />

@@ -1,0 +1,124 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Quick Stats
+
+<StatGrid>
+  <StatItem label="Base Interface" value="INotifyPropertyChanged" />
+  <StatItem label="Toolkit Package" value="CommunityToolkit.Mvvm" />
+  <StatItem label="Base Class" value="ObservableObject" />
+  <StatItem label="Source Generators" value="[ObservableProperty], [RelayCommand]" />
+  <StatItem label="Binding Modes" value="OneWay, TwoWay, OneTime, OneWayToSource" />
+</StatGrid>
+
+### Core Concept
+
+State management in .NET MAUI is rooted in **data binding**, which requires the UI to be notified when data changes. The `INotifyPropertyChanged` interface is the foundation -- it defines a `PropertyChanged` event that the binding engine subscribes to. The **CommunityToolkit.Mvvm** package supercharges this with source generators that eliminate repetitive boilerplate at compile time.
+
+### INotifyPropertyChanged -- The Foundation
+
+```csharp
+public class Person : INotifyPropertyChanged
+{
+  private string _name;
+  public string Name
+  {
+    get => _name;
+    set
+    {
+      if (_name == value) return;
+      _name = value;
+      PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Name)));
+    }
+  }
+  public event PropertyChangedEventHandler? PropertyChanged;
+}
+```
+
+Writing this by hand for every property is tedious and error-prone. The `[ObservableProperty]` source generator handles the setter logic, equality check, and event invocation automatically.
+
+### ObservableObject and Source Generators
+
+```csharp
+public partial class LoginViewModel : ObservableObject
+{
+  [ObservableProperty]
+  private string _userName = string.Empty;
+
+  [ObservableProperty]
+  private string _password = string.Empty;
+
+  [ObservableProperty]
+  private bool _isBusy;
+
+  [RelayCommand]
+  private async Task LoginAsync()
+  {
+    IsBusy = true;
+    try
+    {
+      await AuthService.LoginAsync(UserName, Password);
+    }
+    finally
+    {
+      IsBusy = false;
+    }
+  }
+}
+```
+
+The source generator produces public properties `UserName`, `Password`, `IsBusy` with full `INotifyPropertyChanged` raising, plus an `IsBusyChanged` event. The `LoginCommand` property is an `ICommand` wrapping `LoginAsync` with async execution and `CanExecute` support.
+
+<Callout type="info">
+  The `[ObservableProperty]` generator supports `[NotifyCanExecuteChangedFor(nameof(SomeCommand))]` and `[NotifyPropertyChangedFor(nameof(OtherProperty))]` to chain dependency notifications without any manual raise calls in the ViewModel.
+</Callout>
+
+### Data Binding Modes
+
+MAUI binding supports four modes:
+
+- **OneWay** (default for most properties) -- source to target. UI reads and reflects the ViewModel value.
+- **TwoWay** -- bidirectional. Changes in the UI update the ViewModel and vice versa. Used by `Entry.Text`, `Slider.Value`, `Switch.IsToggled`.
+- **OneTime** -- source to target, evaluated once at binding time. Best for static data like labels or titles that never change.
+- **OneWayToSource** -- target to source. The ViewModel derives state from the UI control.
+
+```xml
+<Entry Text="{Binding UserName, Mode=TwoWay}" />
+<Label Text="{Binding Greeting, Mode=OneWay}" />
+<Label Text="{Binding Title, Mode=OneTime}" />
+<Entry Text="{Binding SearchText, Mode=OneWayToSource}" />
+```
+
+### RelayCommand Deep Dive
+
+`[RelayCommand]` generates both synchronous and async commands. It handles `CanExecute` via a `bool` property or method:
+
+```csharp
+[RelayCommand(CanExecute = nameof(CanSave))]
+private void Save() { /* ... */ }
+private bool CanSave =>
+  !string.IsNullOrEmpty(UserName) && !string.IsNullOrEmpty(Password);
+```
+
+The generator produces a `SaveCommand` property of type `IRelayCommand`. Call `SaveCommand.NotifyCanExecuteChanged()` when `CanSave` dependencies change to re-evaluate the button enabled state.
+
+### Pitfalls
+
+- **Forgetting `partial` on the class**. Source generators require `partial class`. Omitting it produces CS0246 on the generated property -- the compiler error is cryptic, so check this first when generated members are missing.
+- **Mutable bindings in `OneTime` mode**. If the ViewModel updates a `OneTime` bound property after initial load, the UI never reflects the change. Use `OneWay` for live data streams.
+- **Async void commands**. `[RelayCommand]` on `void` methods swallows exceptions. Always return `Task` for async operations to get proper error propagation and `await` support.
+
+### Framework Insight
+
+CommunityToolkit.Mvvm uses **C# source generators** (not reflection or IL weaving). The `[ObservableProperty]` generator emits the property, the `PropertyChanged` call, and equality checks into the same class at compile time. This means zero runtime overhead, full AOT and NativeAOT compatibility, and debuggable generated code you can inspect via Go To Definition on the synthesized property.
+
+### Comparison: Traditional vs Source-Generated MVVM
+
+<DecisionMatrix
+  columns={["Traditional INotifyPropertyChanged", "CommunityToolkit.Mvvm Source Gen"]}
+  rows={[
+    { property: "Boilerplate per property", "Traditional INotifyPropertyChanged": "~10 lines (field + property + event)", "CommunityToolkit.Mvvm Source Gen": "1 line [ObservableProperty] field" },
+    { property: "Command pattern", "Traditional INotifyPropertyChanged": "Manual RelayCommand class + ICommand", "CommunityToolkit.Mvvm Source Gen": "[RelayCommand] attribute on method" },
+    { property: "Runtime overhead", "Traditional INotifyPropertyChanged": "None", "CommunityToolkit.Mvvm Source Gen": "None (generated at compile time)" },
+    { property: "AOT compatibility", "Traditional INotifyPropertyChanged": "Full", "CommunityToolkit.Mvvm Source Gen": "Full (no reflection)" }
+  ]}
+/>

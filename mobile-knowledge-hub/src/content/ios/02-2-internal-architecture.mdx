@@ -1,0 +1,117 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={4}>
+        <StatItem value="4 Layers" label="System Stack" />
+        <StatItem value="XNU" label="Kernel" />
+        <StatItem value="ARC" label="Memory Model" />
+        <StatItem value="Cooperative" label="Thread Pool" />
+      </StatGrid>
+
+      ### iOS System Architecture Layers
+
+      iOS is built as a layered stack with the **XNU kernel** at the foundation. Each layer
+      provides abstracted services to the layer above, though direct kernel calls via IOKit or
+      Mach traps are permitted for Metal and other performance-critical frameworks.
+
+      ```
+      ┌─────────────────────────────────────────────────────────┐
+      │  COCOA TOUCH  — SwiftUI, UIKit, MapKit, WidgetKit       │
+      ├─────────────────────────────────────────────────────────┤
+      │  MEDIA  — Metal, Core Animation, AVFoundation, CoreML    │
+      ├─────────────────────────────────────────────────────────┤
+      │  CORE SERVICES  — CoreData, CloudKit, StoreKit, CFNetwork│
+      ├─────────────────────────────────────────────────────────┤
+      │  CORE OS  — XNU (Mach + BSD), IOKit, Security, libsystem │
+      └─────────────────────────────────────────────────────────┘
+      ```
+
+      The kernel — XNU ("X is Not Unix") — is a hybrid combining a **Mach 3.0 microkernel**
+      (tasks, threads, IPC via Mach messages, virtual memory) with a **BSD layer** (POSIX
+      processes, file systems, sockets, security policies, sysctl) and an **IOKit** C++
+      driver framework. The Mach message passing facility is the lowest-level IPC on the
+      system — Core Animation's Render Server communicates with your app through Mach messages.
+
+      ### Swift Runtime Internals
+
+      Swift does not ship a bytecode interpreter or JIT compiler. The runtime library
+      (`libswiftCore.dylib`, in the OS since Swift 5.0) provides:
+
+      - **Automatic Reference Counting (ARC)**: Compiler-inserted retain/release calls,
+        optimized and often elided by SIL passes. No GC thread, no stop-the-world pauses.
+      - **Protocol Witness Tables (PWTs)**: For `protocol` dispatch — Swift looks up the
+        concrete implementation via the PWT stored in the type's metadata. Vtable-like
+        indirection, but populated per-type, not per-class.
+      - **Value Witness Tables (VWTs)**: Govern allocation, copy, and destruction of value
+        types. The compiler emits direct calls to `vw_allocate`, `vw_copy`, `vw_destroy`.
+      - **Type Metadata**: Every type has a metadata struct with its VWT, PWT conformance
+        list, field descriptors, and generic parameter info.
+      - **Swift Concurrency Runtime**: A cooperative thread pool (size == CPU core count)
+        scheduling `async` tasks. At each `await`, the function's state is captured into a
+        heap-allocated continuation. The runtime selects which executor (global, MainActor,
+        or custom actor) resumes the continuation.
+
+      ### ARC Memory Management — Weak and Unowned
+
+      ```swift
+      class ServerConnection {
+          let url: URL
+          var delegate: WeakDelegate?
+          init(url: URL) { self.url = url }
+          deinit { print("Connection deallocated") }
+      }
+
+      final class WeakDelegate {
+          weak var connection: ServerConnection?  // auto-nilled on deinit
+          unowned let owner: ViewController        // assumed to outlive self
+
+          init(owner: ViewController) { self.owner = owner }
+
+          func send(_ data: Data) {
+              guard let connection else { print("Connection gone"); return }
+              // use connection
+          }
+      }
+      ```
+
+      Use `weak` when the reference can legitimately become nil (delegates, data sources).
+      Use `unowned` only when the referenced object is guaranteed to outlive the referencer
+      — accessing a deallocated `unowned` reference triggers a runtime trap (not undefined
+      behavior, but a guaranteed crash).
+
+      <Callout title="ARC vs Garbage Collection">
+        ARC is fundamentally different from the GC strategies used by Android ART (concurrent
+        compaction GC), Dart VM (generational scavenging + mark-sweep), or the JVM (generational
+        concurrent). GC systems have a separate thread scanning reachable objects — this scan
+        can pause all threads (stop-the-world) or run concurrently at the cost of CPU contention.
+        ARC avoids this entirely: retain counts are managed inline at compile time, with no
+        runtime scanner. The trade-off: ARC requires explicit `weak`/`unowned` for cycles,
+        while GC handles cycles automatically but pays for it with pause times and CPU overhead.
+        For real-time rendering, ARC's determinism is a clear win.
+      </Callout>
+
+      ### Actors — Compile-Time Data Race Safety
+
+      Actors provide **actor isolation**: all mutable state inside an actor is protected by
+      the actor's own serial executor. The compiler enforces that you cannot access actor
+      state from outside the actor without going through an `async` hop.
+
+      ```swift
+      actor ImageCache {
+          private var cache: [String: Data] = [:]
+          private var hits = 0
+
+          func image(for key: String) async -> Data? {
+              if let data = cache[key] { hits += 1; return data }
+              return nil  // fetch from network…
+          }
+
+          func stats() -> (count: Int, hits: Int) {
+              (cache.count, hits)  // synchronous — caller must be on actor
+          }
+      }
+      ```
+
+      The `actor` keyword gives the type its own **executor** — a serial queue-like mechanism
+      ensuring at most one task accesses the actor's memory at any time. Cross-actor
+      synchronous accesses are caught at compile time, eliminating an entire class of
+      concurrency bugs that other languages catch only through correctness review.

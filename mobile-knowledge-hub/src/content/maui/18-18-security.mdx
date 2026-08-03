@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem value="Keychain/Keystore" label="SecureStorage Backend" />
+  <StatItem value="AES-256" label="Encryption" />
+  <StatItem value="Public Key" label="SSL Pinning Strategy" />
+  <StatItem value="Plugin.Fingerprint" label="Biometric Auth" />
+</StatGrid>
+
+### Platform Security Inheritance
+
+.NET MAUI inherits the underlying OS security model. On iOS, apps run in a sandbox with containerized file access, mandatory code signing, and entitlement-based permission control. Android uses user-based process isolation and a permission system declared in `AndroidManifest.xml`. The .NET runtime does not add its own security layer — it delegates to the platform's native enforcement.
+
+### SecureStorage — Keychain and Keystore Wrapper
+
+MAUI's `SecureStorage` wraps iOS Keychain (hardware-backed AES-256) and Android EncryptedSharedPreferences (AES-256 with Android KeyStore-bound master key). Sensitive data — tokens, API keys, biometric hashes — belongs here, not in `Preferences` or plain text files.
+
+```csharp
+// Save a secure value
+await SecureStorage.SetAsync("auth_token", "eyJhbGciOiJSUzI1NiIs...");
+
+// Read it back
+var token = await SecureStorage.GetAsync("auth_token");
+if (token is not null)
+    UseToken(token);
+
+// Remove a specific key
+SecureStorage.Remove("auth_token");
+
+// Wipe all secure storage
+SecureStorage.RemoveAll();
+```
+
+The default `SecureStorage.Default` instance uses the platform-specific implementation. On iOS, values are accessible only when the device is unlocked. On Android, they are encrypted per-app — even root access does not expose them. Storage persists across app updates but is removed on app uninstall.
+
+<Callout type="warning">
+  `SecureStorage.SetAsync` may throw on some Android devices if the Android
+  KeyStore infrastructure is corrupted or unavailable. Always wrap calls in
+  try/catch and degrade gracefully — prompt the user to re-authenticate or
+  fall back to an encrypted file as a last resort.
+</Callout>
+
+### SSL Pinning with HttpClientHandler
+
+SSL pinning prevents man-in-the-middle attacks by validating the server certificate against a known public key fingerprint rather than trusting any CA-signed certificate. Implement it via a custom `HttpClientHandler`:
+
+```csharp
+public class PinnedHttpClientHandler : HttpClientHandler
+{
+    private const string ExpectedPublicKey =
+        "SHA256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken ct)
+    {
+        var handler = new SocketsHttpHandler
+        {
+            SslOptions = new SslClientAuthenticationOptions
+            {
+                RemoteCertificateValidationCallback =
+                    (sender, cert, chain, errors) =>
+                {
+                    if (errors == SslPolicyErrors.None)
+                        return true;
+
+                    var pubKey = cert?.GetPublicKeyString();
+                    return string.Equals(pubKey, ExpectedPublicKey,
+                        StringComparison.Ordinal);
+                }
+            }
+        };
+        var inner = new HttpClient(handler);
+        return inner.SendAsync(request, ct);
+    }
+}
+```
+
+Pin against the public key (not the full certificate) so the pin survives certificate rotation. Always distribute at least one backup key alongside the primary pin to handle key rotation without breaking production.
+
+### Biometric Authentication
+
+Use `Plugin.Fingerprint` (also available via `CommunityToolkit.Maui`) to authenticate users with Face ID, Touch ID, or Android fingerprint:
+
+```csharp
+var result = await CrossFingerprint.Current.AuthenticateAsync(
+    new AuthenticationRequestConfiguration(
+        "Unlock App", "Authenticate to access your secure data")
+    {
+        AllowAlternativeAuthentication = true
+    });
+
+if (result.Authenticated)
+{
+    await SecureStorage.SetAsync("session_key", sessionKey);
+}
+else
+{
+    await DisplayAlert("Access Denied",
+        "Biometric authentication failed.", "OK");
+}
+```
+
+Android requires the `USE_BIOMETRIC` permission in `AndroidManifest.xml`. iOS needs no extra entitlements — it uses the native `LAContext` API. Always allow alternative authentication (device PIN/password) as a fallback for users whose biometric sensors fail.
+
+### Code Obfuscation
+
+.NET IL is trivially decompiled with tools like ILSpy or dnSpy. Obfuscation renames symbols, encrypts strings, and obfuscates control flow to raise the bar for reverse engineering.
+
+**Dotfuscator** (integrated into Visual Studio, commercial license):
+
+```xml
+<PropertyGroup>
+  <DotfuscatorEnabled>true</DotfuscatorEnabled>
+  <DotfuscatorLicense>your-license-key</DotfuscatorLicense>
+</PropertyGroup>
+```
+
+**ConfuserEx** (open source, community-maintained):
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <ConfuserExEnabled>true</ConfuserExEnabled>
+    <ConfuserExConfig>confuser.crproj</ConfuserExConfig>
+  </PropertyGroup>
+</Project>
+```
+
+Obfuscation is not foolproof — a determined attacker can still deobfuscate. It raises the cost of analysis but does not replace proper cryptography and access controls.
+
+### AOT Compilation on iOS
+
+Apple forbids JIT compilation in App Store apps. .NET MAUI iOS apps are fully AOT-compiled to ARM64 during build. This transforms IL into native binary with no IL metadata, making decompilation yield ARM64 assembly rather than high-level C#. AOT is not a substitute for obfuscation but adds a meaningful layer: decompilers like ILSpy cannot recover original method names or control flow from AOT binaries.
+
+### DecisionMatrix — Security Approaches
+
+<DecisionMatrix>
+  | Approach | Complexity | Protection Level | Runtime Cost |
+  |---|---|---|---|
+  | SecureStorage | Low | High (data at rest) | None |
+  | SSL Pinning | Medium | High (data in transit) | Negligible |
+  | Biometric Auth | Low | Medium (access control) | User interaction |
+  | Obfuscation | Medium | Medium (IP protection) | None |
+  | iOS AOT | None (build) | Low (obscurity) | Larger binary |
+</DecisionMatrix>
+<Callout type="tip">
+  Layer controls: SecureStorage for data at rest, SSL pinning for data in
+  transit, biometric auth for access, and obfuscation for IP protection.
+  Defense in depth is the only reliable mobile security strategy.
+</Callout>

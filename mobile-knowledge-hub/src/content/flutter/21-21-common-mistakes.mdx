@@ -1,0 +1,122 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+    <StatGrid columns={3}>
+        <StatItem value="setState at root" label="Most common perf killer" />
+        <StatItem value="Missing const" label="Easiest fix, biggest gain" />
+        <StatItem value="Business logic in widgets" label="Worst architectural sin" />
+    </StatGrid>
+
+    ### Category 1: State Management Mistakes
+
+    **Mistake: setState at the root widget.** Calling `setState()` high in the widget tree rebuilds every child. A favorite-toggle setState at the scaffold level triggers rebuilds of the app bar, bottom nav, and every product card for a single icon update.
+
+    ```dart
+    // WRONG: setState at root causes full tree rebuild on every toggle
+    class _ProductScreenState extends State<ProductScreen> {
+      bool _isFavorite = false;
+      @override
+      Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(/* ... */),
+        body: ProductList(/* ... */),
+        bottomNavigationBar: BottomNav(), // Rebuilds on every toggle
+      );
+    }
+
+    // RIGHT: scope state to the smallest widget that needs it
+    class _FavoriteButtonState extends State<FavoriteButton> {
+      bool _isFavorite = false;
+      @override
+      Widget build(BuildContext context) => IconButton(
+        icon: Icon(_isFavorite ? Icons.favorite : Icons.favorite_border),
+        onPressed: () => setState(() => _isFavorite = !_isFavorite),
+      );
+    }
+    ```
+
+    **Mistake: Mutable state in StatelessWidget.** A `StatelessWidget` cannot hold mutable state — all fields must be `final`. Making them non-final or using globals defeats Flutter's rebuild optimization and causes stale data rendering.
+
+    **Mistake: Not using equatable for BLoC states.** Without `Equatable`, BLoC emits every new state object even if fields are identical. Always `extend Equatable` or use `@freezed` for BLoC states.
+
+    ```dart
+    // WRONG: every event triggers UI rebuild even when state hasn't changed
+    class ProductState { final List<Product> products; final bool isLoading; ProductState(this.products, this.isLoading); }
+
+    // RIGHT: Equatable prevents duplicate emits
+    class ProductState extends Equatable {
+      const ProductState({this.products = const [], this.isLoading = false});
+      @override List<Object?> get props => [products, isLoading];
+    }
+    ```
+
+    <Callout title="Over-Fetching in build()">
+        Every widget calls `build()` when its parent rebuilds. If `build()` performs a database query or API call synchronously, you're blocking the UI thread and degrading frame budget. Move data fetching to `initState()` or to a cached provider. The `build()` method must be a pure function of state — it reads from pre-fetched caches and theme data only.
+    </Callout>
+
+    ### Category 2: Performance Mistakes
+
+    **Mistake: Missing const on constructors.** A single missing `const` causes a new widget allocation on every `build()`, flooding the garbage collector with short-lived instances — visible as jank on mid-range devices. Enable `prefer_const_constructors` in `analysis_options.yaml` and treat lint violations as errors.
+
+    **Mistake: Building large lists without ListView.builder.** `ListView(children: [...])` builds every child immediately. `ListView.builder` lazily constructs only visible items. For 1000+ items, add `itemExtent` for scroll offset optimization without per-item measurement.
+
+    ```dart
+    // WRONG: builds all 1000 items upfront
+    ListView(children: products.map((p) => ProductCard(product: p)).toList());
+
+    // RIGHT: lazy builder with fixed extent
+    ListView.builder(itemExtent: 120, itemCount: products.length,
+      itemBuilder: (context, i) => ProductCard(product: products[i]));
+    ```
+
+    **Mistake: Over-using RepaintBoundary.** Each boundary adds a compositing layer — excessive layers increase GPU memory bandwidth. Profile with DevTools "Repaint Rainbow" to find actual hotspots before adding boundaries.
+
+    **Mistake: Image memory leaks.** High-resolution images without downscaling cause memory pressure. Always specify `cacheWidth` / `cacheHeight` at display size, or use `cached_network_image` with explicit `memCacheWidth`.
+
+    ```dart
+    Image.file(File('/path/to/photo.jpg'), cacheWidth: 400, cacheHeight: 300); // 10-30x memory savings
+    ```
+
+    ### Category 3: Architecture Mistakes
+
+    **Mistake: Business logic in widgets.** Widgets handle layout and rendering only. API calls, validation, persistence belong in a service, repository, or BLoC. The symptom: a widget file over 200 lines. The fix: extract non-rendering concerns into injectable classes.
+
+    **Mistake: God widgets.** A screen handling layout, state, API calls, navigation, and animations is impossible to test or refactor. Decompose into 5-10 single-responsibility child widgets. More than 7 instance variables signals a decomposition candidate.
+
+    <Callout title="Tight Coupling to Packages">
+        Importing `dio` across 50 files makes replacing it painful. Wrap external dependencies behind an abstract `HttpClient` interface with `DioHttpClient implements HttpClient`. When `dio` 6.x breaks the API, change one file instead of fifty.
+    </Callout>
+
+    ### Category 4: Navigation Mistakes
+
+    **Mistake: Pushing without popping.** Every `Navigator.push()` adds to the stack. Deep navigation (home -> product -> detail -> checkout) without popping intermediate routes creates a growing stack. Use `pushReplacement()` or `GoRouter.replace()` for non-reversible transitions, and `popUntil()` to return to a known route.
+
+    **Mistake: Not handling the system back button.** On Android, back pops the current route by default. With nested navigation (bottom tabs with inner stacks), `PopScope` (Flutter 3.16+, replacing `WillPopScope`) must intercept and unwind the inner stack first.
+
+    ```dart
+    PopScope(
+      canPop: _innerStackIndex == 0,
+      onPopInvokedWithResult: (didPop, _) { if (!didPop) _popInnerStack(); },
+      child: /* ... */,
+    );
+    ```
+
+    **Mistake: Deep linking not configured.** GoRouter deep linking works on iOS but Android requires intent filter configuration in `AndroidManifest.xml`. Test with `adb shell am start -W -a android.intent.action.VIEW -d "yourapp://product/123"`.
+
+    ### Category 5: Platform Mistakes
+
+    **Mistake: Assuming identical behavior on both platforms.** iOS and Android differ in back navigation, keyboard dismissal, scroll physics (rubber-banding vs overscroll glow), and text input. Test every interaction on both. Use `Theme.of(context).platform` for platform-specific adjustments.
+
+    **Mistake: Not testing on real devices.** Emulators and simulators mask performance issues, thermal throttling, and memory pressure. Profile frame rendering and memory on a mid-range physical device (Pixel 6a, iPhone SE) before every release.
+
+    <Callout title="Platform-Specific UI Conventions">
+        iOS users expect bottom-sheet date pickers and large-title navigation bars. Android users expect date picker dialogs and bottom navigation. Ignoring these produces an app that works on both but feels foreign on each. Either commit to a fully custom design language (Flutter's strength) or use `Platform.isIOS` / `Platform.isAndroid` for conditional rendering. Half-measures produce the worst outcome: an app that follows neither platform's conventions.
+    </Callout>
+
+    ```dart
+    Future<DateTime?> pickDate(BuildContext context, DateTime initial) {
+      if (Theme.of(context).platform == TargetPlatform.iOS) {
+        return showCupertinoDatePicker(context, initial);
+      }
+      return showDatePicker(context: context, initialDate: initial, firstDate: DateTime(2020), lastDate: DateTime(2030));
+    }
+    ```

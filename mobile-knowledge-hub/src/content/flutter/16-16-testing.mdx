@@ -1,0 +1,262 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="70%" label="Unit tests (ideal ratio)" />
+  <StatItem value="20%" label="Widget tests (ideal ratio)" />
+  <StatItem value="10%" label="Integration tests (ideal ratio)" />
+  <StatItem value="3" label="Testing levels" />
+  <StatItem value="~0.1s" label="Unit test per test" />
+  <StatItem value="~10s" label="Integration test per test" />
+</StatGrid>
+
+### Testing Pyramid for Flutter
+
+The Flutter testing pyramid follows the classic pattern but with Flutter-specific definitions at each level. The target ratio approximates **70% unit / 20% widget / 10% integration**. Unit tests are fast (milliseconds), deterministic, and run without a framework — they cover pure Dart logic in BLoCs, services, models, and utilities. Widget tests verify a single widget's rendering and interaction in an isolated test environment — they render into a 800x600 virtual surface without an actual device. Integration tests run the complete app on a device or emulator, exercising real navigation, platform channels, and network I/O. Each level catches different classes of bugs and runs at different speeds, so the pyramid shape ensures fast feedback cycles.
+
+```dart
+// File naming convention — tests mirror source structure
+// lib/services/auth_service.dart
+// test/services/auth_service_test.dart
+// lib/widgets/login_button.dart
+// test/widgets/login_button_test.dart
+// integration_test/app_test.dart
+```
+
+<Callout title="Testing in the pubspec">
+  Always add these to `dev_dependencies`:
+  ```yaml
+  dev_dependencies:
+    flutter_test:
+      sdk: flutter
+    integration_test:
+      sdk: flutter
+    mocktail: ^1.0.0       # mocking (null-safe, no code gen)
+    bloc_test: ^9.1.0      # BLoC testing utilities
+    golden_toolkit: ^0.15.0 # golden test framework
+  ```
+</Callout>
+
+### Unit Testing Deep Dive
+
+**BLoC testing** uses the `bloc_test` package to concisely verify state transitions:
+
+```dart
+// bloc_test simplifies event → state assertions
+blocTest<AuthBloc, AuthState>(
+  'emits [loading, authenticated] on LoginSubmitted with valid credentials',
+  build: () => AuthBloc(authRepository: mockAuthRepository),
+  act: (bloc) => bloc.add(LoginSubmitted(email: 'a@b.com', password: 'secret')),
+  expect: () => [
+    AuthState.loading(),                    // first state emitted
+    AuthState.authenticated(user: user),    // second state emitted
+  ],
+  verify: (_) {
+    verify(() => mockAuthRepository.login(
+      email: 'a@b.com',
+      password: 'secret',
+    )).called(1);
+  },
+);
+
+blocTest<AuthBloc, AuthState>(
+  'emits [loading, failure] on invalid credentials',
+  build: () => AuthBloc(authRepository: mockAuthRepository),
+  act: (bloc) => bloc.add(LoginSubmitted(email: '', password: '')),
+  expect: () => [
+    AuthState.loading(),
+    AuthState.failure(error: 'Email is required'),
+  ],
+);
+```
+
+**Repository testing** with mocked dependencies:
+
+```dart
+// Using mocktail for dependency mocking
+class MockUserApi extends Mock implements UserApi {}
+
+void main() {
+  late MockUserApi mockApi;
+  late UserRepository repository;
+
+  setUp(() {
+    mockApi = MockUserApi();
+    repository = UserRepository(api: mockApi);
+  });
+
+  group('UserRepository', () {
+    test('getUser returns User when API succeeds', () async {
+      when(() => mockApi.fetchUser(1))
+        .thenAnswer((_) async => {'id': 1, 'name': 'Alice'});
+
+      final user = await repository.getUser(1);
+
+      expect(user.id, 1);
+      expect(user.name, 'Alice');
+    });
+
+    test('getUser throws when API fails', () async {
+      when(() => mockApi.fetchUser(1)).thenThrow(ApiException('Not found'));
+
+      expect(() => repository.getUser(1), throwsA(isA<RepositoryException>()));
+    });
+  });
+}
+```
+
+### Widget Testing
+
+Widget tests render a single widget in an isolated environment with `pump`, `pumpAndSettle`, and `act`:
+
+```dart
+void main() {
+  testWidgets('LoginPage shows validation errors on empty submit', (tester) async {
+    // Build the widget
+    await tester.pumpWidget(
+      MaterialApp(home: LoginPage()),
+    );
+
+    // Find the login button and tap without entering text
+    final loginButton = find.text('Log In');
+    await tester.tap(loginButton);
+    await tester.pumpAndSettle();  // wait for animations/async
+
+    // Assert validation error appears
+    expect(find.text('Email is required'), findsOneWidget);
+    expect(find.text('Password is required'), findsOneWidget);
+
+    // Enter text and verify error clears
+    await tester.enterText(find.byType(TextField).first, 'a@b.com');
+    await tester.pumpAndSettle();
+    expect(find.text('Email is required'), findsNothing);
+  });
+}
+
+// Custom finders for complex widget trees
+final submitButton = find.byKey(const Key('submit_button'));
+final emailField = find.bySemanticsLabel('Email address');
+final iconFinder = find.byIcon(Icons.check_circle);
+
+// Matchers for assertions
+expect(submitButton, findsOneWidget);     // exactly one
+expect(find.text('Loading...'), findsNothing);    // none
+expect(find.byType(TextField), findsNWidgets(2));  // exactly N
+```
+
+**pump vs pumpAndSettle vs pumpWidget:**
+- `pumpWidget(widget)` — one-shot rebuild, no animation ticks. Use for initial rendering assertions.
+- `pump(Duration)` — advances the clock by the given duration, triggering frames. Use for animation frame stepping.
+- `pumpAndSettle()` — repeatedly pumps until all animations complete or 10s timeout. Use after user interactions that trigger animations.
+
+### Golden File Testing
+
+Golden file testing captures a rendered widget as a PNG and compares it against a checked-in baseline. It is the most reliable way to catch visual regressions:
+
+```dart
+// goldens/login_page_test.dart
+import 'package:golden_toolkit/golden_toolkit.dart';
+
+void main() {
+  testGoldens('LoginPage visual regression', (tester) async {
+    await tester.pumpWidgetBuilder(
+      const LoginPage(),
+      wrapper: (child) => MaterialApp(home: child),
+    );
+
+    // Full-page screenshot
+    await screenMatchesGolden(tester, 'login_page_default');
+
+    // Tap into email field (focused state)
+    await tester.tap(find.byType(TextField).first);
+    await tester.pumpAndSettle();
+    await screenMatchesGolden(tester, 'login_page_focused');
+
+    // Show validation state
+    await tester.tap(find.text('Log In'));
+    await tester.pumpAndSettle();
+    await screenMatchesGolden(tester, 'login_page_validation');
+  });
+}
+```
+
+```bash
+# Update goldens after intentional visual changes
+flutter test --update-goldens
+
+# CI check — fails if any golden differs
+flutter test
+```
+
+**Golden strategy guidelines:** Test each widget in its key visual states (default, focused, error, loading, empty). Commit goldens to version control (they're small PNGs). In CI, goldens must match exactly — use `golden_toolkit`'s diff threshold for anti-aliasing tolerance. Keep goldens in `test/goldens/` directories mirroring the widget structure. Mobile CI runners (Firebase Test Lab, BrowserStack) have higher rendering precision; GitHub Actions runners may produce pixel-level differences — account for this with tolerance settings.
+
+<Callout title="Golden tests are high-value, high-maintenance">
+  Golden tests catch the most elusive bugs: unintended pixel changes from CSS/theme changes, font rendering differences, and layout overflow that doesn't crash but looks wrong. However, they break on any intentional visual change — expect 20-30% of PRs to need golden updates. Budget CI time for goldens (~2x slower than regular widget tests). The payoff: zero visual regressions reaching production.
+</Callout>
+
+### Integration Testing
+
+Integration tests run the full app on a device or emulator using the `integration_test` package:
+
+```dart
+// integration_test/login_flow_test.dart
+import 'package:integration_test/integration_test.dart';
+
+void main() {
+  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('full login flow', (tester) async {
+    // App launches automatically
+    await tester.pumpAndSettle();
+
+    // Navigate to login
+    await tester.tap(find.text('Log In'));
+    await tester.pumpAndSettle();
+
+    // Fill credentials
+    await tester.enterText(find.byType(TextField).first, 'test@example.com');
+    await tester.enterText(find.byType(TextField).last, 'password123');
+    await tester.tap(find.text('Submit'));
+    await tester.pumpAndSettle();
+
+    // Verify we reached the home screen
+    expect(find.text('Welcome back!'), findsOneWidget);
+  });
+}
+```
+
+```bash
+# Run integration tests
+flutter test integration_test/app_test.dart               # desktop
+flutter test integration_test/app_test.dart -d <device_id> # specific device
+```
+
+### CI Integration
+
+```yaml
+# .github/workflows/flutter_test.yml
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+      - run: flutter pub get
+      - run: flutter analyze          # static analysis
+      - run: flutter test --coverage   # unit + widget tests with coverage
+      - uses: codecov/codecov-action@v4  # upload to Codecov
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+```
+
+```bash
+# Coverage report
+flutter test --coverage
+genhtml coverage/lcov.info -o coverage/html  # generate HTML report
+open coverage/html/index.html                 # view in browser
+```
+
+### Comparison: Flutter testing vs React Native vs Native
+
+React Native relies on Jest for unit testing and React Native Testing Library for component tests, which render into a simulated DOM — they never actually paint pixels. Golden/image snapshot tests in RN require a third-party tool like `jest-image-snapshot`. Native iOS (XCTest) offers XCUITest for UI testing and snapshot testing via the iOS Simulator, which is the most pixel-accurate but macOS-only. Flutter's widget tests occupy a sweet spot: they render into an engine-managed offscreen buffer with real layout and paint (catching layout/paint issues that Jest misses) but without needing a device (faster than XCTest/XCUITest). The `integration_test` package provides the on-device layer that matches XCTest and Espresso for completeness. Flutter's unified testing framework (no switching between XCTest and XCUITest, or JUnit and Espresso) is a significant DX advantage.

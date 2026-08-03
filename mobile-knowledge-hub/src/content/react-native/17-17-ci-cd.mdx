@@ -1,0 +1,125 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="4" label="EAS build profiles" />
+  <StatItem value="~15m" label="Cloud build time (iOS)" />
+  <StatItem value="OTA" label="CodePush/EAS Update JS patches" />
+</StatGrid>
+
+### Core CI/CD Pipeline
+
+A complete RN pipeline follows six stages: **lint** (ESlint + Prettier) → **typecheck** (TypeScript strict) → **unit test** (Jest) → **build** (Metro bundle + native compile) → **sign** (code signing certificates) → **deploy** (store submission or OTA). The native build stage is the longest and most resource-intensive.
+
+```
+RN CI/CD Pipeline
+═══════════════════
+
+  ┌────────┐   ┌───────────┐   ┌──────┐   ┌───────┐   ┌──────┐   ┌────────┐
+  │  Lint   │──►│ Typecheck │──►│ Test │──►│ Build │──►│ Sign │──►│ Deploy │
+  │ ESLint  │   │ tsc --noEmit│  │ Jest │   │ Metro │   │ Fast-│  │ App    │
+  │ Prettier│   │           │   │ RNTL │   │ + Xcode│  │ lane │  │ Store  │
+  └────────┘   └───────────┘   └──────┘   └───┬───┘   └──┬───┘  │ EAS    │
+                                              │           │      │ Update │
+                                              ▼           ▼      └────────┘
+                                       iOS .app bundle   Apple Dev /
+                                       Android .apk/.aab  Google Play certs
+```
+
+### EAS Build (Expo Application Services)
+
+EAS Build provides managed cloud builds for both platforms without local CI infrastructure. Configure profiles in `eas.json`: **development** (debug build, dev client), **preview** (release build for internal testers), **production** (store submission). EAS handles iOS code signing automatically via `eas credentials` — it manages certificates in the Apple Developer Portal. Builds run on Expo's Mac infrastructure for iOS and Linux for Android.
+
+```json
+{
+  "cli": {"version": ">= 3.0.0"},
+  "build": {
+    "development": {"developmentClient": true, "distribution": "internal"},
+    "preview": {"distribution": "internal", "android": {"buildType": "apk"}, "ios": {"simulator": true}},
+    "production": {
+      "autoIncrement": true,
+      "env": {"APP_ENV": "production", "API_URL": "https://api.example.com"}
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {"appleId": "...", "ascAppId": "..."},
+      "android": {"track": "production"}
+    }
+  }
+}
+```
+
+### GitHub Actions Workflow
+
+For non-Expo projects, GitHub Actions with macOS runners provides full control. Trigger on PRs (lint/test only, ~3 min) and pushes to main (full build, ~20 min). Use `actions/cache` for `node_modules` and Pods.
+
+```yaml
+name: RN CI
+on: [pull_request, push]
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '20'}
+      - run: npm ci
+      - run: npx eslint . && npx tsc --noEmit && npx jest --ci --maxWorkers=2
+
+  build-ios:
+    needs: [analyze]
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '20'}
+      - run: npm ci && cd ios && pod install --repo-update
+      - run: npx react-native build-ios --mode Release
+        env: {CI: true, APP_ENV: production}
+```
+
+<Callout title="iOS code signing is the hardest part">
+  Use Fastlane match to manage Apple Developer certificates and provisioning profiles. Store the encrypted match repo in CI secrets. For GitHub Actions, use `apple-actions/import-codesign-certs` to install certificates into the keychain. EAS Build abstracts this entirely — a key reason teams choose Expo.
+</Callout>
+
+### Fastlane Configuration
+
+Fastlane automates build, signing, and deployment. Define lanes for `build_ios`, `build_android`, `deploy_ios`, `deploy_android`. `match` handles code signing. `deliver` uploads to App Store Connect. `supply` uploads to Google Play Console. Use `snapshot` and `screengrab` for automated screenshots across device sizes.
+
+```ruby
+lane :deploy_ios do
+  match(type: 'appstore', readonly: true)
+  gym(scheme: 'MyApp', workspace: 'ios/MyApp.xcworkspace', export_method: 'app-store', configuration: 'Release')
+  upload_to_testflight(app_identifier: 'com.example.myapp', changelog: latest_changelog, skip_waiting_for_build_processing: true)
+end
+
+lane :deploy_android do
+  gradle(tasks: ['assembleRelease', 'bundleRelease'])
+  upload_to_play_store(track: 'internal', release_status: 'draft')
+end
+```
+
+### OTA Updates with EAS Update
+
+EAS Update (successor to CodePush) delivers JS bundle updates OTA bypassing app store review. Apple permits OTA for JS-only changes that don't alter app functionality significantly. Update branches map to release channels: `production`, `staging`, `qa`. Rollbacks are instant — point the channel to a previous update. OTA cannot update native code, add capabilities, or change icons — those require a full build.
+
+```bash
+eas update --branch production --message "Fix login validation"
+eas update:rollback --branch production
+```
+
+### Common Pitfalls
+
+**Mismatched build numbers** — iOS and Android must increment independently. Use Fastlane `increment_build_number` or EAS `autoIncrement`. **Missing env variables** — Build-time env vars must be in CI secrets or `eas.json` env field. **ProGuard stripping** — R8/ProGuard can strip native module references. Keep `proguard-rules.pro` synchronized. **Simulator slices in iOS** — App Store rejects builds with x86_64 slices. Set `exclude-architectures` in release config. **Certificate expiry** — Apple certs expire annually. Set calendar reminders and use Fastlane match for regeneration.
+
+<Callout title="PR preview deployments">
+  EAS Build's `--profile preview` generates a shareable QR code for each PR. Alternatively, attach iOS .app and Android .apk as CI artifacts. This lets reviewers install the build on-device rather than trust screenshots. `expo-github-action` handles QR code generation automatically.
+</Callout>
+
+### Environment Management
+
+Maintain `.env.development`, `.env.staging`, `.env.production` files. Use `react-native-config` for compile-time injection (`Config.API_URL`). Feature flags (LaunchDarkly, Flagsmith) enable gradual rollouts. Never commit `.env` files — use CI secrets or `eas secret:create` for EAS builds. Auto-increment `versionCode` (Android) and `CFBundleVersion` (iOS) for each build.
+
+### Comparison to Flutter
+
+Flutter CI/CD is simpler: `flutter build ios` / `flutter build appbundle` produces binaries without a JS bundle step. Codemagic provides specialized Flutter workflows. Fastlane is shared across both. Flutter lacks OTA updates for production — every change requires a full store submission, a significant operational advantage for RN. EAS Build's cloud infrastructure is more mature than Codemagic, but both achieve automated cross-platform delivery.

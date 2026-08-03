@@ -1,0 +1,350 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="45min" label="Avg CI build time" />
+  <StatItem value="3hr" label="App Store review window" />
+  <StatItem value="~1hr" label="Google Play review window" />
+  <StatItem value="90%" label="Build time savings with caching" />
+  <StatItem value="3" label="Environment flavors (dev/staging/prod)" />
+  <StatItem value="7min" label="Fastlane match setup" />
+</StatGrid>
+
+### Complete CI/CD Pipeline Architecture
+
+A production Flutter CI/CD pipeline follows a multi-stage flow from commit to store:
+
+```
+                    ┌─────────────────────────────────────┐
+                    │         Developer commits            │
+                    │  git push origin feature/awesome-ui  │
+                    └──────────────┬──────────────────────┘
+                                   │
+                    ┌──────────────▼──────────────────────┐
+                    │       Stage 1: Static Analysis       │
+                    │  flutter analyze ── lint + typecheck │
+                    │  dart format --set-exit-if-changed   │
+                    └──────────────┬──────────────────────┘
+                                   │
+                    ┌──────────────▼──────────────────────┐
+                    │      Stage 2: Test Suite             │
+                    │  flutter test --coverage             │
+                    │  flutter test --update-goldens       │
+                    │  (unit + widget + golden tests)      │
+                    └──────────────┬──────────────────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              │                    │                    │
+    ┌─────────▼─────────┐ ┌───────▼────────┐ ┌────────▼────────┐
+    │  Stage 3: Build   │ │ Stage 3: Build │ │ Stage 3: Build  │
+    │   Android APK     │ │  Android AAB   │ │   iOS IPA       │
+    │  flutter build    │ │ flutter build  │ │ flutter build   │
+    │  apk --release    │ │ appbundle      │ │ ios --release   │
+    └─────────┬─────────┘ └───────┬────────┘ └────────┬────────┘
+              │                    │                    │
+    ┌─────────▼─────────┐ ┌───────▼────────┐ ┌────────▼────────┐
+    │  Stage 4: Upload  │ │ Stage 4: Deploy│ │ Stage 4: Deploy │
+    │  Firebase App Dist│ │ Google Play    │ │ App Store Conn. │
+    │  (internal test)  │ │ Console (stg)  │ │ TestFlight (stg)│
+    └───────────────────┘ └────────────────┘ └─────────────────┘
+                                   │
+                    ┌──────────────▼──────────────────────┐
+                    │     Stage 5: Store Submission        │
+                    │  Google Play: staged rollout (10%)   │
+                    │  App Store: submit for review        │
+                    └─────────────────────────────────────┘
+```
+
+### GitHub Actions Workflow
+
+```yaml
+# .github/workflows/ci.yml
+name: Flutter CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+
+      - name: Cache pub dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.FLUTTER_HOME }}/.pub-cache
+            **/.dart_tool
+          key: pub-${{ runner.os }}-${{ hashFiles('**/pubspec.lock') }}
+          restore-keys: pub-${{ runner.os }}-
+
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: dart format --set-exit-if-changed .
+      - run: flutter test --coverage
+      - uses: codecov/codecov-action@v4
+
+  build-android:
+    needs: [analyze-and-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+      - run: flutter pub get
+
+      - name: Build APK + AAB
+        run: |
+          flutter build apk --release --split-per-abi --split-debug-info=build/debug-info
+          flutter build appbundle --release --split-debug-info=build/debug-info
+
+      - name: Upload to Firebase App Distribution
+        uses: wzieba/Firebase-Distribution-Github-Action@v1
+        with:
+          appId: ${{ secrets.FIREBASE_ANDROID_APP_ID }}
+          serviceCredentialsFileContent: ${{ secrets.FIREBASE_CREDENTIALS }}
+          groups: internal-testers
+          file: build/app/outputs/flutter-apk/app-release.apk
+
+  build-ios:
+    needs: [analyze-and-test]
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+      - run: flutter pub get
+
+      - name: Install iOS certificates
+        env:
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+        run: |
+          bundle exec fastlane match development --readonly
+
+      - name: Build IPA
+        run: flutter build ios --release --no-codesign
+
+      - name: Archive and export
+        run: |
+          cd ios && bundle exec fastlane gym \
+            scheme: Runner \
+            export_method: app-store
+```
+
+### Codemagic Deep Dive
+
+Codemagic is the Flutter-first CI/CD platform with native iOS code signing management:
+
+```yaml
+# codemagic.yaml
+workflows:
+  release-workflow:
+    name: Production Release
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    triggering:
+      events:
+        - push
+        - tag: 'v*'
+      branch_patterns:
+        - pattern: main
+          include: true
+    cache:
+      cache_paths:
+        - ~/.pub-cache
+        - ~/.gradle/caches
+    scripts:
+      - flutter pub get
+      - flutter analyze
+      - flutter test --coverage
+      - flutter build apk --release --split-per-abi
+      - flutter build appbundle --release
+      - flutter build ios --release --no-codesign
+    artifacts:
+      - build/**/outputs/**/*.apk
+      - build/**/outputs/**/*.aab
+      - build/**/outputs/**/*.ipa
+      - build/**/outputs/**/*.dSYM.zip
+    publishing:
+      email:
+        recipients:
+          - team@example.com
+      google_play:
+        credentials: $GCLOUD_SERVICE_ACCOUNT
+        track: production
+      app_store_connect:
+        auth: api_key
+        submit_to_testflight: true
+```
+
+**iOS code signing automation** in Codemagic is managed through the Apple Developer Portal integration. Codemagic handles certificate renewal, provisioning profile generation, and device registration automatically — eliminating the Fastlane `match` setup. It encrypts and stores signing identities in its keystore, then applies them at build time without exposing private keys to the workflow script.
+
+<Callout title="iOS code signing is the biggest CI hurdle">
+  iOS code signing fails more often than any other CI step. The three most common failure modes: (1) expired certificates — Codemagic auto-renewal helps, but self-managed CI needs Fastlane match with a rotation schedule; (2) incorrect provisioning profiles — ensure the profile includes the CI device's UDID if running integration tests on-device; (3) keychain access issues — always use `fastlane match` or Codemagic's managed signing rather than manually installing certificates on ephemeral CI runners.
+</Callout>
+
+### Fastlane for Flutter
+
+Fastlane provides fine-grained control over the build and deploy pipeline:
+
+```ruby
+# fastlane/Fastfile
+default_platform(:ios)
+
+platform :ios do
+  desc "Build and deploy to TestFlight"
+  lane :beta do
+    capture_screenshots             # automated screenshots via Snapshot
+    match(type: "appstore")
+    gym(scheme: "Runner")
+    pilot(
+      skip_waiting_for_build_processing: false,
+      notify_external_testers: true,
+      changelog: "• Bug fixes\n• Performance improvements"
+    )
+    slack(
+      message: "iOS beta #{version} deployed to TestFlight",
+      slack_url: ENV["SLACK_WEBHOOK_URL"]
+    )
+  end
+
+  desc "Submit to App Store"
+  lane :release do
+    match(type: "appstore")
+    gym(scheme: "Runner", export_method: "app-store")
+    deliver(
+      skip_screenshots: true,
+      force: true,
+      submission_information: {
+        content_rights_contains_third_party_content: false,
+        add_id_info_uses_idfa: false
+      }
+    )
+    post_slack(text: "iOS release #{version} submitted for review")
+  end
+end
+
+platform :android do
+  desc "Deploy to Play Store"
+  lane :beta do
+    gradle(task: "bundleRelease")
+    supply(
+      track: "internal",
+      version_code: version_code,
+      skip_upload_screenshots: true,
+      skip_upload_images: true
+    )
+  end
+
+  lane :production do
+    gradle(task: "bundleRelease")
+    supply(track: "production", rollout: "0.1")  # staged 10% rollout
+  end
+end
+```
+
+### Automated Versioning
+
+```ruby
+# fastlane/versioning.rb
+def get_version
+  # Read from pubspec.yaml
+  pubspec = YAML.load_file("../pubspec.yaml")
+  version = pubspec["version"]
+  parts = version.split("+")
+  { version_name: parts[0], version_code: parts[1].to_i }
+end
+
+def next_version_code
+  current = get_version[:version_code]
+  commit_count = `git rev-list --count HEAD`.strip.to_i
+  current > commit_count ? current : commit_count
+end
+```
+
+```bash
+# Semantic versioning via git tags
+git tag -a v1.2.3 -m "Release v1.2.3"
+git push origin v1.2.3
+
+# CI reads the tag and injects it into pubspec.yaml
+sed -i '' "s/^version:.*/version: $TAG/" pubspec.yaml
+```
+
+### Environment Flavors in CI
+
+```dart
+// lib/flavors.dart — compile-time flavor injection
+enum Flavor { dev, staging, production }
+
+class FlavorConfig {
+  final Flavor flavor;
+  final String apiBaseUrl;
+  final bool enableCrashReporting;
+  final bool enableLogging;
+
+  const FlavorConfig._({
+    required this.flavor,
+    required this.apiBaseUrl,
+    required this.enableCrashReporting,
+    required this.enableLogging,
+  });
+
+  static const dev = FlavorConfig._(
+    flavor: Flavor.dev,
+    apiBaseUrl: 'https://dev-api.example.com',
+    enableCrashReporting: false,
+    enableLogging: true,
+  );
+
+  // CI injects --dart-define=flavor=staging
+  static FlavorConfig fromEnv() {
+    const flavor = String.fromEnvironment('flavor', defaultValue: 'dev');
+    switch (flavor) {
+      case 'production':
+        return FlavorConfig._(
+          flavor: Flavor.production,
+          apiBaseUrl: 'https://api.example.com',
+          enableCrashReporting: true,
+          enableLogging: false,
+        );
+      case 'staging':
+        return FlavorConfig._(
+          flavor: Flavor.staging,
+          apiBaseUrl: 'https://staging-api.example.com',
+          enableCrashReporting: true,
+          enableLogging: true,
+        );
+      default:
+        return dev;
+    }
+  }
+}
+```
+
+```bash
+# Build with flavor injected via --dart-define
+flutter build apk --release \
+  --dart-define=flavor=staging \
+  --dart-define=apiKey=$API_KEY
+
+# In Codemagic, set environment variables in the workflow
+```
+
+### Comparison: Flutter CI/CD vs React Native vs Native
+
+React Native projects typically use the same CI tools (GitHub Actions, Fastlane) but require additional steps: Metro bundler cache, CocoaPods cache, and Hermes engine compilation. The Xcode build phase is essentially identical for both frameworks. Native Android/iOS apps benefit from Gradle build caching and Xcode derived data caching but lack Flutter's shared Dart compilation step. Codemagic's Flutter-first architecture gives it a built-in edge: Flutter SDK version management, pub cache optimization, and Impeller/Metal shader precompilation awareness. For self-managed CI, Flutter's `subosito/flutter-action` provides a smoother setup than React Native's `react-native-community/action` which requires more manual configuration.

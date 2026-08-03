@@ -1,0 +1,129 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid>
+      <StatItem value="4 Threads" label="Runtime Threads" />
+      <StatItem value="JSI (C++)" label="JS↔Native Bridge" />
+      <StatItem value="Hermes / JSC" label="JS Engines" />
+      <StatItem value="Yoga (C)" label="Layout Engine" />
+    </StatGrid>
+
+    ### Old Architecture Deep Dive (pre-0.76)
+
+    From 2015 to 2024, React Native's JS-to-native communication relied on the **Bridge** — an asynchronous, batched JSON message queue. The React reconciler running on the JS thread would produce UI mutations, serialise them to JSON (`JSON.stringify`), and enqueue them. The native (main) thread would dequeue, parse (`JSON.parse`), and apply those mutations to platform views. The same pipeline ran in reverse for native callbacks reaching JS.
+
+    ```
+    ┌─────────────────── OLD ARCHITECTURE ──────────────────────┐
+    │                                                            │
+    │  JS Thread ──→ JSON.stringify ──→ [Message Queue] ──→ JSON.parse ──→ Main Thread
+    │   (React)         (serialize)       (batched)     (deserialize)     (platform UI)
+    │                                                            │
+    │  Problems:                                                  │
+    │  1. Every frame: serialise → queue → parse → apply          │
+    │  2. No synchronous JS↔native calls (no "get height now")    │
+    │  3. All native modules loaded at startup                    │
+    │  4. Bridge is single-channel bottleneck                     │
+    └────────────────────────────────────────────────────────────┘
+    ```
+
+    The Bridge's single-threaded message queue meant that a chatty native module (e.g., camera frame data, sensor updates) could block UI mutations. The bridge was also **never designed for concurrent rendering** — it had no concept of priority. An offscreen data fetch's state update could block a button press animation.
+
+    <Callout title="Why the Bridge Was Slow">
+    JSON serialization of a React element tree is not free. A typical screen mutation serialises dozens of view props (positions, styles, text) per frame. On low-end Android devices, the Bridge's JSON overhead could consume 5–8ms per frame — nearly half the 16ms budget for 60 fps. This is why early RN apps felt jankier on low-end hardware. JSI eliminates this overhead entirely by keeping C++ object references in JS memory.
+    </Callout>
+
+    ### New Architecture: Three Pillars (0.76+)
+
+    The New Architecture replaces the Bridge with three interconnected systems:
+
+    **JSI (JavaScript Interface):** JSI is a lightweight C++ layer that exposes native objects directly to the JS engine. Instead of sending a JSON message for "what is this view's height?", JS holds a C++ pointer to the view's native measurement function and calls it synchronously. JSI is engine-agnostic (Hermes, JSC, V8 all implement the same interface). This is the foundational change — Fabric and Turbo Modules both build on JSI.
+
+    **Fabric Renderer:** Fabric is a C++ renderer that replaces the old UIManager. It receives React element mutations via JSI (synchronously), computes layout via Yoga on the Shadow Thread, and produces native view operations that are applied on the Main Thread. Fabric supports React 18's concurrent features: it can pause a low-priority render to respond to a tap, resume it later, or discard it if the data is stale.
+
+    **Turbo Modules:** Native module loading is now lazy and type-safe. Each module defines a TypeScript spec interface; the Codegen pipeline generates C++/Java/Obj-C glue code from that spec. Native modules are loaded on first `import`, not at app launch. This shrinks startup time because the app only initialises modules the first screen actually uses.
+
+    ```
+    ┌─────────────────── NEW ARCHITECTURE ───────────────────────┐
+    │                                                            │
+    │  ┌─────────────────────────────────────────────────────┐   │
+    │  │                    JSI Layer                         │   │
+    │  │  (C++ host objects, sync calls, no serialization)    │   │
+    │  └────────────┬────────────────────┬──────────────────┘   │
+    │               │                    │                       │
+    │        ┌──────▼──────┐      ┌─────▼──────┐               │
+    │        │   Fabric    │      │  Turbo     │               │
+    │        │  Renderer   │      │  Modules   │               │
+    │        │ (C++, sync) │      │ (lazy-load)│               │
+    │        └──────┬──────┘      └────────────┘               │
+    │               │                                           │
+    │        ┌──────▼──────┐                                    │
+    │        │    Yoga     │  (Shadow Thread layout)            │
+    │        │  (Flexbox)  │                                    │
+    │        └──────┬──────┘                                    │
+    │               │                                           │
+    │        ┌──────▼──────┐                                    │
+    │        │   Native    │  (Platform UI: UITextView, View)   │
+    │        │   Views     │                                    │
+    │        └─────────────┘                                    │
+    └────────────────────────────────────────────────────────────┘
+    ```
+
+    ### Hermes Engine
+
+    Hermes is Meta's JavaScript engine designed specifically for React Native mobile apps. Before Hermes (2015–2020), RN used JavaScriptCore on iOS and V8 on Android — both JIT (Just-In-Time) engines that parse JS at runtime, profile hot paths, and compile them to ARM machine code during execution. JIT gives peak throughput but costs startup time, memory, and battery.
+
+    Hermes takes the opposite approach: **Ahead-of-Time (AOT) compilation**. At build time, the `hermesc` compiler transforms your JavaScript bundle into Hermes bytecode — a compact, register-based bytecode format that the Hermes interpreter executes directly. There is no parser, no JIT compiler, and no warmup phase embedded in the app binary. The result: 30-50% faster startup on Android (cold start goes from ~2s to ~1s), 20-30% smaller APK (no JIT compiler binary), and 15-25% less memory at runtime.
+
+    Hermes bytecode is not ARM machine code — it is interpreted by the Hermes engine at runtime. This means Hermes is faster at startup than V8/JSC (no parse/JIT warmup) but has lower peak throughput for heavy computation. For UI rendering (which is the bottleneck in most RN apps), this tradeoff is overwhelmingly positive.
+
+    <Callout title="Hermes Limitations">
+    Hermes does not support `eval()`, `Function()`, or dynamic `require()`. It has limited support for ES6 Proxy (needed by MobX/MobX-React-Lite). If your app uses any of these, you may need to stay on JSC or V8. Hermes also ships without a JIT compiler, so pure JS number-crunching workloads run slower than V8 — but in practice, RN apps delegate heavy computation to native modules.
+    </Callout>
+
+    ### Thread Model
+
+    React Native runs four distinct threads. Understanding which thread does what is essential for debugging jank and crashes:
+
+    - **JS Thread:** Runs the Hermes/JSC engine. Executes all JavaScript — React reconciliation, business logic, state updates, Redux reducers, React Query callbacks. One JS thread, serial event loop. A long JS task blocks the entire thread and causes dropped frames.
+    - **Main Thread (UI Thread):** The platform's UI thread (Android `Looper.getMainLooper()`, iOS main run loop). Applies native view mutations (create, update, delete), handles touch events, gesture recognizers, platform animations. Never block this thread.
+    - **Shadow Thread:** A background thread dedicated to layout computation via Yoga. The Shadow Tree — a lightweight mirror of the React component tree with position/size data — is built here. Fabric reads the Shadow Tree to generate native view mutations.
+    - **Native Modules Threads:** Each Turbo Module can spawn its own thread. AsyncStorage, SQLite, network requests, and image decoding typically have dedicated threads. The native modules communicate with the JS thread via JSI (sync) or callbacks (async).
+
+    ```
+    ┌───────────────┐    ┌────────────────┐    ┌────────────────┐
+    │   JS Thread   │    │  Shadow Thread  │    │  Main Thread   │
+    │  (Hermes/JSC) │    │    (Yoga)       │    │  (UI Thread)   │
+    │               │    │                 │    │                │
+    │ React reconcil.│───→│ Compute layout  │───→│ Apply view     │
+    │ State updates  │    │ Flexbox calc    │    │ mutations      │
+    │ Business logic │    │ Build shadow    │    │ Gesture/Touch  │
+    │                │    │ tree            │    │ Platform draw  │
+    └───────┬───────┘    └────────────────┘    └────────────────┘
+            │                                          │
+            │    ┌──────────────────────┐               │
+            └────→  Native Modules      │←──────────────┘
+                 │  (Camera, SQLite,    │
+                 │   Network, Sensors)  │
+                 └──────────────────────┘
+    ```
+
+    ### Codegen Pipeline
+
+    The New Architecture introduces a **Codegen** step that generates type-safe native bindings from TypeScript interface specs. This eliminates the manual, error-prone `@ReactMethod` and `RCT_EXPORT_MODULE` bridge boilerplate.
+
+    ```typescript
+    // TypeScript spec file: NativeCalculator.ts
+    import { TurboModule, TurboModuleRegistry } from 'react-native';
+
+    export interface Spec extends TurboModule {
+      readonly add: (a: number, b: number) => number;
+      readonly multiply: (a: number, b: number) => number;
+    }
+
+    export default TurboModuleRegistry.getEnforcing<Spec>('NativeCalculator');
+    ```
+
+    Codegen consumes this spec and generates: a C++ host object with `jsi::Function` for each method, a Java class that implements the native side on Android, and an Objective-C protocol on iOS. The generated code is type-safe — a wrong argument type in JS produces a runtime error at the JSI boundary, not a silent JSON parse failure.
+
+    ### Comparison: Flutter's Four-Tree Architecture
+
+    Flutter uses a four-tree model similar to RN but with a critical difference. Flutter has: Widget (config) → Element (instance) → RenderObject (layout/paint) → Layer (compositing). All four trees are Dart objects running in Flutter's own engine. There is no platform view layer — Flutter paints each pixel itself (Skia/Impeller). RN's tree model is: React Element (JS) → Shadow Tree (C++ Yoga) → Fabric Shadow Node (C++) → Native View (platform SDK). RN terminates in platform views; Flutter terminates in GPU commands. This is why Flutter has more control over every pixel but RN gets platform-native accessibility, font rendering, and text input behavior for free.

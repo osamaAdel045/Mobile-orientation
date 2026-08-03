@@ -1,0 +1,151 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={4}>
+        <StatItem value="@State" label="Local State" />
+        <StatItem value="@Observable" label="iOS 17+ Macro" />
+        <StatItem value="TCA" label="Complex Apps" />
+        <StatItem value="@Environment" label="DI Container" />
+      </StatGrid>
+
+      ### SwiftUI Property Wrappers — Reference Table
+
+      ```
+      @State            Value type (Int, etc)     Owned by view, persists across bodies
+      @Binding          Ref to @State elsewhere   Derived; not stored here
+      @StateObject      ObservableObject          Owned by this view, created once
+      @ObservedObject   ObservableObject          NOT owned — passed in from parent
+      @Environment      System values (scheme)    KeyPath read from environment
+      @AppStorage       UserDefaults value        Persists between launches
+      @Observable (17+) Class property            Finer-grained invalidation
+      ```
+
+      ### @Observable Macro (iOS 17+, Swift 5.9)
+
+      The `@Observable` macro (part of the **Observation** framework) replaces `ObservableObject`
+      + `@Published` with **per-property invalidation**. With `@Published`, every property
+      change called `objectWillChange.send()` — causing all observing views to re-evaluate.
+      With `@Observable`, only views that actually read the changed property re-render.
+
+      ```swift
+      import Observation
+      import SwiftUI
+
+      @Observable
+      final class ProfileViewModel {
+          var name: String = ""
+          var bio: String = ""
+          var isSaving = false
+
+          @MainActor
+          func save() async {
+              isSaving = true
+              defer { isSaving = false }
+              // repository.save(...)
+          }
+      }
+
+      struct ProfileEditor: View {
+          @State private var viewModel = ProfileViewModel()
+
+          var body: some View {
+              Form {
+                  TextField("Name", text: $viewModel.name)
+                  TextField("Bio", text: $viewModel.bio, axis: .vertical)
+                  Button("Save") { Task { await viewModel.save() } }
+                      .disabled(viewModel.isSaving)
+                  // Each field only rereads when its observed property changes
+              }
+          }
+      }
+      ```
+
+      Behind the scenes, `@Observable` generates an `ObservationRegistrar` per class. Each
+      property becomes a computed getter/setter: `registrar.access(...)` on read,
+      `registrar.withMutation(...)` on write. SwiftUI's view tracking hooks into the
+      registrar's change notifications.
+
+      <Callout title="@StateObject vs @ObservedObject — Who Owns the Object?">
+        This is the most common SwiftUI state mistake. `@StateObject` creates and owns the
+        object — initialized once when the view appears, living as long as the view's identity
+        persists. `@ObservedObject` does NOT own the object. Rule: use `@StateObject` where
+        you call `ViewModel()` directly, and `@ObservedObject` when the object is passed in.
+        Using `@ObservedObject` with `ViewModel()` creates a fresh instance on every
+        re-evaluation, losing all state. In iOS 17+, prefer `@State` with an `@Observable`
+        class — it avoids this distinction entirely.
+      </Callout>
+
+      ### TCA — The Composable Architecture
+
+      TCA (pointfree.co) provides strict unidirectional data flow for large apps: a `Store`
+      holds full app state; a `Reducer` describes how actions transform state and produce
+      `Effect<Action>` values; effects return more actions. Key strengths: testability
+      (pure reducers) and composition (child stores scope from parent stores).
+
+      ```swift
+      @Reducer
+      struct CounterFeature {
+          @ObservableState struct State: Equatable {
+              var count = 0; var fact: String?; var isLoading = false
+          }
+          enum Action { case increment, decrement, factButtonTapped
+                        case factResponse(Result<String, Error>) }
+
+          @Dependency(\.numberFact) var numberFact
+
+          var body: some ReducerOf<Self> {
+              Reduce { state, action in
+                  switch action {
+                  case .increment: state.count += 1; return .none
+                  case .decrement: state.count -= 1; return .none
+                  case .factButtonTapped:
+                      state.isLoading = true
+                      return .run { [count = state.count] send in
+                          await send(.factResponse(Result {
+                              try await self.numberFact.fetch(count)
+                          }))
+                      }
+                  case .factResponse(let result):
+                      state.isLoading = false
+                      state.fact = try? result.get()
+                      return .none
+                  }
+              }
+          }
+      }
+      ```
+
+      The `@Dependency` property wrapper provides test-scheduled dependencies — replace
+      `continuousClock` with `immediateClock` in tests for deterministic async testing.
+
+      ### iOS-Specific Insight: Value-Type State Foundation
+
+      SwiftUI's state system is built on **value types** — `@State` wraps a `struct`, not a
+      class (except for `@StateObject`). This differs from React's reference-type model
+      and Flutter's `InheritedWidget` ancestry. SwiftUI triggers re-rendering by value
+      comparison: new value != old value invalidates the view. This eliminates the "object
+      identity" bugs that plague reference-based frameworks.
+
+      ### State Flow Diagram
+
+      ```
+      User action → View method → Model updates @Observable property
+           ↓
+      ObservationRegistrar notifies subscribers
+           ↓
+      AttributeGraph invalidates dependent views
+           ↓
+      View.body re-evaluates → new View tree
+           ↓
+      Core Animation → Render Server → Metal → Display
+      ```
+
+      ### Cross-Platform Comparison
+
+      **Flutter Riverpod** uses `Provider`/`Notifier` with `ref.watch()` for per-widget
+      invalidation (like `@Observable`). Key difference: Riverpod is a third-party library;
+      `@Observable` is built into the Swift compiler and runtime.
+
+      **React Redux** uses `dispatch(action)` → `reducer(state, action)` → new state. TCA
+      is the iOS analogue but uses `@Dependency` for testable effects and `Reducer`
+      composition natively. Redux relies on middleware for effects; TCA models them as
+      typed `Effect<Action>` values returning to the store for deterministic testing.

@@ -1,0 +1,87 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid>
+        <StatItem value="JetBrains" label="Company" />
+        <StatItem value="Kotlin" label="Language" />
+        <StatItem value="2023 (Stable)" label="Released" />
+        <StatItem value="Apache 2.0" label="License" />
+      </StatGrid>
+
+      ### The KMP Philosophy
+
+      KMP does not ask "how do we render UI across platforms?" It asks "how do we share
+      everything **except** UI across platforms?" This inversion drives every architectural
+      decision. Network clients, data models, validation rules, serialization logic,
+      database queries, analytics, and business workflows reside in shared Kotlin modules.
+      The UI layer remains native per platform — Jetpack Compose on Android, SwiftUI on iOS.
+      Compose Multiplatform (JetBrains) adds optional shared UI via Skia rendering, but it
+      is never forced.
+
+      <Callout title="Core Distinction">
+        KMP shares logic, not pixels. Unlike Flutter or React Native, KMP never
+        renders a single UI element. The shared module produces typed data streams;
+        each platform renders them natively. This eliminates the "uncanny valley"
+        problem of cross-platform UI frameworks.
+      </Callout>
+
+      ### How KMP Differs from Flutter and React Native
+
+      **Flutter** renders everything through Skia — every pixel is custom-painted. The
+      visual result is identical across platforms, but platform-native controls (navigation
+      bars, text fields, date pickers) are absent unless manually embedded via
+      PlatformView. **React Native** maps JSX to native widgets through a bridge — closer
+      to native controls but at the cost of serialization overhead and type safety.
+
+      KMP avoids both extremes. Shared Kotlin code produces `StateFlow<UiState>` objects.
+      Android observes them with `collectAsStateWithLifecycle()` in Compose. iOS observes
+      them via SKIE-generated `AsyncSequence` in SwiftUI. Each platform uses its own
+      native controls, navigation stack, and animation system.
+
+      ```kotlin
+      // commonMain — shared business logic, zero UI imports
+      class LoginViewModel {
+          private val _uiState = MutableStateFlow(LoginUiState())
+          val uiState: StateFlow<LoginUiState> = _uiState.asStateFlow()
+
+          fun login(email: String, password: String) {
+              _uiState.update { it.copy(isLoading = true) }
+          }
+      }
+      ```
+
+      ```swift
+      // iOS — SwiftUI observes shared VM through SKIE
+      struct LoginView: View {
+          @StateObject private var vm: LoginViewModel
+          var body: some View {
+              Text(vm.uiState.asyncSequence.status)
+                  .task { await vm.login(email, pass) }
+          }
+      }
+      ```
+
+      ### When to Choose KMP
+
+      KMP excels for **existing native teams** wanting code sharing without rewriting UI.
+      Teams with separate iOS (Swift) and Android (Kotlin) engineers gain the most — each
+      keeps their platform expertise while contributing to shared business logic. Kotlin-first
+      organizations adopt KMP naturally since the shared language is already in use.
+
+      When **not** to choose KMP: small teams needing maximum UI code sharing, projects
+      targeting platforms beyond mobile (KMP supports desktop/JS but ecosystem varies),
+      teams without Kotlin expertise, or when the fastest time-to-market is critical
+      and a single UI codebase (Flutter) wins.
+
+      ### Ecosystem Maturity Note
+
+      KMP reached stable in 2023 but the ecosystem is younger than Flutter (2017) or
+      React Native (2015). Key libraries like Ktor, SQLDelight, and Koin are production-ready.
+      Some libraries (Room, Apollo GraphQL) are still adding KMP support. The Gradle plugin
+      updates frequently — pin version catalogs and test builds in CI.
+
+      ### KMP Insight
+
+      KMP reframes "cross-platform" from "write once, run anywhere" to "write once
+      in shared logic, build native UI on each platform." The shared module becomes
+      a platform-agnostic core that every app consumes as a regular dependency —
+      conceptually closer to a shared internal library than a cross-platform framework.

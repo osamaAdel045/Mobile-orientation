@@ -1,0 +1,118 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Native HTTP" value="Bypasses CORS restrictions" />
+  <StatItem label="Offline Detection" value="Network plugin, real-time" />
+  <StatItem label="Caching" value="TanStack Query / Apollo cache" />
+  <StatItem label="Realtime" value="WebSocket / Socket.IO" />
+</StatGrid>
+
+### Browser Networking APIs
+
+The standard web networking stack — **Fetch API**, **Axios**, and **Angular HttpClient** — all work inside an Ionic WebView with identical browser APIs. Choose based on framework and ergonomic preferences:
+
+```typescript
+// Fetch API — native to the runtime, zero dependencies
+const res = await fetch('https://api.example.com/users');
+const users = await res.json();
+
+// Axios — interceptors, request cancellation, upload progress
+import axios from 'axios';
+const { data } = await axios.get('/users', {
+  timeout: 10000,
+  headers: { Authorization: `Bearer ${token}` }
+});
+
+// Angular HttpClient — typed observables, retry, interceptors
+import { HttpClient } from '@angular/common/http';
+this.http.get<User[]>('/users')
+  .pipe(retry(3))
+  .subscribe(users => this.users = users);
+```
+
+### Capacitor HTTP Plugin
+
+The `@capacitor/http` plugin routes requests through the **native platform networking stack** — NSURLSession on iOS, OkHttp on Android. This bypasses CORS entirely because native requests carry no browser origin header. It also respects OS-level TLS policies and supports certificate pinning:
+
+```typescript
+import { Http } from '@capacitor/http';
+
+const { data, status } = await Http.get({
+  url: 'https://api.example.com/data',
+  headers: { 'X-API-Key': token }
+});
+```
+
+Use the Capacitor HTTP plugin when CORS blocks production requests, when you need certificate pinning, or for cookie-based auth that the WKWebView sandbox prevents. The plugin also exposes `Http.post`, `Http.put`, `Http.delete`, and `Http.uploadFile` for multipart uploads.
+
+### TanStack Query (React Query)
+
+For React-based Ionic apps, TanStack Query handles server-state caching, background refetching, pagination, and optimistic updates. It integrates with Capacitor's lifecycle: queries pause when the app backgrounds and refetch on foreground focus:
+
+```typescript
+import { useQuery } from '@tanstack/react-query';
+
+function useUsers() {
+  return useQuery({
+    queryKey: ['users'],
+    queryFn: () => Http.get({ url: '/users' }).then(r => r.data),
+    staleTime: 5 * 60 * 1000,
+    networkMode: 'offlineFirst',
+  });
+}
+```
+
+The `offlineFirst` network mode serves cached data when the device is offline and refetches when connectivity returns — a pattern that pairs naturally with the Network plugin.
+
+### Offline Detection
+
+Capacitor's **Network plugin** emits real-time connectivity changes. Combine it with TanStack Query's `networkMode` or manual retry wrappers to build offline-resilient apps:
+
+```typescript
+import { Network } from '@capacitor/network';
+
+Network.addListener('networkStatusChange', ({ connected, connectionType }) => {
+  if (connected) queryClient.refetchQueries();
+});
+
+const status = await Network.getStatus();
+// { connected: boolean, connectionType: 'wifi' | 'cellular' | 'none' }
+```
+
+The plugin distinguishes WiFi, cellular, and no-connection states. On Android, it also reports if the connection is metered — critical for apps that defer large downloads over cellular data.
+
+<Callout type="warning">
+  TanStack Query's default network mode (`online`) pauses all queries when offline and resumes when the Network plugin reports connectivity. If your app needs to queue writes for later sync, switch to `networkMode: 'offlineFirst'` and handle retry logic with a custom mutation queue backed by Ionic Storage.
+</Callout>
+
+### Realtime & GraphQL
+
+For GraphQL apps, **Apollo Client** (Angular/React) and **urql** (React/Vue) work inside the WebView with no native modifications. For realtime data, standard **WebSocket** is supported natively; **Socket.IO** with its capacitor-specific transport provides automatic reconnection across app backgrounding cycles:
+
+```typescript
+import { io } from 'socket.io-client';
+const socket = io('https://chat.example.com', {
+  transports: ['websocket'],
+  reconnection: true,
+  reconnectionDelay: 1000,
+});
+```
+
+```
+ ┌────────────────────────────────────────┐
+ │         UI Layer (React/Angular/Vue)   │
+ ├──────────────────┬─────────────────────┤
+ │  TanStack Query  │  Apollo / urql     │
+ │  (cache + sync)  │  (GraphQL/WS)      │
+ ├──────────────────┴─────────────────────┤
+ │       Capacitor HTTP Plugin            │
+ │  (native stack, no CORS, pinning)      │
+ ├────────────────────────────────────────┤
+ │  iOS: NSURLSession / Android: OkHttp   │
+ │  + Network plugin (offline detection)  │
+ └────────────────────────────────────────┘
+```
+
+### Pitfalls
+
+CORS errors in production that don't appear in dev usually mean the WebView origin is checked — switch to the Capacitor HTTP plugin. TanStack Query serving stale data after going offline is by design; configure `staleTime` and `gcTime` to control freshness boundaries. Always unregister Network listeners in `ngOnDestroy` or `useEffect` cleanup to prevent stale closures and memory leaks in long-lived pages.

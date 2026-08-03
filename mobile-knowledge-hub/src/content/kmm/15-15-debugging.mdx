@@ -1,0 +1,148 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Android Studio" label="Shared Code Debug" />
+        <StatItem value="Xcode + LLDB" label="iOS Debug" />
+        <StatItem value="Napier" label="Logging" />
+      </StatGrid>
+
+      ### Debugging Shared Kotlin Code
+
+      KMP shared code is debuggable from both Android Studio and Xcode. On Android,
+      breakpoints in `commonMain` work transparently — the code runs as JVM bytecode
+      and Android Studio's debugger attaches normally. On iOS, Kotlin/Native generates
+      debug symbols that Xcode's LLDB debugger can consume.
+
+      ```yaml
+      Android breakpoint flow:
+        Set breakpoint in commonMain/UserRepository.kt
+        → Android Studio attaches to process (JVM)
+        → Breakpoint hits with full variable inspection
+
+      iOS breakpoint flow:
+        Set breakpoint in commonMain/UserRepository.kt
+        → Xcode builds with Gradle (Kotlin/Native generates .dSYM)
+        → LLDB resolves source mapping
+        → Breakpoint hits with Kotlin variable names
+      ```
+
+      ### Logging with Napier
+
+      **Napier** is a multiplatform logging library that routes log calls to the
+      platform's native logging system. On Android, it logs to Logcat. On iOS, it
+      logs to `os_log` (unified logging system visible in Console.app).
+
+      ```kotlin
+      // commonMain — Napier logging
+      class LoginRepository(private val api: KtorClient) {
+          suspend fun login(email: String, password: String): User {
+              Napier.d("Login attempt for: $email", tag = "Auth")
+              return try {
+                  val user = api.post<User>("/auth/login") {
+                      setBody(LoginRequest(email, password))
+                  }
+                  Napier.i("Login successful for: $email", tag = "Auth")
+                  user
+              } catch (e: Exception) {
+                  Napier.e("Login failed: ${e.message}", tag = "Auth")
+                  throw e
+              }
+          }
+      }
+
+      // androidMain — Napier Android engine
+      Napier.base(DebugAntilog()) // Routes to Logcat
+
+      // iosMain — Napier iOS engine
+      Napier.base(OSLogAntilog()) // Routes to os_log
+      ```
+
+      <Callout title="LLDB Kotlin Source Mapping">
+        Xcode debugging of Kotlin/Native code requires source mapping. The Kotlin
+        Native Debug plugin for Xcode (by Touchlab) enables stepping through
+        Kotlin source files in Xcode with variable inspection. Without it, LLDB
+        shows assembly-level symbols. The plugin reads DWARF debug info from the
+        framework's .dSYM and maps it to original Kotlin source lines.
+      </Callout>
+
+      ### Coroutine Debugging
+
+      Coroutines present unique debugging challenges. KMP uses `kotlinx-coroutines`
+      debug mode for enhanced coroutine tracing. Enable coroutine stack traces
+      in shared code with the `kotlinx.coroutines.debug` system property.
+
+      ```kotlin
+      // Enable coroutine debugging
+      // Add to gradle.properties: kotlinx.coroutines.debug=propmpt
+      class DebuggableViewModel(private val scope: CoroutineScope) {
+          fun loadData() {
+              scope.launch(Dispatchers.Default + CoroutineName("load-data")) {
+                  // CoroutineName appears in stack traces and logs
+                  val data = repository.fetchData()
+                  _state.value = UiState.Success(data)
+              }
+          }
+      }
+      ```
+
+      ### SQLDelight Query Debugging
+
+      SQLDelight supports query logging — every SQL statement can be logged with
+      bind parameters for debugging.
+
+      ```kotlin
+      // androidMain — SQLDelight driver with logging
+      actual class DatabaseDriverFactory(private val context: Context) {
+          actual fun createDriver(): SqlDriver {
+              return AndroidSqliteDriver(
+                  schema = AppDatabase.Schema,
+                  context = context,
+                  name = "app.db",
+                  callback = object : AndroidSqliteDriver.Callback(AppDatabase.Schema, 1) {
+                      override fun onQuery(sql: String, args: List<Any?>?) {
+                          Napier.d("SQL: $sql | args: $args", tag = "SQLDelight")
+                      }
+                  }
+              )
+          }
+      }
+      ```
+
+      ### Memory Leak Detection
+
+      KMP does not have a unified memory profiler for both platforms. Memory
+      debugging is platform-specific:
+
+      ```yaml
+      Android: Android Studio Memory Profiler → heap dump → MAT/Analyzer
+        - Detect ViewModel leaks, retained activity references
+        - Standard Android leak detection (LeakCanary optional)
+
+      iOS: Xcode Memory Graph Debugger → Instruments (Allocations, Leaks)
+        - Detect reference cycles in Kotlin objects
+        - Kotlin/Native GC may hide leaks — use weak references for observer patterns
+      ```
+
+      ### Pitfall: iOS Breakpoint Limitations
+
+      ```kotlin
+      // WRONG — inlined functions may not hit breakpoints on iOS
+      inline fun logAndRun(action: () -> Unit) {
+          Napier.d("Executing action")
+          action()
+      }
+
+      // RIGHT — regular functions are debuggable on all platforms
+      fun logAndRun(action: () -> Unit) {
+          Napier.d("Executing action")
+          action()
+      }
+      ```
+
+      ### KMP Insight
+
+      Debugging KMP means using two IDEs. Android Studio handles Android debug +
+      shared code breakpoints via JVM. Xcode handles iOS debug + Kotlin/Native
+      breakpoints via LLDB. The debugging experience is native on both sides —
+      KMP doesn't impose its own debugger. The hardest bugs are typically Gradle
+      configuration issues and Kotlin version mismatches, best caught in CI.

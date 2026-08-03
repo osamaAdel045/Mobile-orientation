@@ -1,0 +1,149 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+      <StatItem value="Sandbox" label="Per-App Isolation" />
+      <StatItem value="Keychain" label="Encrypted Storage" />
+      <StatItem value="ATS" label="TLS Enforcement" />
+      <StatItem value="Secure Enclave" label="Hardware Crypto" />
+    </StatGrid>
+
+    ### iOS Security Model
+
+    Every app runs in a **sandbox** — a restricted container with its own filesystem, memory, and
+    IPC namespace. The kernel enforces sandbox rules via Seatbelt profiles. **Code signing** ensures
+    every executable page is signed by an Apple-issued certificate. The **Secure Enclave** is a
+    separate processor (own L4 microkernel) protecting biometric templates and private keys.
+    Entitlements gate hardware access (camera, mic, photos) requiring user consent.
+
+    ### Keychain Services
+
+    The Keychain is encrypted at rest with hardware keys derived from the device's UID burned
+    into the Secure Enclave. Data is transparently decrypted with the matching access policy.
+
+    ```swift
+    import Security
+    import LocalAuthentication
+
+    struct KeychainManager {
+        static func saveBiometricSecret(_ secret: Data, for account: String) throws {
+            let accessControl = SecAccessControlCreateWithFlags(
+                nil,
+                kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                .biometryCurrentSet,
+                nil
+            )
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: account,
+                kSecValueData as String: secret,
+                kSecAttrAccessControl as String: accessControl!,
+                kSecUseAuthenticationContext as String: LAContext(),
+            ]
+            SecItemDelete(query as CFDictionary)
+            guard SecItemAdd(query as CFDictionary, nil) == errSecSuccess else {
+                throw KeychainError.saveFailed
+            }
+        }
+
+        static func readSecret(for account: String) throws -> Data {
+            let query: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrAccount as String: account,
+                kSecReturnData as String: true,
+                kSecUseAuthenticationContext as String: LAContext(),
+            ]
+            var item: CFTypeRef?
+            guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+                  let data = item as? Data else {
+                throw KeychainError.readFailed
+            }
+            return data
+        }
+    }
+
+    enum KeychainError: Error {
+        case saveFailed, readFailed
+    }
+    ```
+
+    Use `kSecAttrAccessibleWhenUnlockedThisDeviceOnly` as the baseline — encrypted while locked,
+    excluded from iCloud backup. `kSecClass` supports `GenericPassword`, `InternetPassword`,
+    `Certificate`, `Key`, and `Identity`.
+
+    <Callout title="Keychain Over UserDefaults for Secrets">
+      `UserDefaults` stores data as plaintext PLIST files, readable on jailbroken devices.
+      Even base64 encoding is trivially reversible. Keychain encrypts with hardware-backed keys,
+      supports biometric access control, and survives app deletion (unless
+      `ThisDeviceOnly` is omitted). Never store OAuth tokens or API keys in `UserDefaults`.
+    </Callout>
+
+    ### App Transport Security (ATS)
+
+    ATS requires TLS 1.2+ with forward secrecy and strong AEAD ciphers. Exceptions go in
+    `Info.plist`. Avoid `NSAllowsArbitraryLoads` — it disables ATS entirely and triggers
+    App Store review rejection without a justified `Info.plist` comment.
+
+    ### Certificate Pinning
+
+    Use **TrustKit** to pin server certificates by public key hash. Ship at least two hashes
+    (current + backup) to enable rotation without breaking existing clients.
+
+    ```swift
+    import TrustKit
+
+    TrustKit.initSharedInstance(withConfiguration: [
+        kTSKSwizzleNetworkDelegates: false,
+        kTSKPinnedDomains: [
+            "api.example.com": [
+                kTSKExpirationDate: "2025-12-01",
+                kTSKPublicKeyHashes: [
+                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                    "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+                ],
+                kTSKEnforcePinning: true,
+            ]
+        ]
+    ])
+    ```
+
+    ### Biometric Authentication
+
+    `LocalAuthentication` evaluates Face ID/Touch ID without exposing biometric data to the app.
+
+    ```swift
+    func authenticateUser() async -> Bool {
+        let context = LAContext()
+        context.localizedReason = "Unlock your data"
+
+        guard context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) else {
+            return false
+        }
+        return (try? await context.evaluatePolicy(
+            .deviceOwnerAuthenticationWithBiometrics,
+            localizedReason: "Unlock your data"
+        )) == true
+    }
+    ```
+
+    Prefer `.deviceOwnerAuthentication` (biometrics + passcode fallback) over
+    `.deviceOwnerAuthenticationWithBiometrics` alone — it provides a fallback on failure.
+
+    ### DeviceCheck and App Attest
+
+    **DeviceCheck** provides two per-device, per-developer bits for fraud prevention (promotion
+    abuse, trial reset detection). **App Attest** (DCAppAttestService) proves the app is a
+    genuine Apple-signed binary on a genuine device — the attestation key lives in the Secure
+    Enclave and is verifiable server-side via Apple's verification API.
+
+    ### Data Protection
+
+    File-level encryption uses per-file keys wrapped with the device hardware key. Four levels:
+    `NSFileProtectionComplete` (locked = inaccessible), `CompleteUnlessOpen`, `CompleteUntilFirstUserAuthentication`
+    (accessible after first boot unlock), and `None`. Apply via `FileManager` attributes.
+
+    ### Cross-Platform Comparison
+
+    Android **Keystore** parallels iOS Keychain — both provide hardware-backed key storage.
+    Android's key attestation (TEE-based) equates to App Attest. Flutter's `flutter_secure_storage`
+    wraps iOS Keychain and Android Keystore/EncryptedSharedPreferences. iOS sandboxing is more
+    restrictive than Android's intent-based IPC model, making iOS apps inherently more isolated.

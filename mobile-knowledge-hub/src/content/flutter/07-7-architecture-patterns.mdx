@@ -1,0 +1,148 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+
+    <StatGrid columns={3}>
+      <StatItem value="Clean Architecture" label="Layered separation: Data / Domain / Presentation" />
+      <StatItem value="MVVM" label="ChangeNotifier + Consumer for ViewModel pattern" />
+      <StatItem value="MVI" label="Sealed Intents + immutable ViewState for predictability" />
+    </StatGrid>
+
+    ### Clean Architecture: Layer-by-Layer
+
+    The **Domain layer** is pure Dart with zero Flutter dependency — entities and use cases live here, fully unit-testable without a widget harness. The **Data layer** implements repository interfaces from Domain, bridging remote sources (Dio) and local sources (Hive/Drift) through DTOs. The **Presentation layer** holds widgets and state management. Dependencies point inward: `Data -> Domain <- Presentation`.
+
+    ```dart
+    lib/
+      core/          // shared constants, errors, network client
+      domain/
+        entities/    // User, Product (pure Dart)
+        use_cases/   // GetUserProfile (single-responsibility classes)
+        repositories/ // abstract interfaces
+      data/
+        repositories/ // concrete implementations
+        datasources/  // remote (API), local (DB)
+        models/       // DTOs with JSON serialization
+      presentation/
+        screens/     // page-level widgets
+        providers/   // Riverpod / ChangeNotifier / BLoC
+    ```
+
+    ### Use Case + Repository Examples
+
+    ```dart
+    class GetUserProfile {
+      final UserRepository _repo;
+      GetUserProfile(this._repo);
+      Future<Either<Failure, User>> call(String userId) async {
+        try {
+          return Right(await _repo.fetchUser(userId));
+        } on NetworkException catch (e) {
+          return Left(ServerFailure(message: e.message));
+        }
+      }
+    }
+
+    // domain/repositories/user_repository.dart
+    abstract class UserRepository {
+      Future<User> fetchUser(String id);
+    }
+
+    // data/repositories/user_repository_impl.dart
+    class UserRepositoryImpl implements UserRepository {
+      final UserRemoteDataSource _remote;
+      final UserLocalDataSource _local;
+      UserRepositoryImpl(this._remote, this._local);
+
+      @override
+      Future<User> fetchUser(String id) async {
+        try {
+          final dto = await _remote.fetchUser(id);
+          await _local.cacheUser(dto); return dto.toEntity();
+        } on Exception {
+          final cached = await _local.fetchUser(id);
+          if (cached == null) rethrow;
+          return cached.toEntity();
+        }
+      }
+    }
+    ```
+
+    ### MVVM with ChangeNotifier
+
+    ```dart
+    class ProfileViewModel extends ChangeNotifier {
+      final GetUserProfile _getUserProfile;
+      ProfileViewModel(this._getUserProfile);
+
+      ProfileState _state = ProfileState.initial();
+      ProfileState get state => _state;
+
+      Future<void> loadProfile(String userId) async {
+        _state = _state.copyWith(isLoading: true); notifyListeners();
+        final result = await _getUserProfile(userId);
+        result.fold(
+          (failure) => _state = _state.copyWith(isLoading: false, error: failure.message),
+          (user) => _state = _state.copyWith(isLoading: false, user: user),
+        );
+        notifyListeners();
+      }
+    }
+    ```
+
+    Bind via `Consumer<ProfileViewModel>` wrapped in `ChangeNotifierProvider`. The ViewModel is created by DI and scoped to the route.
+
+    ### MVI: Sealed Intents + Immutable ViewState
+
+    ```dart
+    @freezed
+    class ProfileViewState with _$ProfileViewState {
+      const factory ProfileViewState({
+        @Default(false) bool isLoading, User? user, String? error,
+      }) = _ProfileViewState;
+    }
+    @freezed
+    sealed class ProfileIntent with _$ProfileIntent {
+      const factory ProfileIntent.load(String userId) = LoadProfile;
+      const factory ProfileIntent.refresh() = RefreshProfile;
+    }
+    ```
+
+    Intents flow to a reducer producing new state. Every UI state is an explicit case — the widget is a pure function: `state.when(...)`. Testing becomes enumerating each state and asserting the render output.
+
+    ```
+        ┌─────────────┐      Intents       ┌──────────────┐
+        │   Widget     │ ──────────────►   │  ViewModel   │
+        │ (renders)    │                   │  (reducer)   │
+        │              │ ◄──────────────── │              │
+        └─────────────┘     ViewState      └──────┬───────┘
+                                                  │
+                                           ┌──────┴───────┐
+                                           │  Use Cases   │
+                                           │  + Repos     │
+                                           └──────────────┘
+    ```
+
+    <DecisionMatrix
+      scores={[
+        { label: "Clean Architecture", score: 5 },
+        { label: "MVVM", score: 3 },
+        { label: "MVI", score: 4 },
+      ]}
+      pros="Clean Architecture: best for large teams, strict layer separation, testability. MVI: explicit state for complex screens."
+      cons="Clean Architecture: heavy boilerplate for simple apps. MVVM: god-class risk. MVI: steep learning curve, more files."
+    />
+
+    <Callout title="Anti-Pattern: Framework Leakage">
+      Never import `package:flutter/` into your domain layer. If you need `BuildContext`, pass primitives through method parameters — context belongs in presentation. Don't mix patterns in a single screen: pick one and apply consistently.
+    </Callout>
+
+    ### Testing Each Layer
+
+    - **Domain**: Pure unit tests — mocked repo interfaces via Mocktail, no widget binding.
+    - **Data**: Test impls against a fake in-memory data source. Verify entity mapping and error branches.
+    - **Presentation**: Widget tests with `pumpWidget` and overridden providers. For MVI, assert resulting state per intent.
+
+    ### Comparison: React Native / Native Android
+
+    React Native lacks a built-in layered architecture — teams adopt Redux-Saga or MobX, close to MVI but with no compile-time enforcement. Native Android Clean Architecture uses the same three-layer pattern with Repository interfaces and use cases, nearly identical to Flutter. Differences: Android uses Hilt/Dagger for DI (Flutter uses GetIt/Riverpod), and Android's ViewModel survives config changes natively while Flutter must scope state explicitly via `ProviderScope`.

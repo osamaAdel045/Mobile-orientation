@@ -1,0 +1,141 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      ### Dependency Injection on iOS
+
+      Apple provides no official DI framework — unlike Android's Hilt, there is no compile-time
+      annotation processor for dependency graphs. The community uses SwiftUI's `@Environment`,
+      container-based frameworks (Factory, Resolver), or pure protocol-based manual injection.
+
+      <StatGrid columns={4}>
+        <StatItem value="@Environment" label="SwiftUI Built-In" />
+        <StatItem value="Factory" label="Compile-Time Safe" />
+        <StatItem value="Resolver" label="Runtime Container" />
+        <StatItem value="Protocol" label="Manual Injection" />
+      </StatGrid>
+
+      ### @Environment — SwiftUI Built-In
+
+      Populated via `.environment()` on the root view. Best for cross-cutting concerns. Each
+      key requires an `EnvironmentKey` struct and `EnvironmentValues` extension.
+
+      ```swift
+      struct AuthServiceKey: EnvironmentKey {
+          static let defaultValue: AuthServiceProtocol = AuthService()
+      }
+
+      extension EnvironmentValues {
+          var authService: AuthServiceProtocol {
+              get { self[AuthServiceKey.self] }
+              set { self[AuthServiceKey.self] = newValue }
+          }
+      }
+
+      struct ProfileView: View {
+          @Environment(\.authService) private var authService
+          var body: some View {
+              Button("Logout") { Task { await authService.logout() } }
+          }
+      }
+
+      @main
+      struct MyApp: App {
+          var body: some Scene {
+              WindowGroup {
+                  ContentView().environment(\.authService, MockAuthService())
+              }
+          }
+      }
+      ```
+
+      ### Factory and Resolver
+
+      Factory (pointfreeco) uses Swift macros for compile-time safety — a missing registration
+      produces a compiler error. Supports `.singleton`, `.cached`, and `.unique` scopes.
+
+      ```
+        @Injected(\.authService) ──> Container Factory ──> Scope check
+                                   (singleton/cached/unique) ──> Instance
+      ```
+
+      ```swift
+      import Factory
+
+      extension Container {
+          var authService: Factory<AuthServiceProtocol> { self { AuthService() }.singleton }
+          var loginViewModel: Factory<LoginViewModel> { self { LoginViewModel() } }
+      }
+
+      final class LoginViewModel {
+          @Injected(\.authService) private var authService
+          func login(email: String, password: String) async throws {
+              _ = try await authService.login(email: email, password: password)
+          }
+      }
+
+      // Test: Container.shared.authService.register { MockAuthService() }
+      ```
+
+      Resolver uses `@Injected` with runtime resolution — a misspelled service crashes at
+      runtime rather than compile time. Scopes: `.application`, `.cached`, `.shared`, `.unique`.
+
+      ### Protocol-Based Manual DI
+
+      Inject through initializer parameters. Zero framework dependencies, zero runtime
+      overhead. Works identically in SwiftUI, UIKit, and tests.
+
+      ```swift
+      final class SearchViewModel {
+          private let service: SearchServiceProtocol
+          init(service: SearchServiceProtocol = SearchService()) { self.service = service }
+          func search(_ text: String) async throws -> [SearchResult] {
+              try await service.query(text)
+          }
+      }
+
+      // Production: let vm = SearchViewModel()
+      // Test: let vm = SearchViewModel(service: MockSearchService())
+      ```
+
+      <Callout title="No Official Apple DI Framework">
+        Unlike Android's Hilt (compile-time Dagger generation via annotation processing),
+        Apple leaves DI to developers. Swift's protocol-oriented design and default initializer
+        parameters make manual DI practical without a framework. Choose Factory when you need
+        scoped containers; choose protocol-based DI for zero dependencies.
+      </Callout>
+
+      ### Testing with DI
+
+      Factory's `Container.shared.reset()` clears overrides between test cases. Resolver
+      requires `Resolver.reset()` in setUp/tearDown. Protocol-based DI needs no reset.
+
+      ```swift
+      import Testing
+      struct LoginViewModelTests {
+          @Test func login_success() async throws {
+              let vm = LoginViewModel(authService: MockAuthService())
+              try await vm.login(email: "a@b.com", password: "pwd")
+              // assert mock state
+          }
+      }
+      ```
+
+      ### Common Pitfalls
+
+      **Over-abstraction**: Defining protocols for every dependency adds indirection without
+      benefit. Apply protocols only where testing requires polymorphism. **Singleton ViewModels**:
+      Shared state leaks across users — ViewModels should be `.unique`. **Service locator**:
+      Global `ServiceLocator.shared.resolve()` creates hidden dependencies invisible at the
+      call site, violating Inversion of Control.
+
+      ### iOS-Specific Insight
+
+      Swift's `@MainActor` annotation pairs naturally with DI — annotate a service protocol
+      method as `@MainActor` and conformance is enforced at compile time. No other platform's
+      DI framework offers actor-based threading guarantees as a built-in language feature.
+
+      ### Cross-Platform Comparison
+
+      Android Hilt generates Dagger components at compile time — heavier setup, zero runtime
+      resolution overhead. Flutter's GetIt is a service locator like Resolver. Kotlin's Koin
+      uses DSL-based module definitions with runtime resolution. Swift's protocol-based manual
+      DI requires no framework, annotations, or code generation.

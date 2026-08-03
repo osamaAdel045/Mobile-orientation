@@ -1,0 +1,125 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    ### AI-Assisted Android Development with Gemini in Android Studio
+
+    Google's Gemini model integration in Android Studio — evolved from the original Studio Bot — provides context-aware code generation and refactoring tuned for the Android SDK, Jetpack libraries, and Kotlin idioms. The model indexes Gradle configuration, manifest, and ProGuard rules to ground suggestions in your specific project.
+
+    <StatGrid columns={3}>
+        <StatItem value="2.5x" label="Faster boilerplate generation" />
+        <StatItem value="85%" label="Room DAO generation accuracy" />
+        <StatItem value="40%" label="Time saved on View-to-Compose migrations" />
+        <StatItem value="70%" label="Unit test skeleton accuracy" />
+        <StatItem value="2024" label="Stable Gemini-in-Studio release" />
+        <StatItem value="90%" label="Simple layout conversion accuracy" />
+    </StatGrid>
+
+    ### How Gemini Contextualizes Your Project
+
+    Gemini indexes build.gradle.kts dependencies to infer which DI framework, networking library, and database solution you use. When you request a ViewModel, it generates one using your project's Hilt or Koin setup rather than a generic template.
+
+    <Callout title="AI-Generated Code Requires Active Validation">
+        Gemini frequently suggests deprecated APIs from training data predating the latest platform releases. It cannot distinguish an API available since API 26 from one removed in API 34. Always verify imports against official docs, run lint, and test on your minimum SDK. Never assume correctness from syntactical validity alone.
+    </Callout>
+
+    ### Jetpack Compose UI Generation
+
+    The model generates Material 3 composables from natural language descriptions with high accuracy for standard patterns:
+
+    ```kotlin
+    {
+    @Composable
+    fun ProfileHeader(
+        avatarUrl: String?,
+        displayName: String,
+        email: String,
+        onAvatarClick: () -> Unit,
+        modifier: Modifier = Modifier
+    ) {
+        Card(
+            modifier = modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainer
+            )
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(MaterialTheme.dimension.level3),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                AsyncImage(
+                    model = avatarUrl ?: R.drawable.default_avatar,
+                    contentDescription = "Profile photo",
+                    modifier = Modifier.size(64.dp).clip(CircleShape).clickable(onClick = onAvatarClick),
+                    contentScale = ContentScale.Crop
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Column {
+                    Text(text = displayName, style = MaterialTheme.typography.titleMedium)
+                    Text(text = email, style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+    }
+    ```
+
+    ### Room DAO Generation
+
+    DAO interfaces follow such rigid SQL patterns that AI achieves approximately 85% first-pass correctness:
+
+    ```kotlin
+    {
+    @Dao
+    interface TaskDao {
+        @Query("""
+            SELECT * FROM tasks WHERE deleted_at IS NULL
+            ORDER BY CASE WHEN priority = 'HIGH' THEN 0
+                     WHEN priority = 'MEDIUM' THEN 1 ELSE 2 END,
+                due_date ASC
+        """)
+        fun getActiveTasksPrioritized(): Flow<List<Task>>
+
+        @Query("SELECT * FROM tasks WHERE id = :taskId")
+        suspend fun getTaskById(taskId: String): Task?
+
+        @Insert(onConflict = OnConflictStrategy.REPLACE)
+        suspend fun upsertTask(task: Task)
+
+        @Query("UPDATE tasks SET deleted_at = :ts WHERE id = :taskId")
+        suspend fun softDeleteTask(taskId: String, ts: Long = System.currentTimeMillis())
+    }
+    }
+    ```
+
+    ### View-to-Compose Migration
+
+    AI conversion accuracy follows a clear gradient by layout complexity:
+
+    ```text
+    ┌─────────────────────────────────────────────────────────────┐
+    │              View-to-Compose Migration Accuracy             │
+    ├──────────────┬───────────────┬──────────────┬──────────────┤
+    │  Simple      │  RecyclerView│  Constraint  │  Custom View │
+    │  LinearLayout│  + Adapter   │  Layout      │  (Canvas)    │
+    ├──────────────┼───────────────┼──────────────┼──────────────┤
+    │  90%+ auto   │  60-70% auto │  50-60% auto│  30-40% auto │
+    │  + review    │  + rewrite   │  + manual    │  + full      │
+    │              │  diff util   │  barrier fix │  rewrite     │
+    └──────────────┴───────────────┴──────────────┴──────────────┘
+    ```
+
+    ### Test Scaffolding
+
+    Gemini produces unit test skeletons using your project's testing libraries — MockK, Robolectric, or Compose UI Test — with approximately 70% first-pass accuracy. Always verify mocking logic and edge cases manually.
+
+    ### Critical Limitations Specific to Android
+
+    API fragmentation creates unique issues for AI generation. Training data may reference API 26-30 solutions while your minimum SDK is 33, surfacing `AsyncTask`, deprecated `Handler` usage, or pre-Compose lifecycle patterns. The model lacks awareness of device-specific capabilities — foldable displays, stylus input, and automotive SDK extensions require human expertise. Cross-platform AI tools generate generic widget code that ignores Android-specific accessibility and hardware acceleration.
+
+    ### Best Practices for AI-Assisted Android Development
+
+    - Specify the minimum API level in your prompt: "using only APIs available since API 33"
+    - Run Android lint (`./gradlew lint`) on all AI-generated code
+    - Generate DAOs and repository interfaces first; they have the highest accuracy
+    - Never accept AI-generated ProGuard rules or manifest permissions without review
+    - Use AI for Compose Preview generation to validate layout before wiring business logic

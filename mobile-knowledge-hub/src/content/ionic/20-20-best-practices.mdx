@@ -1,0 +1,92 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Plugin Standard" value="Capacitor 6+" description="Actively maintained; Cordova is legacy, avoid new projects on it" />
+  <StatItem label="Animation Engine" value="GPU-Composited" description="Use transform/opacity only; never animate top/left/width/height" />
+  <StatItem label="Lazy Loading" value="Route-Level" description="Code-split every route; do not load all page JS at startup" />
+  <StatItem label="Real Device Testing" value="Non-Negotiable" description="WebView differences: iOS WKWebView vs Android System WebView" />
+</StatGrid>
+
+### Capacitor Over Cordova
+
+Cordova plugins are legacy. Capacitor is the actively maintained successor with better performance, a modern plugin API, direct npm dependency management, and first-class support for Angular, React, and Vue. Capacitor plugins are proper npm packages with TypeScript definitions; Cordova plugins required `window.plugins` access with no type safety. Any new Ionic project should use Capacitor exclusively. Migration from Cordova to Capacitor is possible via `npx cap init` with a Cordova compatibility layer, but start fresh if possible.
+
+### Lazy Load Every Route
+
+Every page in an Ionic app must be lazy-loaded. Angular uses `loadChildren` in the route config. React uses `React.lazy` with dynamic `import()`. This shrinks the initial JavaScript bundle to only the code needed for the first view. Without lazy loading, users on slower networks wait for the entire app to download before seeing anything.
+
+```typescript
+// Angular — lazy-load each page module
+const routes: Routes = [
+  {
+    path: 'profile',
+    loadChildren: () => import('./profile/profile.module')
+      .then(m => m.ProfilePageModule)
+  }
+];
+
+// React — lazy-load with Suspense
+const Profile = React.lazy(() => import('./pages/Profile'));
+```
+
+### Virtual Scroll for Large Lists
+
+Rendering hundreds of list items with `*ngFor` or `.map()` causes frame drops from excessive DOM nodes. Use `ion-virtual-scroll` or a modern windowing library (like `@tanstack/virtual`) that renders only the visible viewport items plus a small overscan buffer. For Angular, `ion-virtual-scroll` integrates directly with Ionic's scroll container.
+
+```typescript
+// Angular template with virtual scroll
+<ion-virtual-scroll [items]="largeList" approxItemHeight="48px">
+  <ion-item *virtualItem="let item">
+    <ion-label>{{ item.name }}</ion-label>
+    <ion-note slot="end">{{ item.category }}</ion-note>
+  </ion-item>
+</ion-virtual-scroll>
+```
+
+### Hardware-Accelerated Animations
+
+Ionic animations must only animate `transform` and `opacity`. These properties are GPU-composited in both WKWebView and Android System WebView. Properties like `top`, `left`, `width`, `height`, and `margin` trigger layout recalculations that run on the CPU, causing jank on mid-range and low-end devices.
+
+```
+GPU-composited (60 fps)     CPU-triggered (jank)
+   transform: translateX()     top / left / right / bottom
+   transform: scale()          width / height
+   opacity                     margin / padding
+                               border-width
+```
+
+### iOS-Specific Performance
+
+iOS WKWebView has distinct performance characteristics. Heavy DOM trees (thousands of elements) cause noticeable scroll jank that does not appear in Safari on desktop. The fix is aggressive DOM pruning — destroy offscreen components, limit `*ngFor` output, and use Angular `trackBy` or React `key` on list iterators to minimize reconciliation work.
+
+<Callout type="tip">
+  On iOS, absolutely positioned elements with `z-index` create compositing layers that WKWebView must manage independently. Minimize the number of compositing layers — each one consumes GPU memory and can trigger layer resizing on scroll. Use `will-change: transform` sparingly and only on elements that actually animate. On Android, overly broad `will-change` declarations can paradoxically decrease performance by consuming memory for layers that never change.
+</Callout>
+
+### Native Plugins for Heavy Work
+
+CPU-intensive operations — image processing, cryptographic hashing, barcode scanning, face detection — must execute in native code via a Capacitor plugin. JavaScript in the WebView runs on a single thread. Offloading heavy work to Kotlin (Android) or Swift (iOS) keeps the UI at 60 fps and avoids blocking user interaction. The Capacitor plugin bridge is minimal overhead for coarse-grained operations.
+
+### PWA as Companion
+
+Every Ionic app is also a PWA by default when you add `@angular/pwa` or configure a service worker. Users who cannot or will not install from an app store can use the PWA version in their browser. The PWA lacks native plugin capabilities — no camera, push notifications, or biometrics — but provides the same UI and core functionality. This is especially valuable for enterprise BYOD scenarios where app store installation is restricted by policy.
+
+### Test on Real Devices Early
+
+WebView behavior diverges between platforms. iOS WKWebView uses Nitro (Safari's engine); Android System WebView uses Chrome's engine. CSS rendering, scroll physics, memory limits, and font rendering all differ. The iOS simulator and Android emulator are close approximations but not exact. Use BrowserStack, Firebase Test Lab, or an in-house device lab to catch platform-specific rendering bugs before release.
+
+### Common Prevention Patterns
+
+The most frequent mistakes in production Ionic apps are: not wrapping the app root in `<ion-app>`, overusing `ion-infinite-scroll` in flat lists (use virtual scroll), storing page state in `window` or global variables that survive navigation, and failing to clean up Capacitor plugin event listeners in `ngOnDestroy` (Angular) or `useEffect` cleanup functions (React). Capacitor listeners on the native side can cause memory leaks if not removed when the page leaves the navigation stack. Always pair `addListener` with `removeAllListeners` in lifecycle teardown.
+
+### Comparison: Capacitor 6 vs Cordova
+
+<DecisionMatrix
+  items={[
+    { area: "Plugin Management", capacitor6: "npm package, TypeScript types", cordova: "window.plugins, no types" },
+    { area: "Maintenance Status", capacitor6: "Active (2026, regular releases)", cordova: "Minimal maintenance; effectively frozen" },
+    { area: "Framework Support", capacitor6: "Angular/React/Vue first-class", cordova: "Works with any, no integrations" },
+    { area: "Live Reload / HMR", capacitor6: "Built-in via npx cap run", cordova: "Third-party tools required" },
+    { area: "Plugin Authoring", capacitor6: "TypeScript + Swift/Kotlin", cordova: "Java / Objective-C only" },
+  ]}
+/>

@@ -1,0 +1,119 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={4}>
+        <StatItem value="Xcode" label="IDE" />
+        <StatItem value="SPM" label="Package Manager" />
+        <StatItem value=".xcodeproj" label="Project File" />
+        <StatItem value=".xcworkspace" label="Workspace" />
+      </StatGrid>
+
+      ### Xcode Project Anatomy
+
+      An iOS project is defined by three interrelated file types:
+
+      - **`.xcodeproj`** — A directory containing `project.pbxproj` (legacy plist format).
+        Stores build settings, file references, target definitions, build phases (Sources,
+        Resources, Frameworks, Scripts), and scheme configurations. Xcode 16 still uses
+        this format despite the shift toward Swift Package Manager for dependencies.
+      - **`.xcworkspace`** — Groups one or more `.xcodeproj` files and SPM package references.
+        Required whenever you use CocoaPods (which creates a `Pods.xcodeproj`) or have
+        multiple interdependent Xcode projects. The workspace resolves shared build settings
+        and enforces build order.
+      - **`Package.swift`** — The SPM manifest. Defines library targets, executable targets,
+        dependencies (remote git URLs with version pins), and product exports. Since Xcode 12,
+        SPM packages can be integrated without an `.xcodeproj` wrapper.
+
+      ### Target Organization
+
+      Every project contains one or more **targets**, each producing exactly one product.
+      The three standard targets: the **app target** (produces `.app`), the **unit test
+      target** (`XCTest` or Swift Testing), and the **UI test target** (`XCUITest`). In
+      a modular setup, each SPM library target also has its own test target.
+
+      ```swift
+      // Package.swift — multi-module iOS app
+      // swift-tools-version: 5.9
+      import PackageDescription
+
+      let package = Package(
+          name: "OrientationApp",
+          platforms: [.iOS(.v17)],
+          products: [
+              .library(name: "AppFeature", targets: ["AppFeature"]),
+              .library(name: "NetworkCore", targets: ["NetworkCore"]),
+          ],
+          dependencies: [
+              .package(url: "https://github.com/pointfreeco/swift-composable-architecture",
+                       from: "1.12.0"),
+          ],
+          targets: [
+              .target(name: "AppFeature", dependencies: ["NetworkCore",
+                  .product(name: "ComposableArchitecture", package: "swift-composable-architecture")]),
+              .target(name: "NetworkCore"),
+              .testTarget(name: "NetworkCoreTests", dependencies: ["NetworkCore"]),
+          ]
+      )
+      ```
+
+      ### Info.plist and Entitlements
+
+      **Info.plist** is bundled inside the `.app` wrapper. Essential keys: `CFBundleIdentifier`
+      (reverse-DNS), `CFBundleShortVersionString` (marketing version), `CFBundleVersion`
+      (build number), `UIRequiredDeviceCapabilities` (`arm64`, `metal`), `UISupportedInterfaceOrientations`,
+      and privacy usage descriptions (`NSFaceIDUsageDescription`). Missing a privacy usage
+      description causes a hard crash on iOS 10+ when the API is called.
+
+      **Entitlements (.entitlements)** declare capabilities requiring Apple approval:
+      `com.apple.developer.icloud-container-identifiers` (iCloud), `aps-environment`
+      (push notifications), `com.apple.developer.associated-domains` (Universal Links).
+      The provisioning profile must include the same entitlements or App Store
+      submission is rejected.
+
+      ### Asset Catalogs and Localization
+
+      Asset catalogs (`.xcassets`) bundle images, app icons, colors, and SF Symbols. Xcode
+      slices assets by device family, screen scale (`@2x`, `@3x`), and idiom — the compiler
+      emits a binary with name-based lookup. Use `UIImage(named:)` or `Image(_:)` — no
+      path strings.
+
+      iOS 15+ Strings Catalogs (`.xcstrings` JSON) replace legacy `.strings` files. SwiftUI's
+      `Text("Hello")` reads from the catalog automatically — no `NSLocalizedString` needed.
+
+      ### Multi-Module Architecture with SPM
+
+      ```
+      OrientationApp.xcworkspace/
+      ├── OrientationApp/              ← Thin app target (AppDelegate + SceneDelegate)
+      ├── Packages/
+      │   ├── AppFeature/              ← Root feature
+      │   │   ├── Sources/AppFeature/
+      │   │   ├── Sources/NetworkCore/ ← HTTP, caching
+      │   │   └── Sources/StorageCore/ ← SwiftData, Keychain
+      │   ├── AuthFeature/             ← Login, SignUp, Biometric
+      │   ├── SettingsFeature/         ← Settings UI, about
+      │   └── UIComponents/            ← Shared design system
+      └── project.yml                  ← XcodeGen spec (version-controlled)
+      ```
+
+      Each SPM package is a git repository. The workspace ensures build order: if
+      `AppFeature` depends on `NetworkCore`, Xcode builds `NetworkCore` first. Incremental
+      builds recompile only changed packages.
+
+      <Callout title="XcodeGen for Reproducible Builds">
+        `.xcodeproj` is notoriously merge-conflict-prone — the plist changes on every file
+        add/remove and build setting toggle. **XcodeGen** generates `.xcodeproj` from a
+        `project.yml` spec that you version control. The spec declares targets,
+        dependencies, build settings, and resource tags in human-readable YAML. Every
+        developer runs `xcodegen generate` and code reviews of project structure become
+        5-line YAML diffs instead of 300-line plist diffs. XcodeGen is standard in teams
+        of 5+ iOS engineers. Alternatives: Tuist (Swift-based DSL) and `xcschemes`.
+      </Callout>
+
+      ### Cross-Platform Comparison
+
+      Android's **Gradle multi-module** setup is similar: each module has a `build.gradle.kts`
+      file and declares dependencies. Gradle's task graph ensures build ordering. Key
+      difference: Gradle modules compile independently (Kotlin/JVM), while SPM packages
+      compile together via WMO — any file can be inlined into any other in the same module.
+      Android Studio's Gradle sync is instant; Xcode's SPM resolution clones remote
+      packages and can take 30-60 seconds on first open.

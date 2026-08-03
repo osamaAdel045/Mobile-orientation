@@ -1,0 +1,136 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      ### Navigation in iOS
+
+      SwiftUI's navigation evolved from imperative push/pop to fully declarative, data-driven
+      routing in iOS 16+. Choosing the right container depends on device idiom, navigation
+      depth, and whether deep linking is required.
+
+      <StatGrid columns={4}>
+        <StatItem value="NavigationStack" label="Declarative Stack" />
+        <StatItem value="NavigationSplitView" label="Sidebar + Detail" />
+        <StatItem value="TabView" label="Tab Navigation" />
+        <StatItem value="Deep Links" label="URL + Universal" />
+      </StatGrid>
+
+      ### NavigationStack (iOS 16+)
+
+      `NavigationStack` replaces the deprecated `NavigationView`. Each pushed view is
+      associated with a data value via `.navigationDestination(for:)`. `NavigationPath` is a
+      type-erased `Hashable` stack — Codable conformance enables state restoration.
+
+      ```swift
+      enum AppRoute: Hashable {
+          case home, settings
+          case detail(id: UUID)
+          case profile(userID: String)
+      }
+
+      struct ContentView: View {
+          @State private var path = NavigationPath()
+
+          var body: some View {
+              NavigationStack(path: $path) {
+                  List(items) { item in
+                      NavigationLink(value: AppRoute.detail(id: item.id)) {
+                          Text(item.title)
+                      }
+                  }
+                  .navigationDestination(for: AppRoute.self) { route in
+                      switch route {
+                      case .home: HomeView()
+                      case let .detail(id): DetailView(id: id)
+                      case .settings: SettingsView()
+                      case let .profile(userID): ProfileView(userID: userID)
+                      }
+                  }
+                  .navigationTitle("Items")
+              }
+          }
+      }
+      ```
+
+      Appending to `path` pushes a view; removing the last element pops it. Programmatic
+      navigation is trivial: `path.append(AppRoute.settings)`.
+
+      ### NavigationSplitView and TabView
+
+      `NavigationSplitView` provides a sidebar-content-detail three-column layout on iPad and
+      Mac, collapsing to a stack on iPhone. `TabView` remains standard for bottom-tab iPhone
+      navigation; `.tabViewStyle(.sidebarAdaptable)` (iOS 18+) presents tabs as a sidebar on
+      iPad automatically.
+
+      ```swift
+      TabView {
+          HomeView().tabItem { Label("Home", systemImage: "house") }
+          SearchView().tabItem { Label("Search", systemImage: "magnifyingglass") }
+      }
+      .tabViewStyle(.sidebarAdaptable)
+      ```
+
+      ### Deep Linking
+
+      URL Schemes (`myapp://path`) face collision risk. Universal Links use
+      `apple-app-site-association` for verified routing. `NSUserActivity` enables Spotlight
+      indexing and Handoff. Parse URLs into route enums and construct `NavigationPath`.
+
+      ```swift
+      @main
+      struct MyApp: App {
+          var body: some Scene {
+              WindowGroup {
+                  ContentView()
+                      .onOpenURL { url in handleDeepLink(url) }
+              }
+          }
+
+          func handleDeepLink(_ url: URL) {
+              guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+              else { return }
+              // Parse and push onto NavigationPath
+          }
+      }
+      ```
+
+      ### Modal Presentation
+
+      `.sheet` with `.presentationDetents([.medium, .large])` controls sheet height.
+      `.fullScreenCover` for modal flows. `.popover` for iPad popovers.
+
+      ```
+      ┌────────────────────────────────────────────┐
+      │           NavigationStack Flow              │
+      │                                            │
+      │  Root ──push(value:)──> Detail A ──push──> Detail B
+      │    ^                                        │
+      │    └─────────── popLast() ──────────────────┘
+      │                                            │
+      │  NavigationPath: [.home, .detail(id1), ...]│
+      └────────────────────────────────────────────┘
+      ```
+
+      <Callout title="Prefer NavigationStack Over NavigationView">
+        NavigationView is deprecated in iOS 16+. NavigationStack provides type-safe,
+        data-driven navigation, programmatic stack control via NavigationPath, and Codable
+        support for state restoration.
+      </Callout>
+
+      ### Common Pitfalls
+
+      **Double `navigationDestination` for the same type**: Causes a runtime crash. Use a route
+      enum to avoid duplication. **State loss on tab switch**: `TabView` recreates views unless
+      state is stored in an `@Observable` class owned at the app level. **Deep links without a
+      route enum**: Parsing URLs into `@State` booleans does not scale.
+
+      ### iOS-Specific Insight
+
+      UIKit's `UINavigationController` delegate hooks (`willShow`, `didShow`) enable predictive
+      pop gesture customization. NavigationStack sacrifices this granular control for data-driven
+      simplicity — apps needing custom transition controllers must drop to
+      `UIViewControllerRepresentable`.
+
+      ### Cross-Platform Comparison
+
+      Flutter's GoRouter mirrors NavigationStack — route definitions with type-safe path
+      parameters. React Navigation's Stack.Navigator is similar. Android's Jetpack Navigation
+      uses string-based routes, lacking SwiftUI's compile-time type safety for route parameters.

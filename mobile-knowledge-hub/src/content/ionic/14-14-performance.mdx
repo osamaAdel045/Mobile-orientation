@@ -1,0 +1,118 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="iOS JS Engine" value="JSC (No JIT)" />
+  <StatItem label="Android JS Engine" value="V8 (JIT)" />
+  <StatItem label="WebView Overhead" value="50-100MB" />
+  <StatItem label="Cold Start Range" value="1-3s" />
+</StatGrid>
+
+### iOS JIT Restriction -- The Key Bottleneck
+
+Apple's WKWebView runs JavaScript using **JavaScriptCore without Just-In-Time (JIT) compilation**. JIT is disallowed for third-party web views on iOS for security reasons, meaning JavaScript executes in pure interpreter mode. This is the single most important performance constraint for Ionic on iOS.
+
+```
+iOS (JSC, interpreter mode)
+  JS execution: ~2-5x slower than JIT
+  No typed array optimizations
+  No inline caching
+  Every function call = full lookup
+
+Android (V8, JIT + TurboFan)
+  JS execution: near-native for hot paths
+  Full JIT tier-up for frequently-called functions
+  Hidden class transitions optimized
+```
+
+The practical impact: CPU-bound operations in JavaScript (data processing, canvas rendering, sorting large arrays) degrade significantly on iOS compared to Android or desktop Chrome.
+
+### DOM Overhead in WebViews
+
+Ionic apps run inside a full browser engine, which means every UI element is a DOM node. A complex page with 3,000+ DOM nodes consumes measurable CPU time on layout and paint cycles. The critical metric is **frame budget**: at 60fps, each frame has 16ms to complete JS execution, style recalc, layout, paint, and compositing. Exceed 16ms and frames drop.
+
+```typescript
+// Monitoring frame drops
+let frameCount = 0
+let lastTime = performance.now()
+
+function checkFPS() {
+  frameCount++
+  const now = performance.now()
+  if (now - lastTime >= 1000) {
+    const fps = Math.round(frameCount * 1000 / (now - lastTime))
+    if (fps < 55) console.warn(`Frame drop detected: ${fps} FPS`)
+    frameCount = 0
+    lastTime = now
+  }
+  requestAnimationFrame(checkFPS)
+}
+```
+
+<Callout type="info" title="iOS JIT Impact on Frameworks">
+  Angular and React change detection becomes measurably slower on iOS because diffing and reconciliation run as pure interpreted code. Keep component trees shallow (under 200 components) and prefer `OnPush` change detection in Angular or `React.memo` to reduce reconciliation passes.
+</Callout>
+
+### Virtual Scroll for List Performance
+
+Rendering long lists naively creates thousands of DOM nodes. The `ion-virtual-scroll` component (or `ion-list` with modern `virtual-scroll` directives) reuses a small pool of DOM nodes as the user scrolls, recycling them with new data. This keeps DOM node counts flat regardless of list length.
+
+```typescript
+// Angular virtual scroll
+<ion-virtual-scroll [items]="items" approxItemHeight="48px">
+  <ion-item *virtualItem="let item">
+    <ion-label>{{ item.name }}</ion-label>
+  </ion-item>
+</ion-virtual-scroll>
+```
+
+### Lazy Loading and Code Splitting
+
+Route-level code splitting ensures only the JavaScript for the current page loads at startup. Each feature module becomes a separate chunk, fetched on demand.
+
+```typescript
+// Angular lazy routes
+const routes: Routes = [
+  {
+    path: 'settings',
+    loadChildren: () => import('./settings/settings.module')
+      .then(m => m.SettingsPageModule),
+  },
+]
+```
+
+```typescript
+// React lazy + Suspense
+const SettingsPage = lazy(() => import('./pages/Settings'))
+```
+
+Apply the same pattern to images: `loading="lazy"` on `<img>` defers offscreen image loading until the user scrolls near them.
+
+### CSS Containment and Compositing
+
+Use CSS `contain` and `will-change` to hint the browser which elements form independent layout boundaries. This limits style recalculation to isolated subtrees rather than the full document.
+
+```css
+ion-item {
+  contain: content;
+}
+
+.scroll-area {
+  contain: strict;
+  will-change: transform;
+}
+```
+
+Animate only `transform` and `opacity`. These properties trigger compositing alone, skipping layout and paint. Animating `width`, `height`, `top`, or `left` forces a full layout cascade.
+
+### Performance Checklist
+
+- **Bundle size**: Keep initial JS payload under 500KB gzipped. Profile with `npx vite build --analyze` or `source-map-explorer`.
+- **iOS JIT workaround**: Offload heavy computation to native plugins or Web Workers. Web Workers run in a separate JSC context and avoid blocking the UI thread.
+- **Image optimization**: Serve WebP format, size images to display dimensions, use `ion-img` for lazy loading.
+- **CSS layers**: Use `@layer` to control cascade resolution order on complex stylesheets.
+- **Minimal watchers**: Angular's zone.js triggers change detection on every async event. Use `NgZone.runOutsideAngular` for scroll handlers and high-frequency events.
+- **Ionic CLI build flags**: `--prod` enables Ahead-of-Time compilation, tree-shaking, and minification.
+```
+npx ionic build --prod
+npx cap sync
+```

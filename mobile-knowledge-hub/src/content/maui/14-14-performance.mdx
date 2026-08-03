@@ -1,0 +1,106 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Cold Start (Debug)" value="2-4s" />
+  <StatItem label="Cold Start (Release/AOT)" value="0.8-1.5s" />
+  <StatItem label="Baseline Memory" value="80-120 MB" />
+  <StatItem label="Min App Size" value="~15 MB" />
+</StatGrid>
+
+### MAUI Startup Performance
+
+MAUI startup involves multiple phases: the .NET runtime initializes the Mono/Unitytrick GC, the BCL assemblies are loaded (JIT-compiled on Android, AOT-precompiled on iOS), XAML is parsed via `XamlC` or the interpreter, and the native platform's `Application` and `MainPage` lifecycle runs. On Android, the Mono runtime performs JIT compilation of IL at cold start, adding 1-3 seconds of overhead. On iOS, Full AOT compiles all IL to native code at build time, reducing the JIT phase to zero but increasing binary size by 30-50%. Use `dotnet trace` with profile `profile-startup` to measure phase timing.
+
+### Startup Phase Timeline
+
+```
+  Launch Application
+       |
+       v
+  Mono/Native Runtime Init (~300ms Android, ~100ms iOS)
+       |
+       v
+  Assembly Load + JIT (Android) or AOT Image (iOS) (~500ms-2s)
+       |
+       v
+  XAML Parsing (XamlC) (~200-500ms)
+       |
+       v
+  App.OnStart + Page Constructor (~100-300ms)
+       |
+       v
+  First Frame Rendered
+```
+
+### CollectionView vs ListView
+
+`CollectionView` is the successor to `ListView`. It uses the same cell virtualization infrastructure but supports grid layouts, horizontal scrolling, and empty views natively. `ListView` remains for simple item lists but lacks `RemainingItemsThreshold` for incremental loading. CollectionView's `ItemsLayout` property switches between `LinearItemsLayout` (vertical/horizontal) and `GridItemsLayout` (N-column grid). Virtualization recycles cells as the user scrolls — verify correct recycling by logging `OnAppearing` on your `DataTemplate` view model.
+
+```csharp
+<CollectionView ItemsSource="{Binding Items}"
+                SelectionMode="Single"
+                RemainingItemsThreshold="5"
+                RemainingItemsThresholdReachedCommand="{Binding LoadMoreCommand}">
+    <CollectionView.ItemsLayout>
+        <GridItemsLayout Orientation="Vertical"
+                         Span="2"
+                         HorizontalItemSpacing="8"
+                         VerticalItemSpacing="8" />
+    </CollectionView.ItemsLayout>
+    <CollectionView.ItemTemplate>
+        <DataTemplate x:DataType="models:ProductItem">
+            <Frame Padding="12" Margin="4">
+                <Label Text="{Binding Name}" />
+            </Frame>
+        </DataTemplate>
+    </CollectionView.ItemTemplate>
+</CollectionView>
+```
+
+### Compiled Bindings with x:DataType
+
+By default, MAUI bindings use reflection at runtime to resolve property paths, which adds overhead per binding evaluation. Compiled bindings (`x:DataType`) resolve properties at compile time via `BindingExpression` source generation. They eliminate reflection, improve cold-start XAML parsing, and produce compile-time errors for invalid property paths.
+
+```csharp
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             xmlns:vm="clr-namespace:MyApp.ViewModels"
+             x:DataType="vm:LoginViewModel">
+    <VerticalStackLayout>
+        <Entry Text="{Binding Username}"
+               Placeholder="Username" />
+        <Entry Text="{Binding Password}"
+               Placeholder="Password" />
+        <Button Text="Login"
+                Command="{Binding LoginCommand}" />
+    </VerticalStackLayout>
+</ContentPage>
+```
+
+Set `x:DataType` at the highest possible level (page or view) to enable cascading compiled bindings for all children. Nested templates require their own `x:DataType` override.
+
+### Memory Management
+
+MAUI apps operate on two heaps: the .NET managed heap (GC-managed, for C# objects) and the native heap (for platform views and Handlers). Each `ContentPage` holds a strong reference to its native `PlatformView` (Android `ViewGroup`, iOS `UIView`). Failing to unsubscribe from MessagingCenter or events creates rooted object graphs that the GC cannot collect, producing native-side leaks. The .NET GC is generational — Gen0 collections are cheap (sub-ms), but Gen2 collections trigger stop-the-world pauses of 10-50ms. Use `dotnet-gcdump` to snapshot the heap and identify `Page` objects still referenced after navigation away.
+
+<Callout type="tip" title="AOT vs JIT on Mobile">
+  iOS enforces Full AOT — no JIT is permitted. All IL is compiled to native ARM64 during the build. This eliminates JIT pause but increases IPA size by roughly 40%. Android defaults to JIT with AOT-on-IDLE (background compilation of hot paths). For Android release builds, `<RunAOTCompilation>true</RunAOTCompilation>` in the `.csproj` produces near-native startup at the cost of larger APK and longer build time (~2x). Profile-guided AOT (`PublishAotUsingProfile`) lets you pre-compile only the methods exercised during a training run.
+</Callout>
+
+### Profiling Approach
+
+For startup profiling: `dotnet trace collect --profile gc-verbose -- .android/app.apk` captures GC events and JIT stats. On Android, the `adb logcat` with `ActivityManager:Displayed` tag reports `Displayed` time — the moment the first frame renders. For runtime profiling, `dotnet-counters monitor --counters System.Runtime` streams CPU, GC, and JIT metrics live. Memory snapshots with `dotnet-gcdump collect` produce `.gcdump` files viewable in Visual Studio or PerfView. XAML hot path analysis: replace `x:DataType` progressively until the slow page renders under 400ms.
+
+### Pitfalls
+
+**Overuse of `Binding` without `x:DataType`:** Every untyped binding triggers reflection per evaluation. On a complex page with 50+ bindings, this can add 200-500ms to page load. **No virtualization in ListView:** `ListView` creates one cell per item regardless of visibility — 500 items means 500 native views. `CollectionView` pools cells. **Image caching:** Loading remote images without caching (e.g., `ImageSource.FromUri`) re-downloads each time. Use FFImageLoading or `UriImageSource` with `CachingEnabled=True`. **Unsubscribed event handlers:** Static events like `MessagingCenter.Subscribe` keep pages alive. Use `WeakReference` or CommunityToolkit.Mvvm's `WeakReferenceMessenger`.
+
+### Framework Insight: MAUI vs Flutter vs Native
+
+| Metric | MAUI | Flutter | Native (Swift/Kotlin) |
+|---|---|---|---|
+| Cold start (flagship, Release) | 1.0-2.0s | 0.5-1.2s | 0.3-0.8s |
+| Baseline memory | 80-120 MB | 50-70 MB | 30-50 MB |
+| App size | 15-25 MB | 8-15 MB | 3-8 MB |
+
+MAUI's runtime overhead comes from the managed execution environment. The GC adds latency spikes on collection and the handler bridge adds a thin marshaling layer. Flutter pays similar managed-language costs (Dart VM), while native apps bypass the runtime layer entirely. For most line-of-business apps, these differences are negligible — the productivity of C# and .NET tooling outweighs the marginal startup cost.

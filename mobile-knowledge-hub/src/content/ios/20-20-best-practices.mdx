@@ -1,0 +1,143 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+        <StatItem value="SwiftUI-First" label="UI Paradigm" />
+        <StatItem value="MVVM + @Observable" label="Architecture" />
+        <StatItem value="Structured Concurrency" label="Async Pattern" />
+        <StatItem value="Accessibility" label="HIG Requirement" />
+    </StatGrid>
+
+    ### iOS Best Practices
+
+    Modern iOS development follows established patterns for architecture, concurrency,
+    accessibility, and platform adaptation — reducing bugs and ensuring App Store
+    compliance.
+
+    #### SwiftUI-First with UIKit Escape Hatches
+
+    Default to SwiftUI for all new projects. Its declarative model, automatic diffing,
+    and multi-platform output (iPhone, iPad, Mac, Watch, Vision Pro) reduce boilerplate
+    significantly. Wrap UIKit views via UIViewRepresentable only when SwiftUI lacks
+    native support — Metal rendering, complex collection layouts, or camera previews.
+
+    ```swift
+    struct MetalView: UIViewRepresentable {
+        let device: MTLDevice
+        func makeUIView(context: Context) -> MTKView {
+            let v = MTKView(frame: .zero, device: device)
+            v.clearColor = MTLClearColorMake(0, 0, 0, 1)
+            return v
+        }
+        func updateUIView(_ v: MTKView, context: Context) {}
+    }
+    ```
+
+    #### MVVM with @Observable (iOS 17+)
+
+    The Observation framework replaces ObservableObject. It tracks reads at the
+    property level so views recompose only when their accessed properties change.
+    This eliminates objectWillChange.send() and reduces unnecessary body evaluations.
+
+    ```swift
+    @Observable
+    final class SearchViewModel {
+        private let repository: ItemRepositoryProtocol
+        var query = ""
+        var results: [Item] = []
+        var isLoading = false
+
+        var filteredResults: [Item] {
+            guard !query.isEmpty else { return results }
+            return results.filter { $0.title.localizedCaseInsensitiveContains(query) }
+        }
+
+        @MainActor
+        func search() async {
+            isLoading = true
+            defer { isLoading = false }
+            results = try? await repository.search(query)
+        }
+    }
+
+    struct SearchView: View {
+        @Bindable private var model: SearchViewModel
+
+        var body: some View {
+            List(model.filteredResults) { item in
+                ItemRow(item: item)
+            }
+            .searchable(text: $model.query)
+            .task { await model.search() }
+            .overlay {
+                if model.isLoading { ProgressView() }
+            }
+        }
+    }
+    ```
+
+    #### Structured Concurrency
+
+    Use async let for fixed-width parallelism and TaskGroup for dynamic fan-out.
+    The .task view modifier binds task lifecycle to view identity — cancelling
+    automatically on disappearance and removing manual task management.
+
+    ```swift
+    @MainActor
+    func loadDashboard() async throws {
+        async let metrics = api.fetchMetrics()
+        async let streaks = api.fetchStreaks()
+        let results = try await (metrics, streaks)
+        self.metrics = results.metrics
+        self.streaks = results.streaks
+    }
+
+    func fetchAll(ids: [UUID]) async throws -> [Item] {
+        try await withThrowingTaskGroup(of: Item.self) { group in
+            for id in ids { group.addTask { try await api.fetch(id) } }
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+    }
+    ```
+
+    #### Swift 6 Strict Concurrency and Sendable
+
+    Enable Strict Concurrency Checking in build settings to catch data races at
+    compile time. Value types conforming to Sendable cross actor boundaries freely;
+    classes require explicit isolation via actors or @unchecked Sendable.
+
+    ```swift
+    struct User: Sendable { let id: UUID; let name: String }
+    actor Cache {
+        private var store: [UUID: Data] = [:]
+        func get(_ key: UUID) -> Data? { store[key] }
+        func set(_ key: UUID, data: Data) { store[key] = data }
+    }
+    ```
+
+    #### Accessibility, Platform Adaptation, Localization
+
+    Every interactive view needs an accessibility label. Dynamic Type scales
+    automatically for system fonts but must be verified for custom fonts. iPad
+    apps use NavigationSplitView; size classes adapt layouts. Semantic colors
+    handle Dark Mode. String Catalogs (.xcstrings) provide compile-time
+    localization validation with plural rules and RTL support.
+
+    ```swift
+    Button(action: play) { Image(systemName: "play.fill") }
+        .accessibilityLabel("Play")
+        .accessibilityAddTraits(.startsMediaSession)
+    ```
+
+    <Callout title="Enable Swift 6 Strict Concurrency in Build Settings">
+        Set Swift Compiler > Strict Concurrency Checking to "Complete" in target
+        build settings. This catches Sendable violations, global actor mismatches,
+        and data isolation errors at compile time before they become runtime races.
+        Mandatory for production apps targeting iOS 17+.
+    </Callout>
+
+    #### Cross-Platform Comparison
+
+    Apple's HIG parallels Android's Material Design. Apple enforces HIG during
+    App Store review, while Android's guidelines are advisory. SwiftUI's layout
+    system parallels Compose and Flutter's widget tree, but SwiftUI's property-
+    level diffing enables more granular recomposition than subtree-diff approaches.

@@ -1,0 +1,112 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={4}>
+        <StatItem value="60 fps" label="Standard Refresh" />
+        <StatItem value="120 fps" label="ProMotion" />
+        <StatItem value="Metal" label="GPU API" />
+        <StatItem value="Core Animation" label="Compositor" />
+      </StatGrid>
+
+      ### The iOS Rendering Pipeline — End to End
+
+      Every frame drawn on an iOS device travels through a well-defined pipeline. Understanding
+      each stage is essential for diagnosing dropped frames, offscreen rendering, or layer
+      corruption during animation.
+
+      ```
+      SwiftUI Path                          UIKit Path
+      ────────────                         ──────────
+      View.body computes attribute values   UIView.setNeedsLayout()
+           ↓                                      ↓
+      AttributeGraph resolves dependencies  Auto Layout (Cassowary solver)
+           ↓                                      ↓
+      ViewGraph diffs old vs new tree       CALayer.geometryFitting → display()
+           ↓                                      ↓
+      Core Animation receives layer props   Core Animation receives CALayer props
+           ↓                                      ↓
+      Render Server (backboardd) composites layers
+           ↓
+      Metal GPU command buffer encodes + submits
+           ↓
+      IOKit framebuffer → Display (60 / 120 Hz)
+      ```
+
+      ### AttributeGraph — SwiftUI's Reactive Engine
+
+      SwiftUI's `View` protocol is a value-type descriptor. When the system renders, it calls
+      `body` on each view. The **AttributeGraph** framework (private, shared with SwiftUI)
+      tracks every property read during `body` evaluation. When a `@State` or `@Observable`
+      property changes, AttributeGraph walks the dependency graph and marks only affected
+      views as dirty. It re-evaluates only those bodies, diffs the returned `View` values
+      against the previous snapshot, and produces a minimal set of **CALayer property mutations**.
+      This is why a list of 10,000 rows with one changed cell re-evaluates only that row.
+
+      ### UIKit Layout — The Cassowary Solver
+
+      UIKit views are backed by `CALayer`. Auto Layout uses the **Cassowary constraint
+      solver** — a simplex-based linear algorithm that computes the minimum-energy layout
+      satisfying all constraints. Each `UIView` resolves to a final `frame` rectangle.
+      Layout is triggered by `setNeedsLayout()` and coalesced by the run loop.
+
+      ```swift
+      import UIKit
+
+      final class CustomRenderView: UIView {
+          override class var layerClass: AnyClass { CAMetalLayer.self }
+
+          private lazy var displayLink: CADisplayLink = {
+              let link = CADisplayLink(target: self, selector: #selector(step))
+              link.add(to: .main, forMode: .common)
+              return link
+          }()
+
+          @objc private func step(_ link: CADisplayLink) {
+              guard let drawable = (layer as! CAMetalLayer).nextDrawable()
+              else { return }
+              // Custom Metal rendering — bypasses Core Animation compositing
+          }
+
+          func startAnimating() { displayLink.isPaused = false }
+      }
+      ```
+
+      ### Core Animation Compositing and ProMotion
+
+      Core Animation receives layer mutations and builds a **frame tree** — a 3D scene graph
+      with position, transform, opacity, corner radius, shadow, and contents. Each layer's
+      backing store is a Metal texture. CA commits its frame tree to the **Render Server**
+      (`backboardd`), a separate system process. If your app crashes, the Render Server
+      holds the last committed frame — the display never goes blank.
+
+      On ProMotion devices (iPad Pro 2017+, iPhone 13 Pro+), the display runs at up to 120 Hz.
+      Use `CADisplayLink.preferredFrameRateRange` (iOS 15+) to adapt dynamically:
+
+      ```swift
+      displayLink.preferredFrameRateRange = CAFrameRateRange(
+          minimum: 60, maximum: 120, preferred: 120
+      )
+      ```
+
+      <Callout title="Offscreen Rendering Performance Trap">
+        Combining `masksToBounds = true` with `layer.cornerRadius` on an animating view with
+        a `backgroundColor` forces Core Animation into an offscreen render pass. It must
+        render the rounded clipping into a separate buffer before compositing — consuming
+        GPU fill rate and VRAM bandwidth. Prefer `layer.cornerCurve = .continuous` with
+        `maskedCorners` over explicit masks, or use SwiftUI's `clipShape(RoundedRectangle(...))`
+        which Metal can fold into a single render pass. Profile with the Core Animation
+        instrument in Xcode and watch the "Offscreen" column.
+      </Callout>
+
+      ### Cross-Platform Comparison
+
+      Flutter's **Impeller** renderer (replacing Skia since Flutter 3.16) compiles shaders
+      at build time, solving "shader compilation jank." Impeller submits its own Metal
+      command buffers directly, replacing Core Animation entirely with a custom compositor.
+      This gives Flutter control but means it cannot participate in system-level layer
+      sharing optimizations.
+
+      React Native's **Yoga** layout engine uses flexbox (single-pass, O(n)) versus Auto
+      Layout's Cassowary (simplex, theoretically O(n!) on degenerate graphs). Yoga runs in
+      JavaScript; every frame's layout values are serialized across the RN bridge to set
+      native CALayer frames — each frame is a bridge hop, which becomes a bottleneck under
+      rapid layout changes.

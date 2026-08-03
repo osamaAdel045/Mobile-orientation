@@ -1,0 +1,128 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="60fps" label="Target frame rate" />
+  <StatItem value="75%" label="Hermes memory reduction vs JSC" />
+  <StatItem value="3x" label="Fabric layout sync speed over Bridge" />
+</StatGrid>
+
+### Performance Pipeline Architecture
+
+React Native's rendering pipeline has three threads that must stay coordinated. The **JS thread** executes your app logic and React diffing. Changes are serialized and sent to the **Shadow thread**, which runs Yoga layout calculations. The result goes to the **Main thread** that paints the UI via the native platform's rendering API. With the New Architecture (Fabric), this pipeline is **synchronous** — the JS thread can directly reference native objects through JSI rather than serializing JSON over the Bridge.
+
+```
+RN Rendering Pipeline (New Architecture)
+══════════════════════════════════════════
+
+  ┌──────────────┐    JSI direct refs    ┌──────────────┐
+  │  JS Thread   │──────────────────────►│  Shadow      │
+  │  (React)     │←──────────────────────│  Thread      │
+  │              │   Sync response      │  (Yoga)      │
+  └──────────────┘                      └──────┬───────┘
+                                                │
+                                           Layout
+                                                │
+                                                ▼
+                                        ┌──────────────┐
+                                        │  Main Thread  │
+                                        │  (UI / Skia)  │
+                                        └──────────────┘
+```
+
+### Hermes Engine Performance
+
+Hermes compiles JavaScript to **AOT bytecode** ahead of time, eliminating JIT warmup entirely. This reduces Time-To-Interactive by 30--50% compared to JSC on low-end devices. Hermes bytecode is typically 40--50% smaller than the equivalent plain JS bundle. Memory usage drops significantly because the bytecode interpreter avoids the JIT compilation overhead and associated code caches. Hermes supports ES2022 features and integrates with the Chrome DevTools Protocol for debugging.
+
+```javascript
+// metro.config.js — enable Hermes
+module.exports = {
+  transformer: {
+    // Hermes is the default since RN 0.70
+  },
+};
+```
+
+```bash
+# Build Hermes bytecode manually
+npx hermes-engine hermes -O -emit-binary -output-source-map \
+  -out index.hbc index.js.bundle
+```
+
+<Callout title="Hermes is not encryption">
+  Hermes bytecode provides **obscurity**, not encryption. Determined attackers can decompile the bytecode format. Never place secrets, API keys, or proprietary algorithms in the JS bundle. Critical business logic should live in native modules (Turbo Modules) where it compiles to ARM machine code.
+</Callout>
+
+### FlatList Deep Dive
+
+FlatList is the workhorse for scrollable content. Its virtualization engine renders only the visible window plus a configurable overflow. Tune these props for smooth scrolling: `windowSize` (default 21 — visible viewport heights rendered, lower for sparse lists), `maxToRenderPerBatch` (default 10 — items per render cycle), `updateCellsBatchingPeriod` (default 50ms — throttle between renders). For fixed-height items, always provide `getItemLayout` — it removes measurement overhead entirely.
+
+```jsx
+// Optimized FlatList with fixed-height items
+<FlatList
+  data={messages}
+  keyExtractor={(item) => item.id}
+  renderItem={({item}) => <MessageCell message={item} />}
+  getItemLayout={(_, index) => ({
+    length: 72,
+    offset: 72 * index,
+    index,
+  })}
+  initialNumToRender={10}
+  maxToRenderPerBatch={15}
+  windowSize={7}
+  removeClippedSubviews={Platform.OS === 'android'}
+  // Avoid inline arrow functions in renderItem for stable identities
+  extraData={selectedId}
+/>
+```
+
+### Avoiding JS-Native Boundary Cost
+
+Every cross-thread communication has overhead. In the old Bridge, every prop passed to a native component was serialized to JSON and deserialized — a major bottleneck for animations or high-frequency updates. With **JSI**, native functions can be called synchronously from JS without serialization. Turbo Modules lazy-load native modules on first access, reducing startup cost. Use `useNativeDriver` for transforms and opacity: the animation runs entirely on the native thread with zero JS involvement.
+
+```jsx
+// Always prefer useNativeDriver for transforms/opacity
+Animated.timing(fadeAnim, {
+  toValue: 1,
+  duration: 200,
+  useNativeDriver: true, // Animates on native thread
+}).start();
+
+// Reanimated 3 — runs on UI thread via worklets
+const scale = useSharedValue(1);
+const animatedStyle = useAnimatedStyle(() => ({
+  transform: [{scale: scale.value}],
+}));
+```
+
+### Memory Management
+
+React Native apps commonly leak memory through retained closures in `useEffect` cleanup, unmounted component state updates, and event listener subscriptions. Hermes provides `__jsc_profile__`-style profiling: enable via `--profile` flag in Metro. Watch for these patterns: interval/Animation not cleared on unmount, WebSocket listeners not removed, navigation screens kept alive in memory.
+
+```typescript
+// Proper cleanup pattern
+useEffect(() => {
+  const subscription = someNativeEmitter.addListener('event', handler);
+  return () => {
+    subscription.remove();
+    // Also cancel any pending async operations
+    controller.abort();
+  };
+}, []);
+```
+
+<Callout title="Progressive image loading">
+  Use `react-native-fast-image` (wraps SDWebImage on iOS, Fresco on Android) for disk caching, progressive JPEG loading, and priority queuing. Avoid the built-in `Image` component for large photo grids — it lacks caching and can cause UI jank on scroll.
+</Callout>
+
+### Common Pitfalls
+
+**Inline functions in renderItem** — Each render creates a new function reference, breaking PureComponent/memo optimization. Extract renderItem to a component or use `useCallback`. **Over-rendering with context** — React Context updates cause all consumers to re-render. Segment state or use Zustand/Recoil for fine-grained subscriptions. **console.log in production** — `console.log` is synchronous on the JS thread and blocks rendering. Strip with babel-plugin-transform-remove-console. **Large lists without getItemLayout** — FlatList must measure every item, causing layout thrashing. **Bridge-style patterns on New Architecture** — Passing large JSON blobs through Turbo Modules still serializes. Pass handles or URIs instead.
+
+### Performance Profiling Workflow
+
+Use React Native DevTools (preferred over deprecated Flipper) for CPU flame charts and JS thread profiling. The React Profiler in DevTools shows component render timings and identifies wasted renders. For native-side profiling, use Xcode Instruments (Time Profiler, System Trace) on iOS and Android Studio CPU Profiler on Android. Hermes offers its own sampling profiler: `npx react-native profile-hermes`. Always profile on a **release build** on a physical device — debug builds and simulators give misleadingly good numbers.
+
+### Comparison to Flutter
+
+Flutter's AOT compilation to ARM machine code eliminates the JS-thread bottleneck entirely — Dart code runs directly on the CPU at native speed. Flutter's Impeller rendering engine uses Metal/Vulkan/OpenGL directly, bypassing platform UI frameworks. RN's advantage is that it uses **real native components** (UIView, Android View) rather than painting pixels, so OS-level accessibility, text selection, and platform behaviors work automatically. The performance gap has narrowed with Fabric + Hermes, but CPU-bound logic (JSON parsing, complex algorithms) still favors Flutter's AOT approach. For IO-bound and UI-heavy apps (most mobile apps), both frameworks deliver indistinguishable user-perceptible performance.

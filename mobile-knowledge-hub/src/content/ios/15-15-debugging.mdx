@@ -1,0 +1,146 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+      <StatItem value="LLDB" label="Debugger Engine" />
+      <StatItem value="Instruments" label="Profiler Suite" />
+      <StatItem value="OSLog" label="Structured Logging" />
+      <StatItem value="Previews" label="Hot Reload" />
+    </StatGrid>
+
+    ### LLDB — The Xcode Debugger
+
+    LLDB is the debugger backing Xcode's console. It supports symbolic breakpoints, exception
+    breakpoints, watchpoints (address-based), and Swift expression evaluation. The debugger
+    can inspect Swift value types, optional chains, and closure captures in real time.
+
+    ```lldb
+    # Print object description (uses CustomStringConvertible / DebugPrintable)
+    (lldb) po self.view
+
+    # Evaluate a Swift expression
+    (lldb) expr let $count = self.items.count; $count
+
+    # Frame variable — print all locals with types
+    (lldb) frame variable -t
+
+    # Conditional breakpoint action — log and auto-continue
+    (lldb) breakpoint set --name "viewDidLoad" --condition "self.isViewLoaded" \
+              --auto-continue true -C "po self.title"
+
+    # Watch for writes to a property's backing ivar
+    (lldb) watchpoint set variable self->_selectedIndex
+    ```
+
+    Symbolic breakpoints are invaluable for debugging system frameworks: set one on
+    `-[UIApplication sendAction:to:from:forEvent:]` to trace every touch event through the
+    responder chain.
+
+    ### Instruments — The Profiling Suite
+
+    Instruments is a time-series profiling platform. Each "instrument" records a specific subsystem:
+
+    - **Time Profiler**: Samples the call stack at configurable intervals (default 1 ms). Identify
+      CPU hotspots in Swift and Obj-C code, including system framework calls.
+    - **Allocations**: Tracks every `malloc` and `retain`/`release`. Use "Mark Generation" before
+      and after a user flow to measure heap delta — the single best tool for finding memory leaks.
+    - **Leaks**: Automatically walks the heap graph looking for strong reference cycles. Combined
+      with Allocations generations, catches cycles that survive past a navigation pop.
+    - **Core Animation**: FPS counter, color-blended layers (green = opaque, red = blended),
+      offscreen-rendered layers (yellow), and copied images (blue).
+    - **SwiftUI Instruments**: View body invocation count, identity invalidation diagnostics,
+      and diffing overhead per frame.
+    - **System Trace**: Kernel-level view of threads, syscalls, context switches, and scheduler
+      behavior — essential for diagnosing hangs and priority inversions.
+
+    ```swift
+    // Tag a critical section for Instruments System Trace
+    import os.signpost
+
+    let renderingLog = OSLog(subsystem: "com.example.app", category: "Rendering")
+    let spid = OSSignpostID(log: renderingLog)
+
+    os_signpost(.begin, log: renderingLog, name: "Frame Render", signpostID: spid)
+    // ... rendering work ...
+    os_signpost(.end, log: renderingLog, name: "Frame Render", signpostID: spid)
+    ```
+
+    <Callout title="Prefer OSLog Over print()">
+      `print()` writes to stdout synchronously, blocks the calling thread, and exposes sensitive
+      data in release builds. `OSLog` is asynchronous, privacy-aware, and stripped of dynamic
+      strings in production unless explicitly marked `.public`. All logging is visible in the
+      Xcode console and the **Console.app** log streamer, and Instruments can correlate
+      `os_signpost` events with CPU/GPU timelines for frame-level analysis.
+    </Callout>
+
+    ### OSLog — Structured Logging
+
+    ```swift
+    import OSLog
+
+    let authLogger = Logger(subsystem: "com.example.app", category: "Auth")
+
+    func authenticateUser(token: String) {
+        authLogger.info("Authenticating user")
+
+        do {
+            try performAuth(token: token)
+            authLogger.notice("Authentication succeeded")
+        } catch {
+            authLogger.error("Authentication failed: \(error.localizedDescription)")
+        }
+
+        // Privacy levels: token is redacted in production logs
+        authLogger.debug("Token received: \(token, privacy: .private)")
+    }
+    ```
+
+    OSLog supports four levels: `debug`, `info`, `notice` (default), `error`, and `fault`.
+    The system coalesces duplicate log lines and persists `error`/`fault` level entries for
+    post-crash collection. Use `privacy: .public` only for non-sensitive data like view names.
+
+    ### SwiftUI Previews
+
+    Xcode Previews compile selected views and render them in a live canvas. They support multiple
+    preview variants (light/dark, different devices, dynamic type sizes) and mock data injection
+    via environment overrides.
+
+    ```swift
+    #Preview("Profile Card") {
+        ProfileCard(user: .preview)
+            .environment(\.colorScheme, .dark)
+            .previewLayout(.sizeThatFits)
+            .padding()
+    }
+
+    #Preview("Profile Card — Loading State") {
+        ProfileCard(user: nil)
+    }
+    ```
+
+    Previews eliminate most build-and-run cycles, though they have limitations: they crash on
+    runtime crashes in the view body, cannot preview certain system interactions (push
+    notifications, location), and sometimes require `@MainActor` annotations on shared models.
+
+    ### Network Debugging
+
+    Xcode 15+ includes a **Network Inspector** that records HTTP request/response pairs, including
+    headers, body, latency, and error status — no proxy needed. For deeper inspection, tools like
+    **Charles Proxy** or **Proxyman** intercept HTTPS traffic (via SSL proxying with a trust store
+    certificate) and support rewrite rules, breakpoints, and bandwidth throttling.
+
+    ### View Hierarchy Debugger
+
+    Xcode's **Debug View Hierarchy** button pauses the app and renders a 3D exploded view of the
+    entire `UIView`/`CALayer` tree. You can inspect Auto Layout constraints, layer attributes
+    (opacity, corner radius, mask), and memory addresses — critical for diagnosing offscreen
+    rendering or layout-ambiguous views.
+
+    ### Cross-Platform Comparison
+
+    Android Studio's **Profiler** covers CPU, memory, network, and energy but does not offer
+    Instruments' depth in GPU tracing or SwiftUI-specific diagnostics. **Flutter DevTools**
+    is a web-based suite with widget inspector, timeline, memory, and network views — closest
+    in spirit to Instruments but more constrained by the Dart VM's profiling APIs. LLDB's
+    Swift expression evaluation is more powerful than JDB (Android) or the Dart debugger for
+    complex data-structure inspection thanks to Swift's value-type model and LLDB's built-in
+    formatters for all Foundation collection types.

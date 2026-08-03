@@ -1,0 +1,126 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+    <StatGrid columns={3}>
+        <StatItem value="GPT-4o / Claude 3.5" label="Best for Flutter code gen" />
+        <StatItem value="~60-80%" label="Boilerplate time saved" />
+        <StatItem value="Review every line" label="AI code is a draft, not final" />
+    </StatGrid>
+
+    ### The AI-Assisted Flutter Development Landscape
+
+    Modern AI coding tools — Claude, ChatGPT, GitHub Copilot, Gemini Code Assist, and Codeium — have rapidly matured in their ability to generate idiomatic Dart and Flutter code. Each tool has distinct strengths: Copilot excels at inline completions within Android Studio / VS Code, Claude and ChatGPT handle multi-file Flutter code generation from natural language specs, Gemini integrates tightly with Google's Firebase and Android tooling ecosystem, and Codeium offers fast autocomplete with Dart-specific training. The practical impact is significant: scaffolding a complete BLoC pattern (event class, state class, bloc class, provider registration) that used to take 5-10 minutes of boilerplate now takes seconds of prompt engineering.
+
+    However, AI for Flutter development carries specific risks. Dart's rapid evolution (sound null safety in 2.12, records and patterns in 3.x, macro previews) means training data lags 6-18 months behind the latest stable release. AI models confidently generate code using deprecated APIs like `WillPopScope`, `RaisedButton`, or the old `flutter_offline` package API without warning. The model has no awareness of your `pubspec.yaml` constraints, your team's chosen state management convention, or the specific Impeller rendering edge case on a Pixel 6 running Android 14. Every AI-generated snippet must be treated as a draft that requires human verification against your specific project context.
+
+    ### Where AI Excels in Flutter Development
+
+    AI tools dramatically accelerate the predictable, patterns-heavy parts of Flutter development. Model classes with `json_serializable` annotations are a prime example — the JSON-to-Dart mapping is mechanical, and AI produces correct `@JsonKey(name: ...)` mappings from a sample JSON payload. BLoC and Cubit boilerplate is another high-value target: the event/state/bloc triad follows a rigid pattern that AI reproduces reliably. Widget scaffolding from a screenshot description (a product card with image, title, price, and add-to-cart button) typically produces a reasonable first draft. Test generation is particularly effective — given a BLoC class, AI can generate a comprehensive widget test suite covering initial state, event dispatch, and state transitions. Migration scripts for deprecated Flutter APIs (e.g., `WillPopScope` to `PopScope` in 3.16, `FlatButton` to `TextButton` in 3.1) are handled well because the migration paths are documented with clear before/after patterns.
+
+    ```dart
+    // AI-generated json_serializable model — usually correct for straightforward cases
+    import 'package:json_annotation/json_annotation.dart';
+
+    part 'product.g.dart';
+
+    @JsonSerializable()
+    class Product {
+      final int id;
+      final String name;
+      @JsonKey(name: 'price_usd')
+      final double price;
+      @JsonKey(name: 'in_stock')
+      final bool inStock;
+      final List<String> tags;
+
+      Product({
+        required this.id,
+        required this.name,
+        required this.price,
+        required this.inStock,
+        required this.tags,
+      });
+
+      factory Product.fromJson(Map<String, dynamic> json) =>
+          _$ProductFromJson(json);
+
+      Map<String, dynamic> toJson() => _$ProductToJson(this);
+    }
+    ```
+
+    <Callout title="Prompt Engineering for Flutter">
+        The single most effective technique is providing your `pubspec.yaml` dependencies and target Flutter version in the prompt context. Without this, AI defaults to patterns from its training data — typically Flutter 2.x/3.0 era. Adding "Flutter 3.24, using GoRouter 14.x, Riverpod 2.5, and Dio 5.x" immediately switches the model to current API surfaces. For widget generation, provide the design constraints explicitly: "This widget must accept a const constructor, use Theme.of(context) for colors, and support both light and dark themes."
+    </Callout>
+
+    ### Where AI Struggles — and What You Must Handle
+
+    State management architecture decisions are the most common failure point. AI cannot evaluate tradeoffs between BLoC, Riverpod, Provider, or GetX for your specific team composition, app complexity, and long-term maintenance goals. It will generate a BLoC pattern because that's the most-documented Flutter state management approach, even when a simple `StatefulWidget` with `setState` would be more appropriate for your use case. Similarly, AI-generated code tends to default to `BuildContext`-dependent patterns because they're simplest, rather than the testable, dependency-injected patterns you want in production.
+
+    Impeller-specific rendering issues are invisible to AI models. The transition from Skia to Impeller as the default renderer in Flutter 3.22 changed how shader compilation, clipping, and opacity work. AI-generated code that was correct under Skia may cause rendering artifacts under Impeller — particularly with complex `ClipPath` operations, `BackdropFilter`, or custom `Painter` implementations. Platform-specific plugin bugs are another blind spot: the AI doesn't know that `image_picker` 0.8.9 has a known crash on iOS 17 when selecting HEIC images, or that `google_maps_flutter` has a gesture conflict with `SingleChildScrollView` on certain Android OEMs.
+
+    ```dart
+    // AI struggles to produce correct build_runner integration
+    // It often omits the build.yaml configuration or uses wrong part-file directives
+
+    // build.yaml (AI frequently forgets this)
+    // targets:
+    //   $default:
+    //     builders:
+    //       json_serializable:
+    //         options:
+    //           explicit_to_json: true
+    //           include_if_null: false
+
+    // AI may generate this incorrectly without explicit builder config
+    @freezed
+    class ProductState with _$ProductState {
+      const factory ProductState.initial() = _Initial;
+      const factory ProductState.loading() = _Loading;
+      const factory ProductState.loaded(Product product) = _Loaded;
+      const factory ProductState.error(String message) = _Error;
+    }
+    ```
+
+    ### Code Review Workflow for AI-Generated Flutter Code
+
+    A systematic verification workflow prevents AI-generated bugs from reaching production. First, run `flutter analyze` immediately — lint rules catch the majority of AI's syntactic mistakes (deprecated APIs, missing `const`, unused imports). Second, verify the generated code compiles with your specific dependency versions by running `flutter build` (not just `flutter run` in debug mode). Third, check that all widgets accept `const` constructors where possible — AI frequently omits this. Fourth, verify `BuildContext` usage is scoped correctly: AI often captures `context` across async gaps, causing `ScaffoldMessenger.of(context)` to fail after navigation. Fifth, examine error handling branches: AI-generated code typically handles the happy path but returns vague `catch (e)` blocks that swallow real errors.
+
+    ```dart
+    // BEFORE — AI-generated code missing error details and context awareness
+    Future<void> loadProducts() async {
+      try {
+        final products = await _repository.fetchProducts();
+        // AI forgets to check mounted or context validity
+        setState(() => _products = products);
+      } catch (e) {
+        setState(() => _error = 'Something went wrong'); // Vague, swallows type
+      }
+    }
+
+    // AFTER — Production-verified implementation
+    Future<void> loadProducts() async {
+      try {
+        final products = await _repository.fetchProducts();
+        if (!mounted) return; // Guard against context loss
+        setState(() => _products = products);
+      } on NetworkException catch (e) {
+        if (!mounted) return;
+        setState(() => _error = 'No connection: ${e.message}');
+      } on FormatException catch (e) {
+        if (!mounted) return;
+        setState(() => _error = 'Invalid data: ${e.message}');
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _error = 'Unexpected error');
+        debugPrint('loadProducts: $e'); // Log unexpected errors
+      }
+    }
+    ```
+
+    <Callout title="Don't Trust AI with Version-Specific APIs">
+        Flutter's rapid release cadence (stable every 2-3 months) means AI training data is perpetually outdated. Always cross-reference AI-generated API calls against the official Flutter API docs or your locally installed version's documentation. A telltale sign: if AI generates `Scaffold.of(context)`, it's using pre-3.0 patterns — the modern equivalent is `ScaffoldMessenger.of(context)`. When in doubt, check the Flutter SDK changelog for your target version.
+    </Callout>
+
+    ### The Human-in-the-Loop Workflow
+
+    The most effective Flutter + AI workflow treats AI as a senior-intern paired programmer: AI produces the first draft quickly, and the human reviews with production context. Start with a clear specification including your architecture pattern (e.g., "using Riverpod 2.x with code generation"), target Flutter version, and key package constraints. Generate one concept at a time (a model class, a repository, a widget) rather than asking for an entire feature. Run the code through your standard PR pipeline — `flutter analyze`, unit tests, widget tests — before merging. Over time, build a project-specific prompt library that encodes your team's conventions, and use AI to enforce consistency across the codebase rather than to make architectural decisions.

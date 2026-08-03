@@ -1,0 +1,134 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={3}>
+      <StatItem value="Linux Kernel" label="Foundation" />
+      <StatItem value="ART" label="Runtime" />
+      <StatItem value="HAL" label="Hardware Abstraction" />
+    </StatGrid>
+
+    ### Layered Architecture Overview
+
+    Android's system architecture is a six-layer stack: Linux Kernel at the base, Hardware Abstraction Layer (HAL), Android Runtime (ART), native C++/C libraries, the Application Framework (Java/Kotlin), and finally System Apps. Each layer provides well-defined interfaces to the layer above and abstracts hardware details from the layer below.
+
+    ```
+    ┌─────────────────────────────────────────────┐
+    │           System Apps (Launcher, Dialer)      │
+    ├─────────────────────────────────────────────┤
+    │        Application Framework (Java/Kotlin)    │
+    │  ActivityManager  ContentProvider   Telephony  │
+    ├─────────────────────────────────────────────┤
+    │     ART Runtime       Native Libs (libc, SSL)  │
+    │  (DEX → AOT, GC)    (OpenGL, Skia, SQLite)    │
+    ├─────────────────────────────────────────────┤
+    │      Hardware Abstraction Layer (HAL)          │
+    │  Camera HAL  GPS HAL  Audio HAL  Sensors HAL   │
+    ├─────────────────────────────────────────────┤
+    │          Linux Kernel (5.10+ on modern)        │
+    │  Scheduler  Memory Mgmt  Binder IPC  Wakelocks │
+    └─────────────────────────────────────────────┘
+    ```
+
+    ### ART: Android Runtime Deep Dive
+
+    ART replaced Dalvik in Android 5.0 (Lollipop) and fundamentally changed execution performance. Instead of interpreting DEX bytecode on every launch, ART uses **profile-guided ahead-of-time compilation**. On first install, the app runs in interpreted mode while ART traces execution hotness. Once sufficient profile data is collected, ART compiles hot methods to native ARM64 code. Cold methods remain as DEX bytecode to keep install size manageable.
+
+    ```kotlin
+    // ART's execution modes — implicit; developers write standard Kotlin
+    class ProfileGuidedExample {
+        fun hotPath() {
+            // This method, when called frequently, gets AOT-compiled
+            // to native ARM64 by ART after profile collection
+            repeat(1000) { performCalculation(it) }
+        }
+
+        private fun performCalculation(value: Int): Int {
+            return (value * 47) xor (value shr 2)
+        }
+    }
+    ```
+
+    ART includes a generational, concurrent garbage collector. It separates the heap into young (recently allocated) and old (surviving multiple GC cycles) generations. ART's GC compacts the young generation in under 5ms on modern hardware, making pause times invisible at 60fps. The collector runs concurrently with mutator threads — only the compaction phase requires a brief stop-the-world pause.
+
+    <Callout title="ART vs JVM GC">
+      Unlike the JVM's G1GC which can pause for 50-200ms, ART's GC targets sub-10ms pauses. It achieves this through a semi-space collector that compacts only the young generation while the old generation uses a mark-sweep algorithm. ART also uses read-barriers for concurrent compaction, borrowing concepts from the JVM's Shenandoah GC but tuned for mobile power budgets.
+    </Callout>
+
+    ### Compose Runtime Architecture
+
+    The Compose runtime does not sit on top of the View system — it operates alongside it via a **Slot Table** data structure. The Compose compiler plugin transforms every `@Composable` function by inserting a `Composer` parameter. At runtime, the Composer writes to a gap buffer (the Slot Table) that records what was emitted during composition.
+
+    ```kotlin
+    // What you write — idiomatic Compose
+    @Composable
+    fun ProfileCard(user: User) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(user.name, style = MaterialTheme.typography.titleMedium)
+            Text(user.email, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+
+    // What the compiler plugin generates (simplified)
+    // @Composable fun ProfileCard(user: User, composer: Composer, changed: Int)
+    // The composer parameter tracks slot positions for positional memoization.
+    // When state changes, only the slot group at the affected position re-executes.
+    ```
+
+    The Slot Table uses **positional memoization**: the position of a composable call in the source code determines its slot identity. This avoids the key-based reconciliation that React and Flutter use. When state changes, the runtime walks the slot groups, skips unchanged groups, and re-executes only groups whose tracked state objects have changed. This makes Compose's recomposition O(changed nodes) rather than O(tree size) — a fundamental advantage for large UI trees.
+
+    ```kotlin
+    // Recomposition scoping in practice
+    @Composable
+    fun ExpensiveScreen() {
+        // This Column recomposes only when `items` changes
+        val items = viewModel.items.collectAsStateWithLifecycle().value
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(items, key = { it.id }) { item ->
+                // Each item recomposes independently
+                ItemRow(item = item)
+            }
+        }
+    }
+    ```
+
+    ### View System Architecture
+
+    The legacy View system is a tree of `View` and `ViewGroup` nodes. Each node measures itself given `MeasureSpec` constraints, arranges children in `onLayout()`, and renders in `onDraw()`. The framework performs three traversals: measure (bottom-up), layout (top-down), and draw (depth-first). This two-pass layout system is the source of most performance issues — nested `LinearLayout` with `weight` requires multiple measure passes.
+
+    ```kotlin
+    // Custom View demonstrating the measure/layout/draw cycle
+    class CustomProgressView @JvmOverloads constructor(
+        context: Context, attrs: AttributeSet? = null, defStyleAttr: Int = 0
+    ) : View(context, attrs, defStyleAttr) {
+
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.BLUE
+        }
+        var progress: Float = 0f
+            set(value) {
+                field = value.coerceIn(0f, 1f)
+                invalidate() // triggers onDraw
+            }
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val desiredWidth = MeasureSpec.getSize(widthMeasureSpec).coerceAtMost(300)
+            val desiredHeight = MeasureSpec.getSize(heightMeasureSpec).coerceAtMost(48)
+            setMeasuredDimension(desiredWidth, desiredHeight)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val filledWidth = width * progress
+            canvas.drawRect(0f, 0f, filledWidth, height.toFloat(), paint)
+        }
+    }
+    ```
+
+    ### Comparison to Cross-Platform Architectures
+
+    Flutter uses a Dart VM (or AOT-compiled native code) with a separate rendering engine (Impeller/Skia) that owns the entire widget tree, bypassing Android's framework. This means Flutter apps cannot use Android's accessibility services, font fallback, or platform theming without embedding native Views through PlatformView — a notoriously slow path requiring texture layer synchronization that adds 8-16ms per frame.
+
+    React Native runs a JavaScript engine (Hermes) on a separate thread and communicates with native modules via a serialized bridge (JSON over the JSI interface). Every native API call crosses a thread boundary with serialization overhead of 0.5-3ms. This architecture makes React Native fundamentally incapable of matching native animation frame budgets — each bridge round-trip consumes 3-18% of the 16ms frame window.
+
+    <Callout title="Architecture Takeaway">
+      Native Android's architecture — ART with profile-guided AOT, direct kernel IPC via Binder, and in-process composable execution — is the only design that gives the application zero-cost access to the entire OS stack. Every abstraction layer in cross-platform frameworks adds latency, memory overhead, and API surface lag that no optimization can fully eliminate.
+    </Callout>

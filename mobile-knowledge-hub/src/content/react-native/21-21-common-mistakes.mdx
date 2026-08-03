@@ -1,0 +1,259 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+### Quick Stats
+
+<StatGrid columns={3}>
+<StatItem value="70%" label="Crashes from ScrollView" />
+<StatItem value="3x" label="Re-render Multiplier" />
+<StatItem value="90%" label="Team Encounters Bridge Issues" />
+<StatItem value="40%" label="Production Bugs from Platform Assumptions" />
+</StatGrid>
+
+### Category 1: Rendering Mistakes
+
+**ScrollView for dynamic-length lists** — The single most common cause of memory crashes in React Native apps. ScrollView renders all children upfront, so 10,000 items means 10,000 native views in the tree:
+
+```tsx
+// WRONG: ScrollView renders ALL items simultaneously
+<ScrollView>
+  {posts.map((post) => (
+    <PostCard key={post.id} post={post} />
+  ))}
+</ScrollView>
+// Memory: O(n) — 10,000 items = 10,000 native views, ~200MB+
+
+// RIGHT: FlatList virtualizes — only renders visible items + window buffer
+<FlatList
+  data={posts}
+  keyExtractor={(item) => item.id}
+  renderItem={({ item }) => <PostCard post={item} />}
+  windowSize={5}
+  removeClippedSubviews={true}
+/>
+// Memory: O(windowSize) — ~50 native views regardless of list size
+```
+
+**Inline functions as props** — Every render creates a new function reference, triggering re-renders in memoized children:
+
+```tsx
+// WRONG: New function reference every render
+<PostCard onPress={() => navigation.navigate('Post', { id: post.id })} />
+
+// RIGHT: Stable callback reference
+function FeedScreen() {
+  const handlePostPress = useCallback((postId: string) => {
+    navigation.navigate('Post', { id: postId });
+  }, [navigation]);
+
+  return (
+    <FlatList
+      data={posts}
+      renderItem={({ item }) => <PostCard post={item} onPress={handlePostPress} />}
+    />
+  );
+}
+```
+
+**Missing React.memo on pure presentational components**:
+
+```tsx
+// WRONG: Re-renders on every parent render even with same props
+function PostCard({ post, onPress }: PostCardProps) {
+  return (
+    <TouchableOpacity onPress={() => onPress(post.id)}>
+      <Text>{post.title}</Text>
+    </TouchableOpacity>
+  );
+}
+
+// RIGHT: Only re-renders when props change
+const PostCard = React.memo(function PostCard({ post, onPress }: PostCardProps) {
+  return (
+    <TouchableOpacity onPress={() => onPress(post.id)}>
+      <Text>{post.title}</Text>
+    </TouchableOpacity>
+  );
+});
+```
+
+### Category 2: Navigation Mistakes
+
+**Stack grows infinitely** — Pushing screens without ever popping creates unbounded memory growth:
+
+```tsx
+// WRONG: Every "View details" adds to the stack — press it 50 times, stack depth = 50
+function PostScreen({ route, navigation }) {
+  return (
+    <TouchableOpacity onPress={() => navigation.push('Post', { id: post.relatedPostId })}>
+      <Text>View related post</Text>
+    </TouchableOpacity>
+  );
+}
+
+// RIGHT: Use replace for lateral navigation, navigate for stack-aware navigation
+function PostScreen({ route, navigation }) {
+  const handleRelated = () => {
+    navigation.push('Post', { id: post.relatedPostId });
+    // User can go back to previous post — intentional depth
+  };
+  const handleDeepLink = () => {
+    navigation.replace('Post', { id: post.deepLinkId });
+    // Replaces current screen — no depth accumulation
+  };
+}
+```
+
+**Android back button unhandled** — On Android, the hardware back button exits the app when navigation state isn't managed:
+
+```tsx
+// Ensure React Navigation's default back handler is wired:
+// In App.tsx — NavigationContainer handles back button automatically
+// But for custom modals or bottom sheets you must handle it:
+useEffect(() => {
+  const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+    if (isModalOpen) {
+      closeModal();
+      return true; // Prevent default (app exit)
+    }
+    return false; // Let navigation handle it
+  });
+  return () => subscription.remove();
+}, [isModalOpen]);
+```
+
+### Category 3: Native / Bridge Mistakes
+
+**Passing large objects across the bridge repeatedly** — Every cross-bridge serialization copies data. Large objects passed every frame cause jank:
+
+```tsx
+// WRONG: Passes full image data across bridge 60 times/second
+function CameraFeed() {
+  const [frame, setFrame] = useState<number[]>([]);
+  useEffect(() => {
+    const subscription = NativeModules.CameraModule.onFrame((data: number[]) => {
+      setFrame(data); // 4MB array serialized every frame
+    });
+    return () => subscription.remove();
+  }, []);
+}
+
+// RIGHT: Cache on JS side, pass only metadata across bridge
+// Use JSI or Turbo Modules with direct memory access for high-frequency data
+const frameBufferRef = useRef<SharedArrayBuffer | null>(null);
+useEffect(() => {
+  const subscription = CameraTurboModule.onFrame((pointer: number, size: number) => {
+    // JSI gives direct memory access — no serialization
+    processFrameDirect(pointer, size);
+  });
+  return () => subscription.remove();
+}, []);
+```
+
+**Calling native modules before they're loaded** — Turbo Modules load lazily; accessing them synchronously before initialization crashes:
+
+```tsx
+// WRONG: May crash if module hasn't loaded
+const result = NativeModules.ExpensiveModule.doSyncWork();
+
+// RIGHT: Use the getEnforcing pattern or async access
+import MyModule from './MyModule';
+try {
+  const result = await MyModule.doSyncWork(); // Lazy load handles this
+} catch (error) {
+  console.error('Native module not available', error);
+}
+```
+
+### Category 4: Platform Mistakes
+
+**Assuming iOS behavior works on Android** — Shadow props, overflow behavior, and keyboard handling diverge significantly:
+
+```tsx
+// WRONG: Shadow works on iOS, nothing renders on Android
+<View style={{ shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25 }} />
+
+// RIGHT: Cross-platform shadow — use elevation for Android
+<View style={{
+  ...Platform.select({
+    ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 4 },
+    android: { elevation: 4 },
+  }),
+}} />
+
+// WRONG: KeyboardAvoidingView with no platform check
+<KeyboardAvoidingView behavior="padding">
+  // Works on iOS, layout glitches on Android
+</KeyboardAvoidingView>
+
+// RIGHT: Platform-specific behavior
+<KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+  <TextInput />
+</KeyboardAvoidingView>
+```
+
+### Category 5: Architecture Mistakes
+
+**Business logic in components** — Leads to untestable, tightly coupled code. Extract to hooks and services:
+
+```tsx
+// WRONG: API call + business logic in the component
+function ProfileScreen() {
+  const [user, setUser] = useState(null);
+  useEffect(() => {
+    fetch(`/api/users/${userId}`)
+      .then(r => r.json())
+      .then(data => setUser(formatUserData(data)));
+  }, [userId]);
+  // 100+ more lines of mixed logic and rendering
+}
+
+// RIGHT: Separated concerns
+function useUser(userId: string) {
+  return useQuery({
+    queryKey: ['user', userId],
+    queryFn: () => apiClient.getUser(userId),
+    select: formatUserData, // Business logic lives here
+  });
+}
+
+function ProfileScreen({ userId }: { userId: string }) {
+  const { data: user, isLoading } = useUser(userId);
+  return isLoading ? <Skeleton /> : <ProfileView user={user} />;
+}
+```
+
+**useEffect for everything** — A common anti-pattern from Class component days. Many useEffects should be event handlers or external store subscriptions:
+
+```tsx
+// WRONG: useEffect to react to user action
+useEffect(() => {
+  if (isFormValid) {
+    submitForm(data);
+  }
+}, [isFormValid, data]);
+
+// RIGHT: Call submit in the event handler directly
+const handleSubmit = useCallback(() => {
+  if (isFormValid) {
+    submitForm(data);
+  }
+}, [isFormValid, data]);
+
+// WRONG: useEffect for external store sync
+useEffect(() => {
+  const unsubscribe = store.subscribe(() => setState(store.getState()));
+  return unsubscribe;
+}, []);
+
+// RIGHT: useSyncExternalStore
+const state = useSyncExternalStore(store.subscribe, store.getState);
+```
+
+<Callout title="useEffect is not a lifecycle hook — it's a synchronization mechanism">
+If your useEffect synchronizes data that could be synchronized another way (event handler, React Query, useSyncExternalStore, derived state), that other way is usually better. useEffect exists to sync React with external systems (native modules, timers, subscriptions), not to orchestrate application flow.
+</Callout>
+
+### Flutter Comparison
+
+Flutter's widget tree inherently avoids the ScrollView vs ListView trap because Flutter defaults to `ListView` (virtualized) and makes `SingleChildScrollView` an explicit opt-in. However, Flutter's rebuild model (all widgets rebuild by default unless const) creates the same kind of unnecessary rebuild issues that RN developers face with inline functions and missing React.memo. The difference is RN gives developers explicit control with `useCallback`/`memo`/`useMemo`, while Flutter relies on const constructors and `RepaintBoundary` — different tools for the same class of problem.

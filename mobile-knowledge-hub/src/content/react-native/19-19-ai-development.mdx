@@ -1,0 +1,238 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+### Quick Stats
+
+<StatGrid columns={3}>
+<StatItem value="65-75%" label="Code Generation Accuracy" />
+<StatItem value="3-5x" label="Scaffolding Speed Boost" />
+<StatItem value="8/10" label="RN Prompt Reliability" />
+<StatItem value="40-60%" label="Test Coverage via AI" />
+</StatGrid>
+
+### AI-Assisted React Native Development
+
+AI coding assistants — Claude, ChatGPT, GitHub Copilot, and Cursor — have become powerful tools in the React Native ecosystem. React Native benefits disproportionately from AI assistance because the framework sits at the intersection of two massive training corpora: React (web) and JavaScript/TypeScript. However, the gap between "looks right" and "actually works on a device" is wider in RN than in pure web development.
+
+<Callout title="Why RN is uniquely suited for AI assistance">
+The JS/TS training corpus is enormous (millions of public repos), and RN's component model maps directly to React on the web. AI models grasp View/Text/ScrollView patterns well because they mirror div/span/section from the DOM — but this same familiarity creates a dangerous illusion of correctness.
+</Callout>
+
+### What AI Excels At
+
+**Component scaffolding** — The most reliable use case. AI generates the View/Text/StyleSheet skeleton, import wiring, and basic prop typing with high accuracy:
+
+```tsx
+// AI-generated: Button component with variants
+import React from 'react';
+import { TouchableOpacity, Text, StyleSheet, ActivityIndicator } from 'react-native';
+
+type ButtonVariant = 'primary' | 'secondary' | 'outline';
+
+interface ButtonProps {
+  title: string;
+  onPress: () => void;
+  variant?: ButtonVariant;
+  loading?: boolean;
+  disabled?: boolean;
+}
+
+export const Button: React.FC<ButtonProps> = ({
+  title, onPress, variant = 'primary', loading = false, disabled = false,
+}) => (
+  <TouchableOpacity
+    style={[styles.base, styles[variant], disabled && styles.disabled]}
+    onPress={onPress}
+    disabled={disabled || loading}
+    accessibilityRole="button"
+    accessibilityLabel={title}
+    accessibilityState={{ disabled: disabled || loading }}
+  >
+    {loading ? (
+      <ActivityIndicator color={variant === 'outline' ? '#007AFF' : '#FFF'} />
+    ) : (
+      <Text style={[styles.text, variant === 'outline' && styles.outlineText]}>
+        {title}
+      </Text>
+    )}
+  </TouchableOpacity>
+);
+```
+
+**State management setup** — Zustand or Redux store generation, slice definitions, and typed selectors:
+
+```tsx
+// AI-generated: Zustand auth store with typed actions
+import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { MMKV } from 'react-native-mmkv';
+
+const storage = new MMKV();
+const zustandMMKVStorage = createJSONStorage(() => ({
+  setItem: (name, value) => storage.set(name, value),
+  getItem: (name) => storage.getString(name) ?? null,
+  removeItem: (name) => storage.delete(name),
+}));
+
+interface AuthState {
+  user: User | null;
+  token: string | null;
+  isAuthenticated: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => void;
+}
+
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set) => ({
+      user: null,
+      token: null,
+      isAuthenticated: false,
+      login: async (email, password) => {
+        const response = await apiClient.post('/auth/login', { email, password });
+        set({ user: response.data.user, token: response.data.token, isAuthenticated: true });
+      },
+      logout: () => {
+        set({ user: null, token: null, isAuthenticated: false });
+      },
+    }),
+    { name: 'auth-storage', storage: zustandMMKVStorage }
+  )
+);
+```
+
+**Test generation** — AI produces Jest + React Native Testing Library tests that cover render, user interaction, and edge cases:
+
+```tsx
+import { render, fireEvent } from '@testing-library/react-native';
+import { Button } from './Button';
+
+describe('Button', () => {
+  it('renders title text', () => {
+    const { getByText } = render(<Button title="Submit" onPress={jest.fn()} />);
+    expect(getByText('Submit')).toBeTruthy();
+  });
+
+  it('fires onPress when pressed', () => {
+    const onPress = jest.fn();
+    const { getByRole } = render(<Button title="Submit" onPress={onPress} />);
+    fireEvent.press(getByRole('button'));
+    expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows loading indicator and disables when loading', () => {
+    const { getByRole, queryByText } = render(
+      <Button title="Submit" onPress={jest.fn()} loading />
+    );
+    expect(queryByText('Submit')).toBeNull();
+    expect(getByRole('button')).toBeDisabled();
+  });
+});
+```
+
+**Migration scripts** — Converting old Bridge API modules to the New Architecture (Turbo Modules + Fabric):
+
+```ts
+// AI-generated migration: Bridge → Turbo Module
+// Before: Old bridge module
+// @objc(RNMyModule)
+// class RNMyModule: RCTEventEmitter { ... }
+
+// After: New Architecture Turbo Native Module
+// MyModule.ts
+import { TurboModule, TurboModuleRegistry } from 'react-native';
+
+export interface Spec extends TurboModule {
+  readonly getConstants: () => { [key: string]: any };
+  doSomething(input: string): Promise<string>;
+}
+
+export default TurboModuleRegistry.getEnforcing<Spec>('MyModule');
+```
+
+### What AI Struggles With
+
+**React DOM vs RN API confusion** — The most common and dangerous class of error. AI models trained heavily on web React will generate code using HTML elements that don't exist in RN:
+
+```tsx
+// WRONG — AI commonly generates this from web training:
+<div className="container">
+  <span onClick={handleClick}>Click me</span>
+  <img src={uri} alt="description" />
+</div>
+
+// RIGHT — what actually works in RN:
+<View style={styles.container}>
+  <Text onPress={handleClick}>Click me</Text>
+  <Image source={{ uri }} accessibilityLabel="description" />
+</View>
+```
+
+Other frequent confusions: `className` vs `style` prop, `onClick` vs `onPress`, CSS properties ( `display: flex` vs `flex: 1`, `box-shadow` vs `shadowColor/ shadowOffset`), and `localStorage` vs `AsyncStorage` or MMKV.
+
+**Native module configuration** — AI consistently struggles with platform-native configuration files. Podfile syntax for iOS, Gradle for Android, and the interplay of autolinking vs manual linking are poorly represented in training data:
+
+```ruby
+# AI often omits or gets wrong: post_install hooks, minimum iOS target, fabric_enabled flag
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.1'
+    end
+  end
+end
+```
+
+**Version compatibility** — The RN ecosystem is fragmented. An AI-generated solution for RN 0.73 may use deprecated APIs or miss New Architecture requirements in 0.76+. Always include the RN version in your prompt.
+
+### Prompt Engineering for React Native
+
+Quality of AI output in RN projects correlates directly with prompt specificity. A vague prompt produces web-flavored code; a structured prompt produces production-ready RN code.
+
+```
+Good prompt:
+  "Generate a React Native 0.76 component using the New Architecture.
+   Use Hermes-compatible JS. Style with StyleSheet.create.
+   The component is a searchable picker with FlatList and keyboard-aware behavior."
+
+Bad prompt:
+  "Make a dropdown component for my app."
+```
+
+Critical context to include in every RN prompt: React Native version (e.g., 0.76+), New Architecture enabled (Fabric/Turbo Modules yes/no), Hermes engine (yes/no — affects `Intl`, `Proxy`, `Symbol` availability), target platforms (iOS only or both), state management library (Zustand, Redux, React Query), styling approach (StyleSheet, NativeWind, styled-components).
+
+<Callout title="Always verify AI-generated RN code for web API usage">
+The most common failure mode is silent: AI code runs in Metro, bundles successfully, but crashes at runtime because it uses a DOM API. Set up an ESLint rule: `no-restricted-imports` blocking `react-dom`, and add `react-native` lint plugins that catch web-specific patterns.
+</Callout>
+
+### AI for Upgrade Migration
+
+Upgrading React Native versions (especially 0.73 to 0.76+ with New Architecture) involves repetitive migrations across many files. AI excels at this:
+
+- Converting `RCTBridgeModule` Obj-C/Java classes to Turbo Native Module TypeScript specs
+- Updating `react-native.config.js` for the autolinking changes
+- Migrating from `React.cloneElement` patterns to the new `react-native` JSIMounted APIs
+- Updating Podfile and `build.gradle` for Hermes + Fabric flags
+- Translating deprecated `PropTypes` to TypeScript interfaces
+
+```bash
+# Prompt for upgrade script:
+# "Generate a codemod to convert all PropTypes in src/ to TypeScript interfaces.
+#  RN version 0.76, TypeScript 5.x. Handle nested shape(), arrayOf(), and oneOfType()."
+```
+
+### Flutter Comparison
+
+Flutter developers using AI assistants (Dart-focused models) face a smaller training corpus. The Dart package ecosystem on pub.dev (50K+ packages) is substantially smaller than npm (2M+), so AI has fewer patterns to draw from. However, Flutter's declarative widget tree is more self-contained — AI-generated Flutter code has less risk of importing the wrong platform API because the framework owns the entire rendering stack. React Native's split personality (JS logic + native platform views) creates more surface area for AI errors.
+
+<Callout title="The verification tax">
+AI saves the most time in RN when used for scaffolding, boilerplate, and test generation — tasks with clear patterns. It costs the most time when used for native module configuration, platform-specific code, or version-sensitive APIs, where each AI suggestion must be verified against the actual device behavior. Budget verification time proportional to how platform-coupled the generated code is.
+</Callout>
+
+### AI Development Workflow for RN
+
+1. **Scaffold with AI**: Generate component/structure code with version-specific prompts
+2. **Lint automatically**: Run ESLint with `eslint-plugin-react-native` and `@react-native/eslint-config`
+3. **Test with AI**: Generate Jest + RNTL test files alongside components
+4. **Verify on device**: AI code that passes type-check and lint still fails on device — always run on both iOS and Android
+5. **Iterate with context**: Feed the error message back to the AI as follow-up context; RN Metro bundler errors are specific and models handle them well

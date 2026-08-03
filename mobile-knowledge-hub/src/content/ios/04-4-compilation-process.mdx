@@ -1,0 +1,103 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={4}>
+        <StatItem value="Swift" label="Language" />
+        <StatItem value="LLVM" label="Compiler Backend" />
+        <StatItem value="SIL" label="Intermediate" />
+        <StatItem value="ARM64" label="Target Arch" />
+      </StatGrid>
+
+      ### The Swift Compilation Pipeline
+
+      The Swift compiler (`swiftc`) is a multi-stage compiler built on LLVM. All compilation
+      is ahead-of-time, producing a native ARM64 Mach-O binary with no JIT or interpreter.
+
+      ```
+      Swift Source (.swift files)
+           ↓ Parser — Lex → AST (Abstract Syntax Tree)
+           ↓ Sema — Type checking, overload resolution, macro expansion
+           ↓ Raw SIL — Swift Intermediate Language (unoptimized)
+           ↓ SIL Mandatory Passes — Definite init, exclusivity, access control
+           ↓ SIL Optimizer — Generics specialization, devirtualization, ARC opt, inlining
+           ↓ LLVM IR — Lowered SIL to LLVM Intermediate Representation
+           ↓ LLVM Optimizer — GVN, loop unrolling, vectorization, LICM, IPA, DCE
+           ↓ ARM64 CodeGen — Register allocation, instruction scheduling
+           ↓ Mach-O object files
+           ↓ Linker (ld-prime) — Symbol resolution, dead code stripping
+           ↓ Codesign + IPA — Apple distribution certificate, binary encryption
+      ```
+
+      ### SIL — The Swift Intermediate Language
+
+      SIL is unique to Swift: a high-level IR that preserves language semantics LLVM IR cannot
+      express. It operates on SSA form with Swift-specific constructs:
+
+      - **`strong_retain` / `strong_release`**: Explicit ARC ops the SIL optimizer can
+        reorder, pair, or eliminate entirely.
+      - **`witness_method`**: Dynamic dispatch through protocol witness tables.
+      - **`class_method`**: Vtable dispatch through class inheritance.
+      - **`init_existential_addr`**: Boxing a concrete value into an `any Protocol` existential.
+      - **`alloc_box` / `alloc_stack`**: Stack or heap allocation for capture semantics.
+
+      Mandatory SIL passes (definite initialization, exclusivity enforcement) run before
+      any optimization. Diagnostic SIL passes emit warnings like "variable never read."
+
+      ### SIL Optimizations
+
+      - **Generics Specialization**: `func identity<T>(_ x: T) -> T` called with `Int`
+        becomes a concrete `identity(_: Int) -> Int`, eliminating generic dispatch.
+      - **ARC Optimization**: Adjacent `strong_retain`/`strong_release` pairs within the
+        same basic block are eliminated. Values proven non-escaping drop all ARC calls.
+      - **Devirtualization**: `witness_method` and `class_method` calls become direct calls
+        when the concrete type is known, enabling LLVM inlining of protocol bodies.
+      - **COW Optimization**: Copy-on-Write uniqueness checks are inlined so single-owner
+        buffers mutate in place without copying.
+
+      ### Whole Module Optimization and Incremental Builds
+
+      WMO (`-whole-module-optimization`, default in Release since Xcode 14) lets the
+      compiler see all files simultaneously, enabling cross-file inlining, dead method
+      elimination, and generic specialization across file boundaries. Trade-off: higher
+      peak memory and more invalidation on any file change. Xcode mitigates with **batch
+      mode** — compile in small groups rather than one batch.
+
+      Incremental builds track file-level dependencies via `.swiftdeps` in DerivedData. A
+      single-line change to an internal function body recompiles in 1-5 seconds. Changing
+      a public interface invalidates more dependents and takes longer.
+
+      ```swift
+      // Debug: no optimization, full debug info
+      swiftc -Onone -g -emit-object main.swift -o main.o
+
+      // Release: WMO + thin LTO
+      swiftc -O -whole-module-optimization -lto=thin \
+             -emit-object -module-name MyApp main.swift helper.swift
+
+      // Debugging: emit SIL to inspect optimizer output
+      swiftc -emit-sil main.swift
+
+      // Emit LLVM IR for backend inspection
+      swiftc -emit-ir -O main.swift
+      ```
+
+      <Callout title="Swift ABI Stability (Swift 5+, 2019)">
+        Before Swift 5, every app bundled `libswiftCore.dylib`, adding 10-20 MB to the IPA.
+        Since Swift 5.0, the standard library ships with iOS 12.4+ and is never bundled.
+        Swift 5+ apps are significantly smaller. The ABI stability guarantee means any
+        Swift 5 binary runs on future OS versions with no recompilation. Module stability
+        (Swift 5.1+) further allows libraries built with different Swift 5.x versions to
+        coexist, as long as they target the same stdlib major version.
+      </Callout>
+
+      ### Cross-Platform Comparison
+
+      Dart AOT (`dart compile` in Flutter Release) compiles to a **kernel AST snapshot**
+      loaded by the Dart VM. The Dart runtime (~7 MB) ships alongside the app. The Dart
+      AOT backend does not use LLVM — it emits native code directly, with no intermediate
+      IR comparable to SIL.
+
+      Kotlin on Android compiles to JVM bytecode via `kotlinc`, then ART's `dex2oat`
+      converts bytecode to native code **on device** at install time. This two-stage
+      process means final optimization depends on the device's ART version. Swift's
+      single-stage AOT compilation gives Apple complete control over the pipeline, from
+      source to ARM64 binary, with no on-device compilation.

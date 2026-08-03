@@ -1,0 +1,127 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Quick Stats
+
+<StatGrid>
+  <StatItem label="Project System" value="SDK-style .csproj" />
+  <StatItem label="Build Entry" value="MauiProgram.cs" />
+  <StatItem label="App Root" value="App.xaml + App.xaml.cs" />
+  <StatItem label="Nav Shell" value="AppShell.xaml" />
+  <StatItem label="Platform Targets" value="6 (Android, iOS, Mac, Win, Tizen, tvOS)" />
+</StatGrid>
+
+### Core Concept
+
+A .NET MAUI project uses the **SDK-style .csproj** format with `<UseMaui>true</UseMaui>`, which imports the MAUI workload and enables multi-targeting across all platforms from a single project file. Unlike Xamarin.Forms requiring one project per platform, MAUI consolidates everything into one `.csproj` and uses conditional compilation (`#if ANDROID`, `#if IOS`) plus platform-specific folders for divergences.
+
+### MauiProgram.cs — Builder Pattern
+
+Every MAUI app starts here. The `MauiApp.CreateBuilder()` method returns a `MauiAppBuilder` that configures fonts, services, handlers, and platform middleware:
+
+```csharp
+public static class MauiProgram
+{
+  public static MauiApp CreateMauiApp()
+  {
+    var builder = MauiApp.CreateBuilder();
+    builder
+      .UseMauiApp<App>()
+      .ConfigureFonts(fonts =>
+      {
+        fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
+        fonts.AddFont("OpenSans-Semibold.ttf", "OpenSansSemibold");
+      })
+      .ConfigureMauiHandlers(handlers =>
+      {
+        handlers.AddHandler<CustomEntry, CustomEntryHandler>();
+      });
+    builder.Services.AddSingleton<IDataService, DataService>();
+    builder.Services.AddTransient<MainPage>();
+    builder.Services.AddTransient<MainViewModel>();
+    return builder.Build();
+  }
+}
+```
+
+The builder pattern ensures configuration happens before the DI container is sealed. After `Build()`, the container is frozen — all service registrations must occur within the builder chain.
+
+### App.xaml and AppShell.xaml
+
+`App.xaml` defines global resources (brushes, styles, templates) and sets the `MainPage` property, typically an `AppShell` instance. Lifecycle callbacks `OnStart`, `OnSleep`, and `OnResume` live in `App.xaml.cs`. `AppShell.xaml` declares navigation structure declaratively:
+
+```xml
+<Shell x:Class="MyApp.AppShell">
+  <TabBar>
+    <ShellContent Title="Home" ContentTemplate="{DataTemplate views:HomePage}" />
+    <ShellContent Title="Settings" ContentTemplate="{DataTemplate views:SettingsPage}" />
+  </TabBar>
+</Shell>
+```
+
+This enables URI-based navigation: `Shell.Current.GoToAsync("//Home")` resolves to the registered route.
+
+### Resources Folder Breakdown
+
+```
+Resources/
+  Styles/     Colors.xaml, Styles.xaml -- theme brushes, default styles
+  Images/     SVG/PNG processed into platform-specific resolutions
+  Fonts/      Custom .ttf/.otf with build action MauiFont
+  Raw/        Static files via FileSystem.OpenAppPackageFileAsync
+  Splash/     Boot screen artwork (splash.svg)
+```
+
+Each resource type uses a dedicated MSBuild action (`MauiImage`, `MauiFont`, `MauiAsset`) that generates the correct platform output — SVGs are rasterized to PNG densities, fonts are bundled per OS.
+
+### Platforms Folder Strategy
+
+Platform-specific code under `Platforms/` compiles only for its target via SDK imports:
+
+- **Android** -- `MainActivity.cs`, `MainApplication.cs`, `AndroidManifest.xml`
+- **iOS** -- `AppDelegate.cs`, `Info.plist`, `Program.cs`
+- **MacCatalyst** -- `AppDelegate.cs`, `Info.plist`
+- **Windows** -- `App.xaml`, `Package.appxmanifest`
+- **Tizen** -- `Main.cs`, `tizen-manifest.xml`
+
+For shared platform abstractions, use the **partial class convention**: declare a partial class in shared code and add a platform file with the same name under `Platforms/`. The build system merges them per target.
+
+<Callout type="warning">
+  Never reference platform-specific types (e.g., `Android.Content.Context`) outside the Platforms folder or `#if` guards. The compiler processes every file for every target -- unguarded platform calls produce build errors on other platforms.
+</Callout>
+
+### MVVM Folder Convention
+
+Standard separation puts each MVVM layer in its own folder:
+
+```
+Pages/        ContentPage subclasses (XAML + code-behind)
+ViewModels/   ObservableObject subclasses with [RelayCommand]
+Models/       Data entities, DTOs, enums
+Services/     Interfaces and implementations for business logic
+Converters/   IValueConverter implementations
+Controls/     Reusable custom controls
+```
+
+This structure keeps tests focused -- ViewModels and Services can be unit-tested without loading any XAML context.
+
+### Pitfalls
+
+- **Missing build actions**. Images or fonts present in the folder but not referenced in `.csproj` are excluded. SDK-style globbing covers standard paths, but custom folders need explicit `<MauiImage Include="..." />` entries.
+- **Overloaded builder**. Registering too many services in `MauiProgram.cs` directly makes the file unreadable. Use extension methods on `IServiceCollection` to group registrations by feature.
+- **Platform targeting errors**. Setting `$(TargetFrameworks)` to uninstalled workloads produces build failures. Run `dotnet workload list` to verify installed MAUI workloads.
+
+### Framework Insight
+
+MAUI's single-project model is powered by **MSBuild multi-targeting** and the **workload SDK resolver**. The `<UseMaui>true</UseMaui>` property triggers `Microsoft.Maui.Sdk`, which provides platform-specific `.targets` files. Each target framework (`net8.0-android`, `net8.0-ios`, `net8.0-maccatalyst`, `net8.0-windows10.0.19041.0`) compiles its own binary -- resource items are deduplicated per-platform and converted at build time.
+
+### Comparison: Single Project vs Multi-Project
+
+<DecisionMatrix
+  columns={["Single Project (MAUI)", "Multi-Project (Xamarin.Forms)"]}
+  rows={[
+    { property: "Code sharing", "Single Project (MAUI)": "100% shared with #if guards", "Multi-Project (Xamarin.Forms)": "Shared via PCL or Shared Project" },
+    { property: "Build passes", "Single Project (MAUI)": "One .csproj, N build passes", "Multi-Project (Xamarin.Forms)": "One .csproj per platform" },
+    { property: "Platform code", "Single Project (MAUI)": "Platforms/ folder + partial class", "Multi-Project (Xamarin.Forms)": "Separate project files" },
+    { property: "Solution entries", "Single Project (MAUI)": "Single .csproj in solution", "Multi-Project (Xamarin.Forms)": "N .csproj entries" }
+  ]}
+/>

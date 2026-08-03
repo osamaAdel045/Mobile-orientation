@@ -1,0 +1,133 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+      <StatItem value="Kotlin" label="Source Lang" />
+      <StatItem value="D8" label="Dexer" />
+      <StatItem value="R8" label="Shrink/Optimize" />
+      <StatItem value="ART PGO" label="On-Device AOT" />
+    </StatGrid>
+
+    ### The Android Compilation Pipeline
+
+    Android's compilation pipeline transforms Kotlin source into optimized native code through five distinct stages. Unlike iOS where Clang compiles directly to ARM, or Flutter where Dart compiles ahead-of-time to native, Android uses a multi-tier approach that balances install size, startup time, and steady-state performance.
+
+    ```
+    Kotlin Source (.kt)
+        │ kotlinc (Kotlin → JVM bytecode)
+        ↓
+    JVM Bytecode (.class)
+        │ D8 (desugar Java 8+ features → register-based DEX)
+        ↓
+    DEX Bytecode (.dex)
+        │ R8 (shrink, optimize resources, obfuscate)
+        ↓
+    Optimized DEX + Resources
+        │ AAPT2 (package resources with compiled IDs)
+        ↓
+    APK / AAB (Android App Bundle)
+        │ Google Play → device installation
+        ↓
+    ART: Interpreted startup → profile collection → AOT compilation
+        │ Cloud Profiles aggregate across user base
+        ↓
+    Native ARM64 Code (hot paths only)
+    ```
+
+    ### Stage 1: Kotlin Compilation
+
+    The Kotlin compiler (`kotlinc`) first parses source into an AST, performs type checking and inference, then generates JVM bytecode (.class files). The Kotlin compiler plugin system is critical — Compose, Kotlin Serialization, and Room all use compiler plugins to generate code at compile time rather than runtime.
+
+    ```kotlin
+    // Compiler plugin example — Room generates SQL bindings at compile time
+    @Dao
+    interface UserDao {
+        @Query("SELECT * FROM users WHERE id = :userId")
+        suspend fun getUser(userId: String): User?
+        // Room's compiler plugin generates the implementation:
+        // - Creates a Coroutine-aware SQLite statement
+        // - Binds :userId parameter
+        // - Maps Cursor to User data class
+        // All verified at compile time — 0 runtime overhead
+    }
+
+    // The generated JVM bytecode (conceptual) inlines type-safe SQL
+    // without reflection — this is the key advantage of compile-time codegen
+    // over ORMs that use runtime reflection (like Hibernate on JVM)
+    ```
+
+    <Callout title="Compiler Plugin Ecosystem">
+      The Kotlin compiler plugin API (KCP) is what makes Android's tooling uniquely powerful. The Compose plugin transforms `@Composable` functions to add composer parameters. Room's plugin generates SQLite bindings without reflection. Kotlin Serialization generates serializer instances. Parcelize generates `Parcelable` implementations. All of this happens during `kotlinc` — before D8 ever sees the bytecode — producing zero-reflection, zero-runtime-overhead code.
+    </Callout>
+
+    ### Stage 2: D8 Dexer
+
+    D8 is Android's dex compiler that transforms JVM bytecode (.class) into Dalvik Executable (.dex) format. DEX is a register-based bytecode format designed for constrained memory — it uses variable-length instruction encoding where common instructions (move, return, goto) are 2 bytes vs JVM's fixed 4-byte instructions. D8 also **desugars** Java 8+ language features (lambdas, method references, streams) into equivalent code using only APIs available on the target API level.
+
+    ```kotlin
+    // Java 8+ features that D8 desugars
+    val filtered = listOf("apple", "banana", "cherry")
+        .filter { it.startsWith("a") }  // Lambda → anonymous class or invokedynamic
+        .map { it.uppercase() }         // Method reference equivalent
+
+    // D8 transforms the lambda bytecode into:
+    // - On API 26+: keeps invokedynamic (native support on ART)
+    // - On API < 26: generates synthetic anonymous class (no performance tax
+    //   thanks to D8's optimization passes that inline trivial lambdas)
+    ```
+
+    ### Stage 3: R8 Shrinking and Optimization
+
+    **R8** is Android's code shrinker, optimizer, and obfuscator. It analyzes the entire call graph of your app and all dependencies, then removes unreachable code. The Kotlin standard library, AndroidX, and Play Services are hundreds of megabytes of bytecode — R8 trims them to only the classes and methods your app actually calls.
+
+    Stage | Function | Typical Size Impact
+    ---|---|---
+    Shrinking | Remove unused classes/methods | -40% to -60%
+    Optimization | Inline methods, merge classes, remove dead branches | -5% to -15%
+    Obfuscation | Rename classes/methods to short names | -10% to -20%
+    Resource shrinking | Remove unused resources | -20% to -50%
+
+    ```kotlin
+    // R8 keep rules prevent obfuscation of reflection-targeted code
+    // proguard-rules.pro
+    // Keep data classes serialized with Gson/Kotlin Serialization
+    -keepclassmembers class com.example.app.data.** {
+        <fields>;
+    }
+    // Keep Compose previews — R8 would strip @Preview annotations
+    -keepattributes *Annotation*, EnclosingMethod
+    -keep class androidx.compose.** { *; }
+    ```
+
+    ### Stage 4: APK/AAB Packaging
+
+    AAPT2 (Android Asset Packaging Tool) compiles resources into a binary format with compiled resource IDs. The **Android App Bundle** (AAB) format defers APK generation to Google Play, which produces device-specific APKs containing only the resources and native libraries for the target device's screen density, CPU architecture, and locale — reducing download size by 30-50% compared to a universal APK.
+
+    ### Stage 5: ART Profile-Guided AOT
+
+    When a user installs your app, ART starts in **interpreted-only** mode. While the app runs, ART traces method execution counts and records the calling context. After enough traces (typically 2-3 app sessions), ART compiles the top ~15% of methods (by execution frequency) to native ARM64 code.
+
+    ```kotlin
+    // Baseline profiles — shipped with your APK to skip the warmup phase
+    // Saved in src/main/baseline-prof.txt
+    HSPL androidx.compose.foundation.lazy.LazyListState$scrollInProgress$1
+    HSPL androidx.compose.ui.node.LayoutNodeLayoutDelegate$performMeasure$2
+    HSPL androidx.compose.animation.core.AnimationState::animateTo
+    // "HSPL" = Hot Startup Post List — methods ART compiles on first install
+    ```
+
+    Baseline profiles ship inside the APK as `assets/dexopt/baseline.prof`. When ART first launches the app, it reads the baseline profile and immediately AOT-compiles those methods, bypassing the interpretation warmup phase entirely. Apps using baseline profiles see startup improvements of 30-40% on first launch.
+
+    <Callout title="Cloud Profiles vs Baseline Profiles">
+      Cloud Profiles are aggregated across all Play Store installs of your app — Google Play collects anonymized execution data and distributes optimized profiles to new installs. Baseline Profiles ship with your APK and cover your own hot paths (Compose initialization, ViewModel creation, first-screen rendering). Both are complementary: baseline profiles cover the paths you know; cloud profiles cover the paths your aggregate user base actually exercises.
+    </Callout>
+
+    ### Comparison to Other Platforms
+
+    | Platform | Compilation Strategy | Startup | Install Size |
+    |---|---|---|---|
+    | Android (ART) | Profile-guided AOT + interpretation | Warmup phase, then native | Small (DEX + AOT cache) |
+    | Flutter (Dart) | Full AOT to ARM | Fast, full native code | Large (engine + app) |
+    | React Native (Hermes) | Bytecode (pre-compiled JS) | Fast parse, slow execution | Medium |
+    | iOS (Swift/ObjC) | Full AOT via Clang/LLVM | Fastest | Large |
+
+    Flutter's Dart AOT compiles everything to native ARM code at build time, eliminating the warmup phase entirely but producing larger binaries. React Native's Hermes uses pre-compiled JavaScript bytecode that parses quickly but executes slower than native — especially for animation frames. Android's hybrid approach (interpret → hot-path AOT) achieves the smallest install size while converging to near-native execution speed within 2-3 app sessions.

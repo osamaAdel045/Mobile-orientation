@@ -1,0 +1,135 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    Android dependency management has evolved from flat JAR drops to version catalogs,
+    Bill-of-Materials coordination, and declarative Gradle DSLs backed by Maven repositories.
+
+    <StatGrid>
+        <StatItem value="8.7+" label="Gradle minimum for version catalogs (stable)" />
+        <StatItem value="1.5B+" label="Monthly downloads from Maven Central (est.)" />
+        <StatItem value="280+" label="Jetpack libraries published by Google" />
+        <StatItem value="3" label="Resolution phases: parse, resolve, download" />
+    </StatGrid>
+
+    ### Repository Topology
+
+    Gradle resolves dependencies from `repositories {}` blocks searched in order. Google
+    Maven hosts Jetpack and Play Services; Maven Central hosts the OSS ecosystem. Use
+    `FAIL_ON_PROJECT_REPOS` to prevent module-level overrides:
+
+    ```kotlin
+    // settings.gradle.kts
+    dependencyResolutionManagement {
+        repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+        repositories {
+            google()
+            mavenCentral()
+        }
+    }
+    ```
+
+    ### Version Catalogs
+
+    The `gradle/libs.versions.toml` file is the single source of truth. Gradle generates
+    type-safe accessors (`libs.compose.material3`) for every entry:
+
+    ```toml
+    [versions]
+    kotlin = "2.0.21"
+    compose-bom = "2024.12.01"
+    room = "2.6.1"
+
+    [libraries]
+    compose-bom = { group = "androidx.compose", name = "compose-bom",
+                    version.ref = "compose-bom" }
+    compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+    room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+
+    [plugins]
+    kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose",
+                       version.ref = "kotlin" }
+    ksp = { id = "com.google.devtools.ksp", version = "2.0.21-1.0.28" }
+    ```
+
+    ```kotlin
+    // build.gradle.kts — module-level consumption
+    dependencies {
+        implementation(platform(libs.compose.bom))
+        implementation(libs.compose.material3)
+        ksp(libs.room.compiler)
+    }
+    ```
+
+    <Callout title="Version Catalog Golden Rule">
+
+        Never reference catalog versions outside the TOML file. Use `libs.` accessors
+        exclusively — string references lose type safety and silently bypass the catalog.
+        Gate-check with `gradle lint` tasks in CI.
+
+    </Callout>
+
+    ### BOM — Bill of Materials
+
+    A BOM pins versions for an entire ecosystem. Compose and Firebase ship BOMs. Add
+    `implementation(platform(...))` so downstream artifacts omit version strings:
+
+    ```kotlin
+    dependencies {
+        implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+        implementation("androidx.compose.material3:material3")
+    }
+    ```
+
+    ### Dependency Resolution & Locking
+
+    Gradle's resolution engine runs three phases: metadata parsing, conflict resolution
+    (newest by default), and artifact download (cached in `~/.gradle/caches/`). Use
+    `dependencyLocking` with `lockMode = LockMode.STRICT` to pin transitive versions.
+
+    ### Publishing AAR Libraries
+
+    The `maven-publish` plugin with `singleVariant("release")` publishes Android libraries:
+
+    ```kotlin
+    plugins {
+        id("com.android.library")
+        id("maven-publish")
+        id("signing")
+    }
+    android {
+        publishing { singleVariant("release") { withSourcesJar(); withJavadocJar() } }
+    }
+    ```
+
+    ### Jetpack Library Suite
+
+    Jetpack comprises 280+ AndroidX libraries across four pillars:
+
+    | Pillar | Key Libraries |
+    |--------|---------------|
+    | Foundation | AppCompat, `androidx.core`, collection, annotation |
+    | Architecture | Room, ViewModel, Navigation, Paging, WorkManager |
+    | Behavior | Fragment, Palette, CameraX, SlidingPaneLayout |
+    | UI | Compose, RecyclerView, ViewPager2, FlexboxLayout |
+
+    Track Jetpack dependency versions with an audit task:
+
+    ```kotlin
+    tasks.register("jetpackAudit") {
+        doLast {
+            configurations["implementation"]
+                ?.allDependencyConstraints
+                ?.filter { it.group.startsWith("androidx.") }
+                ?.forEach { println("  ${it.name} v${it.version ?: "?"}") }
+        }
+    }
+    ```
+
+    <DecisionMatrix
+        scores={[
+            { label: "Version Catalog", score: 9 },
+            { label: "BOM", score: 7 },
+            { label: "Manual Pinning", score: 4 },
+        ]}
+        pros="Catalogs provide type-safe accessors, single-source-of-truth, and integrate with Renovate. BOMs are ecosystem-level and reduce per-artifact repetition."
+        cons="Catalogs require Gradle 7.4.2+ and per-project setup. BOMs cannot override partial versions without `force`. Manual pinning does not scale past a few modules."
+    />

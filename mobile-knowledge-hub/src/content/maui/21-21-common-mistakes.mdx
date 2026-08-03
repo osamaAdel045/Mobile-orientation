@@ -1,0 +1,125 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Mistake 1: Not Using Compiled Bindings
+
+**Wrong — Runtime string-based bindings fail silently:**
+```csharp
+<Label Text="{Binding UserName}" />
+```
+A renamed ViewModel property compiles fine but emits a silent `BindingExpression` error at runtime. No compile-time safety.
+
+**Right — Compiled bindings with `x:DataType`:**
+```csharp
+<Label Text="{Binding UserName}" x:DataType="viewmodels:ProfileViewModel}" />
+```
+Opt-in via `x:DataType`. The compiler verifies binding paths at build time. A mismatched type or renamed property becomes a build error instead of a runtime failure. Also 5-10x faster than reflection-based bindings.
+
+<Callout variant="warning" title="Binding Context Pitfall">
+When `x:DataType` is set on a parent element and a child uses a different DataTemplate type, explicitly set `x:DataType` on the DataTemplate root. Without this, compiled bindings inside the template fail silently at runtime.
+</Callout>
+
+### Mistake 2: Blocking the UI Thread
+
+**Wrong — `.Result` freezes the UI:**
+```csharp
+[RelayCommand]
+public async Task LoadData()
+{
+    var json = client.GetStringAsync(url).Result; // Blocks UI thread
+    Items = JsonSerializer.Deserialize<List<Item>>(json);
+}
+```
+`.Result` or `.Wait()` blocks the MAUI UI thread. On Android this triggers an ANR dialog after 5 seconds of unresponsiveness.
+
+**Right — `await` yields the UI thread:**
+```csharp
+[RelayCommand]
+public async Task LoadData()
+{
+    var json = await client.GetStringAsync(url);
+    Items = JsonSerializer.Deserialize<List<Item>>(json);
+}
+```
+The continuation resumes on the captured `SynchronizationContext` (the MAUI main thread), so `Items` triggers `INotifyPropertyChanged` on the correct thread automatically.
+
+### Mistake 3: Memory Leaks from Event Subscriptions
+
+**Wrong — Strong event reference prevents GC:**
+```csharp
+public class MyViewModel
+{
+    public MyViewModel(MyService service) =>
+        service.OnMessage += HandleMessage; // VM can never be GC'd
+}
+```
+The long-lived service holds a strong reference to the ViewModel delegate. Even after the page is popped, the ViewModel graph cannot be collected.
+
+**Right — Explicit unsubscribe in Dispose:**
+```csharp
+public class MyViewModel : IDisposable
+{
+    private readonly MyService _service;
+    public MyViewModel(MyService service) { _service = service; _service.OnMessage += HandleMessage; }
+    public void Dispose() => _service.OnMessage -= HandleMessage;
+}
+```
+Unsubscribe in `Dispose()`, called when navigation removes the page. Alternatively, use `WeakReferenceMessenger` from CommunityToolkit.Mvvm for pub/sub without strong references.
+
+### Mistake 4: Incorrect Lifecycle Handling
+
+**Wrong — Heavy work in constructor:**
+```csharp
+public MainPage() { InitializeComponent(); LoadData(); }
+```
+The constructor runs before `OnAppearing`. Starting network work here wastes the first frame and may fail if layout is not ready yet.
+
+**Right — Use OnAppearing / OnDisappearing:**
+```csharp
+protected override async void OnAppearing()
+{
+    base.OnAppearing();
+    await LoadData(); // Page is visible; show a loading indicator
+}
+protected override void OnDisappearing()
+{
+    base.OnDisappearing();
+    CancelPendingWork();
+}
+```
+`OnAppearing` runs after the UI is fully constructed and visible. `OnDisappearing` is the correct place to cancel in-flight operations. For Shell navigation, also use `IQueryAttributable.ApplyQueryAttributes` to receive parameters.
+
+### Mistake 5: ViewModel Bloat
+
+**Wrong — One ViewModel for everything:**
+```csharp
+public class OrdersViewModel
+{
+    public ObservableCollection<Order> Orders { get; }
+    public ObservableCollection<Customer> Customers { get; }
+    public IRelayCommand LoadCommand, SaveCommand, PrintCommand, EmailCommand;
+}
+```
+A ViewModel owning multiple entities and commands becomes untestable. File length exceeds 500 lines and changes to one feature risk breaking another.
+
+**Right — One ViewModel per navigation destination:**
+```csharp
+public class OrderListViewModel { /* Order list only */ }
+public class OrderDetailViewModel { /* Single order detail + edit */ }
+```
+Each ViewModel owns exactly one data entity or user task. Use `IMessenger` for cross-ViewModel communication (e.g., "order saved" refreshes the list).
+
+### Mistake 6: Wrong DI Lifetime
+
+**Wrong — Singleton for user-scoped data:**
+```csharp
+builder.Services.AddSingleton<ICartService, CartService>();
+```
+A singleton `CartService` means User A's cart leaks into User B's session when the app supports multi-user login on the same device.
+
+**Right — Match lifetime to ownership scope:**
+```csharp
+builder.Services.AddTransient<ICartService, CartService>();  // One per session
+builder.Services.AddSingleton<HttpClient>();                  // Stateless infra
+builder.Services.AddTransient<OrderListViewModel>();           // New per navigation
+```
+Rule: ViewModels are Transient (new per navigation), services holding user state are Transient or Scoped, stateless infrastructure (HTTP clients, loggers, config) are Singleton. Never hold mutable user state in a Singleton.

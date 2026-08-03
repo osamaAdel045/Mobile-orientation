@@ -1,0 +1,146 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid>
+      <StatItem value="Metro" label="Bundler" />
+      <StatItem value="Hermes (hermesc)" label="JS Compiler" />
+      <StatItem value="Babel" label="JS Transpiler" />
+      <StatItem value="Codegen" label="Native Bindings" />
+    </StatGrid>
+
+    ### Complete Build Pipeline
+
+    React Native's build pipeline transforms TypeScript/JavaScript source code into a native mobile binary. Unlike a web React app where the browser does the final parsing, RN pre-compiles the entire JS layer into a compact bytecode format at build time.
+
+    ```
+    ┌──────────── COMPLETE RN BUILD PIPELINE ─────────────────┐
+    │                                                          │
+    │  TypeScript / JavaScript Source                          │
+    │  *.tsx, *.ts, *.jsx, *.js                                │
+    │         │                                                │
+    │         ▼                                                │
+    │  ┌──────────────┐                                        │
+    │  │    Babel     │  Transforms JSX to React.createElement,│
+    │  │ Transpiler   │  strips TypeScript types, applies      │
+    │  │              │  plugins (module-resolver, reanimated) │
+    │  └──────┬───────┘                                        │
+    │         │                                                │
+    │         ▼                                                │
+    │  ┌──────────────┐                                        │
+    │  │    Metro     │  Bundle step:                          │
+    │  │   Bundler    │  1. Resolve every import/require       │
+    │  │              │  2. Combine into single .jsbundle      │
+    │  │              │  3. Minify (via Terser in production)  │
+    │  └──────┬───────┘                                        │
+    │         │                                                │
+    │  ┌──────▼──────┐            ┌──────────────────┐        │
+    │  │  hermesc    │  (if using │   Codegen (NA)   │        │
+    │  │  Compiler   │   Hermes)  │  TS spec → C++   │        │
+    │  │  .jsbundle  │            │  → Java → ObjC   │        │
+    │  │     ↓       │            └──────────────────┘        │
+    │  │  .hbc file  │                                         │
+    │  │  (bytecode) │                                         │
+    │  └──────┬──────┘                                         │
+    │         │                                                │
+    │         ▼                                                │
+    │  ┌──────────────┐                                        │
+    │  │   Native     │  Xcode (iOS) or Gradle (Android)       │
+    │  │   Shell      │  Compiles C++ (Fabric, Yoga, JSI),     │
+    │  │              │  platform SDK calls, embeds .hbc       │
+    │  └──────┬───────┘                                        │
+    │         │                                                │
+    │         ▼                                                │
+    │  ┌──────────────┐                                        │
+    │  │  APK / IPA   │  Final mobile binary                    │
+    │  └──────────────┘                                        │
+    └──────────────────────────────────────────────────────────┘
+    ```
+
+    The pipeline has two parallel tracks. The left track (Babel → Metro → Hermes) processes all JavaScript/TypeScript into Hermes bytecode. The right track (Codegen) generates native source files (C++, Java, Obj-C) from TypeScript spec interfaces. Both tracks converge at the native shell build step.
+
+    ### Metro Bundler Deep Dive
+
+    Metro is React Native's custom JavaScript bundler, written in Node.js. It is purpose-built for RN and is not a general-purpose bundler like Webpack or Vite. Metro's design prioritizes **fast incremental builds** and **reliable import resolution** for the React Native module system.
+
+    Metro operates in three phases:
+
+    **Resolution:** Metro resolves every `import`/`require()` statement to an actual file path. It checks `node_modules`, Haste modules (a legacy RN system for global module names), and platform-specific extensions automatically. For example, `import Button from './Button'` resolves to `./Button.ios.tsx` on iOS and `./Button.android.tsx` on Android. This platform-aware resolution is built into Metro — no configuration needed.
+
+    **Transformation:** Each resolved file is transformed through Babel. Babel's `metro-react-native-babel-preset` handles JSX, Flow/TypeScript type stripping, and RN-specific transforms (like the `import` → `require` conversion). Transformers can be chained: a file might go through the Reanimated plugin (to process worklet functions), then the module-resolver plugin (for path aliases), then the base preset.
+
+    **Bundling:** Transformed modules are concatenated into a single JavaScript bundle file, wrapped in Metro's module system (a lightweight CommonJS-like runtime). The output is a single `.jsbundle` string. In production, Terser minifies it. In development, Metro runs an **HTTP server** that serves incremental updates — this is what powers Fast Refresh.
+
+    ```javascript
+    // metro.config.js — typical production configuration
+    const { getDefaultConfig, mergeConfig } = require('@react-native/metro-config');
+
+    const config = {
+      transformer: {
+        // Use react-native-babel-transformer (default)
+        babelTransformerPath: require.resolve(
+          'react-native/metro-babel-transformer'
+        ),
+        // Enable Hermes-specific optimizations
+        hermesParser: true,
+      },
+      resolver: {
+        // Platform-specific extensions checked left to right
+        sourceExts: ['tsx', 'ts', 'jsx', 'js', 'json', 'svg'],
+        // Custom module resolution for monorepo aliases
+        extraNodeModules: require('node-libs-react-native'),
+      },
+      // Inline requires — defers loading modules until they're first used
+      transformer: { inlineRequires: true },
+    };
+
+    module.exports = mergeConfig(getDefaultConfig(__dirname), config);
+    ```
+
+    <Callout title="Hermes AOT: What It Actually Does">
+    Hermes does not compile JavaScript to ARM machine code. It compiles JS to a custom **register-based bytecode** that the Hermes VM interprets at runtime. The bytecode is designed for size (compact instruction encoding) and start-up speed (zero parsing — the VM walks bytecode directly). Flutter's Dart AOT, by contrast, compiles Dart to ARM64 machine code via the Dart VM's AOT pipeline. Hermes bytecode is interpreted, so peak throughput is lower than Dart AOT, but startup time is comparable because neither has a JIT warmup phase. Hermes's key advantage over Dart AOT is binary size: Hermes bytecode is ~30% smaller than an equivalent Dart AOT snapshot.
+    </Callout>
+
+    ### Hermes AOT vs JSC JIT
+
+    Before Hermes became the default (RN 0.70+), RN used JavaScriptCore on iOS and V8 on Android — both **JIT (Just-In-Time)** engines. Understanding the JIT vs AOT tradeoff is critical for RN performance tuning.
+
+    A **JIT engine** (V8, JSC) works in phases: (1) Parse JS source into AST, (2) Interpret bytecode (fast start, slow execution), (3) Profile hot paths (find functions called repeatedly), (4) Compile hot paths to ARM machine code (slow compilation, fast execution), (5) De-optimize if assumptions change (slow again). The JIT spends the first few seconds of app life profiling and compiling — this startup cost is visible as a UI freeze in older RN apps. The benefit is that long-running heavy computation eventually runs at near-native speed.
+
+    Hermes **AOT compilation** works differently: (1) At build time, parse JS and generate bytecode (`.hbc`), (2) At runtime, load bytecode into memory and start executing immediately — no parse, no profile, no compile. The interpreter is extremely fast at dispatch (bytecode is a simple instruction stream). Startup is 30-50% faster because there is no warmup. The tradeoff is that long-running pure-JS computation runs 2-5x slower than JIT peaks — but in practice, heavy computation lives in native modules (Turbo Modules), not JS.
+
+    ### Memory Layout of a React Native App
+
+    A running RN app has two memory heaps:
+
+    **JS Heap (Hermes):** Contains all JavaScript objects, closures, React component trees, Redux store, and application state. Hermes's GC is a simple mark-sweep collector (not generational like V8). Memory pressure on the JS heap forces GC pauses, which block the JS thread and cause dropped frames. This is why large FlatLists and image caches can cause jank — React state objects accumulate on the JS heap.
+
+    **Native Heap (C++/Obj-C/Java):** Contains native views (each `UIView` is a UIResponder object), Yoga node tree, image bitmap buffers, and Turbo Module data. Native memory is managed by ARC (iOS) or the JVM GC (Android). Native memory pressure (too many views, too many bitmaps) causes OOM crashes.
+
+    **Bundle Splitting** (RAM bundles + inline requires) addresses this by never loading unused modules into the JS heap. With `inlineRequires: true` in Metro, individual functions become the loading boundary: `import { formatDate } from './utils'` defers loading `./utils` until `formatDate` is first called, not at app start.
+
+    ### Fast Refresh vs Hot Reload
+
+    Fast Refresh is RN's development hot-reload system, rebuilt from the ground up in the New Architecture. It works by: (1) Metro detects a file change, (2) Metro sends an incremental diff to the running app via WebSocket, (3) The React reconciler re-runs only the changed component's render function, (4) The component's local state is preserved (useState values, Redux store, React Query cache). Fast Refresh does NOT reset the app — it patches the running instance. This is significantly better than Hot Reload (the old system), which re-ran the entire app's entry point on every save.
+
+    ### Codegen and the New Architecture
+
+    The New Architecture's Codegen step is a build-time process that reads TypeScript spec files and generates the C++, Java, and Objective-C glue code needed for JSI-based native communication. Codegen replaces the old `@ReactMethod` reflection-based module registration with compile-time type checking.
+
+    ```typescript
+    // TypeScript spec → Codegen generates C++ host objects
+    // This file lives at src/native/NativeDeviceInfo.ts
+    import { TurboModule, TurboModuleRegistry, Double } from 'react-native';
+
+    export interface Spec extends TurboModule {
+      readonly getDeviceModel: () => string;
+      readonly getSystemVersion: () => string;
+      readonly getBatteryLevel: () => Double;
+    }
+
+    export default TurboModuleRegistry.getEnforcing<Spec>('DeviceInfo');
+    ```
+
+    Codegen produces: for Android, a Java class with the correct JNI signatures; for iOS, an Objective-C protocol that the native module implements; for the C++ layer, a JSI host object that exposes functions directly to the Hermes JS heap. This is all verified at build time — a mismatch between the spec and the native implementation is a compile error, not a runtime crash.
+
+    ### Comparison: Hermes vs Dart AOT (Flutter) vs WebView JS (Ionic)
+
+    Hermes bytecode is interpreted; Dart AOT (Flutter) is compiled to ARM64 machine code stored in the app bundle. Dart AOT has higher peak performance because it skips interpretation entirely. Hermes bytecode is more compact — a typical RN app bundle is 8-12 MB vs Flutter's 15-20 MB. Hermes's startup time (~600ms on mid-range Android) is comparable to Dart AOT (~500ms) because both skip parsing at runtime. WebView JS (Ionic) uses the system WebView's V8/JSC engine, which means JS parsing happens at every cold start — typical TTI is 2-3s on low-end devices, making Ionic 3-5x slower at startup.

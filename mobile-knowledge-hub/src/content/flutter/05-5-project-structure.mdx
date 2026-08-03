@@ -1,0 +1,143 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      ### Standard Project Layout
+
+      ```
+      my_app/
+      ├── android/                    # Android host project (Kotlin)
+      ├── ios/                        # iOS host project (Swift)
+      ├── lib/                        # ★ Your Dart code
+      │   ├── main.dart               # Entry point: runApp(MyApp())
+      │   ├── app.dart                # MaterialApp + router config
+      │   ├── app_router.dart         # GoRouter route definitions
+      │   ├── features/               # Feature-based modules
+      │   │   ├── auth/
+      │   │   │   ├── screens/        # LoginScreen, RegisterScreen
+      │   │   │   ├── widgets/        # AuthTextField, SocialLoginButton
+      │   │   │   ├── blocs/          # AuthBloc, AuthState, AuthEvent
+      │   │   │   └── models/         # User, AuthToken
+      │   │   ├── home/
+      │   │   └── settings/
+      │   ├── core/                   # Shared infrastructure
+      │   │   ├── network/            # Dio client, interceptors
+      │   │   ├── theme/              # ThemeData, ColorScheme, TextStyles
+      │   │   ├── router/             # Route guards, redirect logic
+      │   │   ├── di/                 # Riverpod providers / GetIt
+      │   │   └── utils/              # Extensions, constants
+      │   ├── data/                   # Data layer
+      │   │   ├── repositories/       # Repository implementations
+      │   │   ├── datasources/        # Remote + local data sources
+      │   │   └── models/             # DTOs and serialization
+      │   └── l10n/                   # ARB localization files
+      ├── test/                       # Mirrors lib/ structure
+      ├── integration_test/           # End-to-end driver tests
+      ├── assets/images/
+      ├── assets/fonts/
+      ├── pubspec.yaml                # Dependencies, assets, fonts
+      └── analysis_options.yaml       # Dart linter rules
+      ```
+
+### Feature-First vs Layer-First Architecture
+
+      **Feature-first** organizes by product feature — each feature folder contains all layers (screens, widgets, blocs, models). This is the recommended approach for medium-to-large apps. Feature teams work independently, code can be lazy-loaded per route, and features can be extracted into separate packages. The trade-off: shared code (network, theme) must be carefully lifted to `core/`.
+
+      **Layer-first** organizes by technical layer (all screens together, all blocs together). Simple for small apps but breaks down at scale — a single feature change requires editing files in 4-5 directories. Prefer feature-first from project start to avoid costly restructuring later.
+
+### Package-Based Monorepo
+
+      For teams of 5+, extract each feature into a **standalone Dart package** within a monorepo. This enforces explicit dependency boundaries via `pubspec.yaml` — `auth` cannot import `home` without declaring it as a dependency.
+
+      ```
+      my_app/
+      ├── packages/
+      │   ├── auth/        # pubspec: depends on core
+      │   ├── home/        # pubspec: depends on auth, core
+      │   ├── core/        # pubspec: depends on flutter, dio
+      │   └── data/        # pubspec: depends on core
+      └── app/             # Thin shell — imports all packages
+          └── lib/main.dart
+      ```
+
+### pubspec.yaml Deep Dive
+
+      ```yaml
+      name: my_app
+      version: 2.1.0+42
+      publish_to: 'none'
+
+      environment:
+        sdk: '>=3.2.0 <4.0.0'
+
+      dependencies:
+        flutter:
+          sdk: flutter
+        flutter_localizations:
+          sdk: flutter
+        go_router: ^14.2.0        # ^14.2.0 means >=14.2.0 <15.0.0
+        flutter_riverpod: ^2.5.1
+        dio: ^5.4.0
+        json_annotation: ^4.8.0
+        intl: ^0.19.0
+
+      dev_dependencies:
+        flutter_test:
+          sdk: flutter
+        flutter_lints: ^4.0.0
+        build_runner: ^2.4.0
+        json_serializable: ^6.7.0
+        mocktail: ^1.0.0
+
+      flutter:
+        uses-material-design: true
+        generate: true           # gen_l10n from .arb files
+        assets:
+          - assets/images/
+        fonts:
+          - family: CustomFont
+            fonts:
+              - asset: assets/fonts/CustomFont-Regular.ttf
+              - asset: assets/fonts/CustomFont-Bold.ttf
+                weight: 700
+      ```
+
+### Environments, Localization & Theming
+
+      Use `--dart-define` for environment configuration at compile time. Values are injected via `String.fromEnvironment()` and `bool.fromEnvironment()` — these are evaluated at compile time and tree-shaken when unused.
+
+      ```dart
+      // lib/core/config.dart
+      abstract final class AppConfig {
+        static const String apiBaseUrl = String.fromEnvironment(
+          'API_BASE_URL',
+          defaultValue: 'https://dev-api.example.com',
+        );
+        static const bool enableLogging = bool.fromEnvironment(
+          'ENABLE_LOGGING',
+          defaultValue: true,
+        );
+      }
+      // Build: flutter run --dart-define=API_BASE_URL=https://api.example.com
+      ```
+
+      Localization uses **ARB files** in `lib/l10n/`. Enable with `generate: true` in pubspec.yaml. The `flutter gen-l10n` tool produces type-safe `AppLocalizations` classes. Usage: `AppLocalizations.of(context)!.welcomeMessage(user.name)`.
+
+      For theming, extend `ThemeData` with `ThemeExtension` subclasses to add custom brand properties. This provides type-safe access via `Theme.of(context).extension<AppColors>()` and supports hot reload and animated theme transitions through `lerp()`.
+
+### Dependency Injection & Testing
+
+      Riverpod providers serve as the DI container — they lazily construct dependencies, cache singletons, and auto-dispose when unwatched. The test directory mirrors `lib/` for discoverability. Each BLoC should have 100% event coverage: inject mock dependencies, dispatch events, assert state transitions.
+
+      ```dart
+      // DI via Riverpod providers:
+      final apiClientProvider = Provider<Dio>((ref) {
+        return Dio(BaseOptions(baseUrl: AppConfig.apiBaseUrl));
+      });
+      final authRepositoryProvider = Provider<AuthRepository>((ref) {
+        return AuthRepository(ref.watch(apiClientProvider));
+      });
+      ```
+
+      <Callout title="Project hygiene:">
+        Run `dart analyze` as a CI gate with zero warnings. Use `build_runner` for JSON serialization (json_serializable) and data classes (freezed). Each `pubspec.yaml` dependency must be justified — ban transitive dependency access with `avoid_relative_lib_imports`. Structure the test directory exactly like `lib/` so tests are discoverable alongside their source files.
+      </Callout>

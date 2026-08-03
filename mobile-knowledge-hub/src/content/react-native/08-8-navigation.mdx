@@ -1,0 +1,144 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="React Navigation" label="Standard" />
+  <StatItem value="Native Stack" label="Best Performance" />
+  <StatItem value="TypeSafe" label="Full TypeScript" />
+  <StatItem value="Deep Links" label="Universal + App Links" />
+  <StatItem value="Auth Flows" label="Conditional Screens" />
+</StatGrid>
+
+### React Navigation — The Standard
+
+React Navigation provides Stack, Tab, and Drawer navigators backed by native platform views via `react-native-screens`. Each screen in a native stack is a real `UIViewController` (iOS) or `Fragment` (Android) — not a web-style viewport swap. This means native screen gestures, transition animations, and memory management.
+
+```tsx
+// Type-safe param list — share across your app
+export type RootStackParamList = {
+  Home: undefined;
+  Profile: { userId: string };
+  Settings: { tab?: 'notifications' | 'privacy' };
+};
+
+// Type-safe navigator
+const Stack = createNativeStackNavigator<RootStackParamList>();
+
+function RootNavigator() {
+  return (
+    <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="Home" component={HomeScreen} />
+      <Stack.Screen name="Profile" component={ProfileScreen} />
+      <Stack.Screen name="Settings" component={SettingsScreen} />
+    </Stack.Navigator>
+  );
+}
+
+// In a screen — full type inference
+function ProfileScreen({ route, navigation }: NativeStackScreenProps<RootStackParamList, 'Profile'>) {
+  const { userId } = route.params; // typed as string
+  return (
+    <Button title="Go to Settings" onPress={() => navigation.navigate('Settings', { tab: 'privacy' })} />
+  );
+}
+```
+
+### Navigation Lifecycle
+
+React Navigation emits `focus` and `blur` events when screens enter/leave the view hierarchy. Unlike `useEffect`'s mount/unmount (which fires only once), these fire every time a screen gains or loses focus — critical for tabs and drawers.
+
+```tsx
+import { useFocusEffect } from '@react-navigation/native';
+
+function DashboardScreen() {
+  useFocusEffect(
+    useCallback(() => {
+      // Refetch data every time user returns to this tab
+      refetch();
+      return () => console.log('screen blurred');
+    }, [])
+  );
+  return <DashboardContent data={data} />;
+}
+```
+
+### Deep Linking
+
+Configure deep links in the `linking` prop. React Navigation parses incoming URLs into navigation state — supporting both iOS Universal Links (`https://yourapp.com/profile/123`) and Android App Links.
+
+```tsx
+const linking = {
+  prefixes: ['yourapp://', 'https://yourapp.com'],
+  config: {
+    screens: {
+      Home: '',
+      Profile: 'profile/:userId',
+      Settings: 'settings/:tab?',
+      ProductDetails: {
+        path: 'product/:productId',
+        parse: { productId: Number }, // parse param from query string
+      },
+    },
+  },
+};
+
+// Pass to NavigationContainer
+<NavigationContainer linking={linking}>
+  <RootNavigator />
+</NavigationContainer>
+// URL "yourapp://profile/abc-123" → navigates to ProfileScreen({ userId: "abc-123" })
+```
+
+```typescript
+// iOS: apple-app-site-association (hosted at /.well-known/)
+{ "applinks": { "apps": [], "details": [{ "appID": "TEAMID.com.yourapp", "paths": ["*"] }] } }
+// Android: intent-filter in AndroidManifest.xml
+// <intent-filter android:autoVerify="true">
+//   <action android:name="android.intent.action.VIEW" />
+//   <data android:scheme="https" android:host="yourapp.com" /></intent-filter>
+```
+
+### Auth Flow — Conditional Navigation
+
+Conditionally render navigators based on auth state. Swapping the root navigator triggers a seamless transition.
+
+```tsx
+function RootNavigator() {
+  const { isAuthenticated } = useAuth();
+  return (<Stack.Navigator screenOptions={{ headerShown: false }}>
+    {isAuthenticated ? (<><Stack.Screen name="HomeTabs" component={BottomTabNavigator} />
+      <Stack.Screen name="Profile" component={ProfileScreen} /></>) : (<><Stack.Screen name="Welcome" component={WelcomeScreen} />
+      <Stack.Screen name="SignIn" component={SignInScreen} />
+      <Stack.Screen name="SignUp" component={SignUpScreen} /></>)}
+  </Stack.Navigator>);
+}
+```
+
+### Nested Navigators
+
+Tab navigators inside stack navigators (and vice versa) are common in production apps.
+
+```
+RootStack (NativeStack)
+  BottomTabNavigator
+    FeedScreen / SearchScreen / ProfileTab
+      ProfileStack → MyProfileScreen, EditProfileScreen
+  ModalScreen (presented modally)
+```
+
+<Callout title="Native Stack Performance">
+`createNativeStackNavigator` (from `@react-navigation/native-stack`) uses `UIViewController` / `Fragment` transitions — significantly faster than the JS-driven `createStackNavigator`. Always prefer native stack for production apps. The trade-off: less animation customization than the JS stack.
+</Callout>
+
+### Common Pitfalls
+
+**Navigation params as complex objects**: Params are serialized via JSON for deep linking — pass IDs, not full objects. Fetch entities from cache or query by ID on the destination screen.
+
+**Nesting `NavigationContainer`**: Only one `NavigationContainer` per app. Nesting containers breaks deep linking and state persistence.
+
+**Stack inside Tab inside Stack**: Call `navigation.navigate('ScreenName')` from a nested stack and it may not find the target. Use `navigation.getParent()` to navigate ancestor navigators, or use `useNavigation` from `@react-navigation/native` which walks the tree.
+
+**Not resetting navigation on auth change**: If a user signs out but the previous screen stack persists, they may see flash of old content. Conditional navigator rendering (shown above) prevents this.
+
+### vs Flutter's GoRouter vs Native
+
+Flutter's GoRouter uses declarative routing with `GoRouter` and `ShellRoute` for persistent UI — similar to RN's nested navigators. Native iOS uses `NavigationStack` (iOS 16+) with `NavigationPath` for type-safe navigation. Android's Jetpack Navigation uses `NavHost` with a navigation graph — closest to RN's declarative screen list. React Navigation's strength is its unified API across both platforms.

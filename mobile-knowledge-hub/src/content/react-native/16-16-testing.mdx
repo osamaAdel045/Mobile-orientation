@@ -1,0 +1,133 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="70/20/10" label="Unit/Integration/E2E ratio" />
+  <StatItem value="3" label="Testing libraries (Jest, RNTL, Detox)" />
+  <StatItem value="2M+" label="Jest downloads per week" />
+</StatGrid>
+
+### Testing Pyramid for React Native
+
+A balanced RN testing strategy follows: **~70% unit tests** (Jest — pure functions, reducers, hooks), **~20% integration tests** (React Native Testing Library — component behaviors with mocked API), **~10% E2E tests** (Detox on simulators). RN's unique challenge is the native module boundary — every test touching a native module requires mocking, and E2E tests must handle JS-to-native bridge synchronization.
+
+```
+Testing Pyramid for RN
+═══════════════════════
+
+            ╱╲
+           ╱  ╲          E2E (Detox)
+          ╱    ╲         ~10% — critical user journeys
+         ╱──────╲
+        ╱        ╲       Integration (RNTL)
+       ╱          ╲      ~20% — screen + component flows
+      ╱────────────╲
+     ╱              ╲    Unit (Jest)
+    ╱                ╲   ~70% — pure functions, hooks, utils
+   ╱──────────────────╲
+  ╱────────────────────╲  Jest config, mocks, CI infra
+```
+
+### Jest Unit Testing
+
+Jest is the default test runner. Mock native modules with `jest.mock` to prevent import failures. Use `@jest-environment jsdom` for pure logic, default to `node` for RN projects. Always mock platform APIs (AsyncStorage, Reanimated, navigation) in a shared `__mocks__/` directory.
+
+```typescript
+// __mocks__/@react-native-async-storage/async-storage.ts
+const store: Record<string, string> = {};
+export default {
+  setItem: jest.fn((k: string, v: string) => { store[k] = v; return Promise.resolve(null); }),
+  getItem: jest.fn((k: string) => Promise.resolve(store[k] ?? null)),
+  removeItem: jest.fn((k: string) => { delete store[k]; return Promise.resolve(null); }),
+  clear: jest.fn(() => { Object.keys(store).forEach(k => delete store[k]); return Promise.resolve(null); }),
+};
+```
+
+```typescript
+// Testing a custom hook with renderHook
+import {renderHook, act} from '@testing-library/react-hooks';
+import {useCounter} from './useCounter';
+
+describe('useCounter', () => {
+  it('increments the count', () => {
+    const {result} = renderHook(() => useCounter(0));
+    act(() => { result.current.increment(); });
+    expect(result.current.count).toBe(1);
+  });
+});
+```
+
+### React Native Testing Library
+
+RNTL provides `render`, `fireEvent`, and `waitFor` that work with RN's component tree. Query by `testID`, `role`, or `text` — prefer `getByRole` and `getByText` over `getByTestId` — they test accessibility and user-perceivable output together.
+
+```tsx
+import {render, fireEvent, screen, waitFor} from '@testing-library/react-native';
+import {LoginForm} from './LoginForm';
+
+describe('LoginForm', () => {
+  const mockOnSubmit = jest.fn();
+
+  it('submits with valid credentials', async () => {
+    render(<LoginForm onSubmit={mockOnSubmit} />);
+
+    fireEvent.changeText(screen.getByPlaceholderText(/email/i), 'user@test.com');
+    fireEvent.changeText(screen.getByPlaceholderText(/password/i), 'Test123!');
+    fireEvent.press(screen.getByRole('button', {name: /submit/i}));
+
+    await waitFor(() => {
+      expect(mockOnSubmit).toHaveBeenCalledWith({email: 'user@test.com', password: 'Test123!'});
+    });
+  });
+
+  it('shows validation error for empty email', async () => {
+    render(<LoginForm onSubmit={mockOnSubmit} />);
+    fireEvent.press(screen.getByRole('button', {name: /submit/i}));
+
+    await waitFor(() => {
+      expect(screen.getByText(/email is required/i)).toBeTruthy();
+    });
+  });
+});
+```
+
+<Callout title="Avoid testing implementation details">
+  Never test internal state, instance methods, or class names. Test what the user experiences: rendered text, button pressability, accessibility labels. RNTL discourages `getByTestId` for everything — prefer `getByRole` and `getByText` first. This makes tests resilient to refactoring.
+</Callout>
+
+### E2E Testing with Detox
+
+Detox uses **gray-box testing** — it knows about the RN component tree and synchronizes with the app event loop, eliminating arbitrary `sleep` calls. Detox waits for network requests, animations, and timers to settle before proceeding. Configure platforms in `detox.config.js` and write tests in Jest syntax.
+
+```javascript
+// e2e/login.test.js
+describe('Login Flow', () => {
+  beforeAll(async () => { await device.launchApp(); });
+
+  it('logs in with valid credentials', async () => {
+    await element(by.id('email-input')).typeText('user@test.com');
+    await element(by.id('password-input')).typeText('Test123!');
+    await element(by.id('login-button')).tap();
+    await expect(element(by.text('Welcome back'))).toBeVisible();
+  });
+});
+```
+
+### Visual Regression Testing
+
+Catch UI drift with visual testing. **Percy** integrates with Detox via `@percy/detox` to capture and diff screenshots against baselines. Run on representative devices (iPhone 15 + Pixel 8). Combine with Appium snapshot comparison for broader coverage.
+
+### Common Pitfalls
+
+**Snapshot overuse** — Over-snapshotting produces false positives on every minor change. Limit to stable presentational components. **Over-mocking** — Hides integration bugs. Share mocks in `__mocks__/` and test real behavior where possible. **Timing-dependent E2E** — Never use `sleep()` in Detox. Use `waitFor(element).toBeVisible().withTimeout(5000)`. **Single-platform testing** — RN code paths differ between iOS and Android. Run E2E on both in CI.
+
+<Callout title="CI test configuration">
+  Run Jest first (fastest, ~2 min), then RNTL integration (~5 min), then Detox E2E as a separate job on device farms (BrowserStack, Sauce Labs). Use `npx detox test --configuration ios.debug --cleanup` for parallel E2E sharding. In GitHub Actions, set `--maxWorkers` to the number of physical cores.
+</Callout>
+
+### Test Organization
+
+Colocate `__tests__/` with source files. Use `.test.ts` for Jest, `.test.tsx` for RNTL, and `e2e/*.test.js` for Detox. Jest config uses `preset: 'react-native'` and `transformIgnorePatterns` for transpiling `node_modules`. Run with `--maxWorkers` matching physical cores for parallel execution. Track coverage with `jest --coverage` and enforce minimum thresholds in CI (e.g., 80% line coverage).
+
+### Comparison to Flutter
+
+Flutter's `flutter_test` and `integration_test` stay within Dart — no third-party runner needed. Widget tests are faster than RNTL because they skip the native bridge. However, this means Flutter tests can miss real-device integration bugs. Detox's gray-box synchronization is more robust than Flutter's `tester.pump()`. RN requires more tooling configuration but provides better coverage of real platform surfaces, while Flutter's testing is simpler but more abstracted from device behavior.

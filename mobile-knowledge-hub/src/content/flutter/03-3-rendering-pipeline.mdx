@@ -1,0 +1,132 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      ### Full Pipeline: From build() to Pixels
+
+      Every frame Flutter renders goes through a five-stage pipeline. Understanding this pipeline is essential for diagnosing performance issues and tuning animations.
+
+      ```
+      ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌───────────┐   ┌──────────┐
+      │  BUILD   │   │  LAYOUT  │   │  PAINT   │   │ COMPOSITE │   │  RASTER  │
+      │ (Dart)   │→  │ (Dart)   │→  │ (Dart)   │→  │ (Engine)  │→  │ (GPU)    │
+      │          │   │          │   │          │   │           │   │          │
+      │ widget   │   │constraint│   │ display  │   │ layer     │   │ shader   │
+      │ configs  │   │negotiation│  │ lists    │   │ tree     │   │ execute  │
+      └──────────┘   └──────────┘   └──────────┘   └───────────┘   └──────────┘
+            │              │              │               │              │
+            │    dirty     │    dirty     │    dirty      │              │
+            │    elements  │   render     │   layers      │              │
+            │    list      │  objects     │               │              │
+            └──────────────┴──────────────┴───────────────┘              │
+                                 (vsync signal triggers traversal)       │
+                                                                         │
+            Frame budget: 16.67ms at 60fps, 8.33ms at 120fps             │
+            UI thread (build+layout+paint) must finish before raster     │
+            thread can begin. These two threads pipeline across frames.  │
+      ```
+
+### Build Phase: Widget Construction
+
+      When a widget's state changes (via `setState()` or a state management update), the framework marks that element as dirty in a list. On the next vsync, the framework calls `build()` on all dirty elements, one at a time, depth-first. The build method returns a new widget configuration subtree — but these are just lightweight configuration objects, not rendered output. The output of the build phase is a completely new widget tree that replaces the old one.
+
+      The build phase is the **only phase where developers write code** (the `build()` method). Everything downstream — layout, paint, compositing — is handled by the framework. A common performance mistake is doing expensive work inside `build()`: network calls, file I/O, heavy computation, or constructing large lists of widgets unnecessarily. These block the build phase and delay the entire pipeline.
+
+### Layout Phase: Constraint Negotiation
+
+      Layout is a **single-pass, depth-first traversal** of the render tree. Each parent passes `BoxConstraints` (min/max width, min/max height) down to each child, and each child returns a `Size` up to its parent. The parent cannot renegotiate — it must accept the child's chosen size within the given constraints. This is what makes Flutter layout O(n), unlike HTML/CSS which can require multiple passes.
+
+      **Concrete example with numbers:** A `Column` widget with height 600 contains three children: a `SizedBox(height: 100)`, an `Expanded` child, and a `SizedBox(height: 50)`. The column first lays out the non-flexible children (100 + 50 = 150 fixed), subtracts this from available height (600 - 150 = 450 remaining), and passes `BoxConstraints(minWidth: 0, maxWidth: infinity, minHeight: 450, maxHeight: 450)` to the `Expanded` child — tight on both min and max height since there is no remaining flexibility. The Expanded returns `Size(width, 450)`.
+
+      ```
+      Column (height: 600) receives parent constraints
+          ↓ passes BoxConstraints(0, INF, 0, 600) to its render object
+      RenderColumn sums fixed children: SizedBox(100) + SizedBox(50) = 150
+          ↓ remaining height: 600 - 150 = 450
+          ↓ passes BoxConstraints(0, INF, 450, 450) to Expanded child
+      Expanded returns Size(columnWidth, 450)
+          ↓ Column returns overall Size(columnWidth, 600) to its parent
+      ```
+
+      `ConstrainedBox`, `SizedBox`, `Flexible`, and `Expanded` all modify constraints before passing them to children. `Expanded` creates a tight constraint where `min == max` (the child has no choice about size). `Flexible` creates a loose constraint where `min = 0, max = remaining` (the child can choose any size up to the maximum).
+
+### Paint Phase: Display Lists
+
+      After layout, each `RenderObject` paints itself into a **display list** — a `Picture` object that records draw commands with concrete coordinates (layout has already determined absolute positions). The `Canvas` object exposed to `RenderBox.paint()` is a recording canvas: `canvas.drawRect()`, `canvas.drawParagraph()`, `canvas.drawImage()` all append commands to the display list rather than executing them immediately on the GPU.
+
+      ```dart
+      // Inside RenderBox.paint():
+      // context.canvas is a recording Canvas
+      // It does NOT draw to screen — it records operations
+
+      void paint(PaintingContext context, Offset offset) {
+        final canvas = context.canvas;
+
+        // These are all recorded, not executed:
+        canvas.drawRect(
+          offset & const Size(100, 100),  // Rect from offset + size
+          Paint()..color = Colors.blue,
+        );
+        canvas.drawParagraph(paragraph, offset + const Offset(8, 8));
+      }
+      ```
+
+      The key optimization: **display lists are reusable**. If a render object's paint output hasn't changed (`shouldRepaint()` returns false), the framework replays the same display list from the previous frame without calling `paint()` again. This is why animations that only change a transformation matrix can run at 120fps — the paint method does not need to re-record draw commands, just reposition existing layers.
+
+### RepaintBoundary & Layer Compositing
+
+      By default, Flutter paints the entire screen into a single display list. Any change anywhere repaints everything. `RepaintBoundary` inserts a composited layer boundary: changes inside the boundary repaint only that layer; the rest of the screen reuses its cached display list.
+
+      ```
+      Without RepaintBoundary (single layer):
+      ┌──────────────────────────────────────┐
+      │     One Picture — every change       │
+      │     repaints the entire frame        │
+      │  ┌────────┐  ┌──────────────────┐    │
+      │  │ Header │  │   Content area    │    │
+      │  │(static)│  │   (animating)     │    │
+      │  └────────┘  └──────────────────┘    │
+      │  Content animates → header also      │
+      │  repaints (wasted GPU work)          │
+      └──────────────────────────────────────┘
+
+      With RepaintBoundary (two layers):
+      ┌──────────────────────────────────────┐
+      │  ┌──────────── Layer A ──────────┐   │
+      │  │ Header (cached display list)   │   │
+      │  └────────────────────────────────┘   │
+      │  ┌──────────── Layer B ──────────┐   │
+      │  │ Content (repaints on change)   │   │
+      │  └────────────────────────────────┘   │
+      │  Compositor merges A + B → final      │
+      └──────────────────────────────────────┘
+      ```
+
+      `Opacity`, `ClipRect`, `Transform`, and `ShaderMask` widgets automatically create composited layers — but they call `saveLayer()` on the canvas, which creates an offscreen buffer. Each `saveLayer()` doubles GPU memory usage for that region and adds a render pass. Overusing these widgets (especially nested opacity or `BackdropFilter`) is the most common cause of GPU-bound frame drops.
+
+### Frame Budget: Achieving 60/120 fps
+
+      At 60fps, each frame has 16.67ms to complete all pipeline stages. At 120fps (ProMotion displays), this drops to 8.33ms. The UI thread (build + layout + paint) typically uses 4-8ms. The raster thread then converts display lists to GPU commands and submits them.
+
+      Flutter's scheduler uses the vsync signal (via `Ticker`) to pace frames. When the UI thread finishes early, it yields to the raster thread. When the UI thread takes too long, the raster thread has less time to render, and the frame may be dropped — resulting in visible jank. The DevTools timeline view shows exactly how each frame's budget is consumed.
+
+      <Callout title="Frame budget rule:">
+        If build + layout + paint exceeds 8ms on a 120fps display, you will miss frames. Profile with `flutter run --profile` on a real device and inspect the DevTools timeline. Look for excessive `saveLayer()` calls (from Opacity, ClipPath, BackdropFilter), unnecessary widget rebuilds, and large images being decoded on the UI thread.
+      </Callout>
+
+### Flutter vs HTML/CSS Layout
+
+      HTML/CSS uses a multi-pass layout model. A flexbox container may lay out its children, find they overflow, and re-layout with adjusted sizes. CSS `width: 50%` requires the parent to know its own size first, which may depend on the grandparent. This mutual dependency leads to O(n²) worst-case complexity and causes "layout thrashing" when JavaScript reads and writes layout properties in sequence.
+
+      Flutter's layout is **single-pass O(n)** — constraints go down, sizes come up. A parent cannot change its mind after seeing the child's size. This guarantee bounds layout time per frame and eliminates the possibility of layout thrashing. The trade-off is that Flutter cannot express certain CSS patterns (like `width: 50%` of the parent's width) without explicit measurement — `LayoutBuilder` provides this escape hatch by running a mini-pipeline with adjusted constraints.
+
+      <DecisionMatrix
+        scores={[
+          { label: 'Layout Predictability', score: 9 },
+          { label: 'Frame Budget Safety', score: 9 },
+          { label: 'Animation Smoothness', score: 10 },
+          { label: 'Complex Layout Expressiveness', score: 7 },
+          { label: 'Developer Tooling', score: 8 },
+        ]}
+        pros="Single-pass O(n) layout guarantees frame budget, no layout thrashing, Impeller eliminates shader jank, complete visual control via custom RenderObject, display list caching enables efficient repaints"
+        cons="Fixed constraint model cannot express all CSS patterns (min-content, max-content, aspect-ratio without explicit code), heavy compositing (Opacity/ClipPath/BackdropFilter) costs GPU memory through saveLayer, no built-in lazy layout in Column/Row (must use ListView/GridView)"
+      />

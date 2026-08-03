@@ -1,0 +1,171 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem value="50k+" label="Packages on pub.dev" />
+  <StatItem value="9B+" label="Total downloads" />
+  <StatItem value="0" label="Nested dependency hell" />
+  <StatItem value="~600" label="Flutter Favorite packages" />
+</StatGrid>
+
+### pub.dev Ecosystem
+
+The Dart ecosystem revolves around **pub.dev**, the official package registry hosting over 50,000 packages with more than 9 billion cumulative downloads. Unlike npm or PyPI, pub.dev enforces **unified version resolution** — each dependency version appears exactly once in the dependency graph, eliminating the nested `node_modules` explosion that plagues JavaScript projects. When you run `dart pub get`, the solver (based on the PubGrub algorithm) finds a single set of compatible versions for all transitive dependencies. If the solver fails, you must manually reconcile constraint conflicts rather than relying on duplicate nested copies.
+
+Every package on pub.dev receives an automated **package score** out of 130 points, displayed prominently on each package page. This score breaks down into: static analysis (passing `dart analyze` without errors), documentation coverage (percent of public API documented), and convention compliance (proper license, valid pubspec, platform support metadata). Packages can also earn **Flutter Favorite** designation — a quality badge awarded by the Flutter ecosystem team after rigorous review of code quality, documentation, test coverage, and maintenance practices. Roughly 600 packages have earned this badge as of mid-2026.
+
+<Callout title="Dart's version resolution advantage">
+  npm installs multiple versions of the same package when constraints conflict, leading to bundle bloat and subtle bugs where two copies of the same class are incompatible. The Dart solver refuses to resolve rather than silently duplicating — this seems stricter, but it surfaces real incompatibilities at build time instead of runtime. The constraint is simple: all transitive dependencies must agree on every shared dependency's version.
+</Callout>
+
+### Version Constraint Syntax
+
+Dart's `pubspec.yaml` supports a rich set of constraint operators, each serving a specific use case:
+
+```yaml
+dependencies:
+  # Caret syntax — most common, allows compatible upgrades
+  # ^1.2.3 means >=1.2.3 <2.0.0
+  http: ^1.2.0
+
+  # Tilde syntax — conservative, only patch-level bumps
+  # ~1.2.3 means >=1.2.3 <1.3.0
+  riverpod: ~2.5.0
+
+  # Exact version — pin for reproducibility
+  flutter_riverpod: 2.5.1
+
+  # Range constraints — explicit lower and upper bounds
+  dio: ">=5.0.0 <6.0.0"
+
+  # Git dependency — from any branch, tag, or commit
+  my_package:
+    git:
+      url: https://github.com/org/my_package.git
+      ref: main  # or tag: v1.0.0, or commit: a1b2c3d
+
+  # Path dependency — local packages (development only)
+  local_utils:
+    path: ../packages/local_utils
+
+  # Hosted from a custom server (private registry)
+  internal_pkg:
+    hosted: https://packages.mycompany.com
+    version: ^1.0.0
+```
+
+```yaml
+# Complete pubspec.yaml with annotations
+name: my_app
+description: A production Flutter application.
+version: 1.2.3+4           # semantic version + build number (Android)
+publish_to: none            # prevents accidental publishing to pub.dev
+
+environment:
+  sdk: ^3.0.0               # Dart SDK constraint
+  flutter: ^3.10.0          # Flutter SDK constraint
+
+dependencies:
+  flutter:
+    sdk: flutter            # special: references the Flutter framework
+
+  # Core dependencies
+  flutter_riverpod: ^2.5.0
+  dio: ^5.4.0
+  go_router: ^14.0.0
+
+  # Feature-specific
+  camera: ^0.11.0
+  local_auth: ^2.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  mocktail: ^1.0.0
+  bloc_test: ^9.1.0
+
+dependency_overrides:
+  # Use ONLY temporarily for conflict resolution, never in production
+  # transitive_pkg: ^2.0.0
+```
+
+### Monorepo Management with Melos
+
+For projects spanning multiple packages, **Melos** is the standard tool. It provides workspace-aware versioning, inter-package dependency linking, automated changelog generation, and lifecycle hooks. A typical configuration:
+
+```yaml
+# melos.yaml
+name: my_project
+packages:
+  - packages/**
+  - apps/**
+command:
+  version:
+    includeCommitScope: true
+    message: "chore(release): publish %s"
+scripts:
+  lint: melos run analyze --no-select
+  test: melos run test:unit && melos run test:integration
+  clean: melos exec -- "dart pub get"
+```
+
+```bash
+# Common Melos commands
+melos bootstrap          # link local packages, resolve dependencies
+melos run test           # run script across all packages
+melos version            # bump versions based on conventional commits
+melos publish --no-dry-run  # publish changed packages to pub.dev
+```
+
+### Dependency Conflict Resolution
+
+When `dart pub get` fails with a version conflict, follow this debugging workflow:
+
+1. **Read the solver output** carefully — it tells you exactly which package requires which version and where the conflict lies.
+2. **Run `dart pub deps`** to see the full resolved tree (if one exists) before the conflict was introduced.
+3. **Check for `^` vs `~`** constraint issues — a package requiring `^2.0.0` conflicts with one requiring `^3.0.0`. Upgrading the older package often resolves this.
+4. **Use `dependency_overrides`** only as a last resort and never commit them to production branches. They force a version regardless of constraints, which can mask real incompatibilities that surface at runtime.
+
+<Callout title="When NOT to use dependency_overrides">
+  Dependency overrides should NEVER ship to production. They suppress legitimate constraint failures and can introduce runtime crashes from API mismatches. Use them only during active migration work on a feature branch, and remove them before merging. For long-term solutions, upgrade packages to compatible versions or contribute patches upstream.
+</Callout>
+
+### Publishing Workflow
+
+Publishing a package follows a strict workflow enforced by `dart pub publish`:
+
+```bash
+# 1. Pre-publish checks
+dart pub publish --dry-run    # preview, no upload
+dart analyze                  # must pass with zero errors
+dart test                     # all tests must pass
+
+# 2. Version bump (semantic)
+# Update version in pubspec.yaml following semver
+
+# 3. Publish
+dart pub publish              # interactive: requires confirmation
+```
+
+For CI-automated publishing, use `--force` with extreme caution:
+
+```bash
+# GitHub Actions / Codemagic
+dart pub publish --force  # only in CI after all checks pass
+```
+
+Private packages can be hosted on custom servers using `pub host` or third-party services like Cloudsmith, GitLab Package Registry, or in-house Artifactory. Configure access via `pubspec.yaml` with the `hosted:` syntax shown above.
+
+<Callout title="Essential packages by category">
+  **Networking:** dio, http, chopper, graphql
+  **State management:** flutter_riverpod, provider, bloc, riverpod
+  **Storage:** drift (SQLite), hive, isar, shared_preferences
+  **UI:** flutter_screenutil, shimmer, lottie, cached_network_image, photo_view
+  **Code generation:** freezed (data classes), json_serializable, retrofit, build_runner, injectable, go_router_builder
+  **Testing:** mocktail, bloc_test, golden_toolkit, patrol
+  **Tools:** flutter_launcher_icons, flutter_native_splash, intl (i18n)
+</Callout>
+
+### Comparison: pub.dev vs npm vs CocoaPods
+
+Unlike npm's nested `node_modules` tree (allowing multiple versions of the same package), Dart's unified resolution is closer to Cargo (Rust) and CocoaPods (iOS). The key trade-off: npm enables conflicting transitive deps to coexist silently, while Dart forces the developer to resolve conflicts explicitly. This means more upfront friction during upgrades but zero "my class Foo is actually two different classes Foo" runtime bugs. Compared to CocoaPods, pub.dev offers integrated scoring, automated publishing, and first-class monorepo tooling — CocoaPods requires Trunk authentication and lacks built-in quality metrics.

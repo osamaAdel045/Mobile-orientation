@@ -1,0 +1,89 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    ### Native Android Decision Matrix
+
+    Choosing native Android development requires evaluating tradeoffs across multiple dimensions. The following matrix scores native Android against the hypothetical ideal of 5/5 per criterion, providing a rational basis for technology decisions.
+
+    <StatGrid columns={3}>
+        <StatItem value="5/5" label="Platform Access" />
+        <StatItem value="1/5" label="Code Sharing" />
+        <StatItem value="5/5" label="Performance" />
+        <StatItem value="5/5" label="Ecosystem" />
+        <StatItem value="4/5" label="Hiring" />
+        <StatItem value="3/5" label="Learning Curve" />
+    </StatGrid>
+
+    <DecisionMatrix
+        scores={[
+            { label: "Platform Access", score: 5 },
+            { label: "Code Sharing", score: 1 },
+            { label: "Performance", score: 5 },
+            { label: "Ecosystem", score: 5 },
+            { label: "Hiring", score: 4 },
+            { label: "Learning Curve", score: 3 }
+        ]}
+        pros="Full access to Android platform APIs on release day. Jetpack Compose, Material 3, CameraX, and Health Connect are available immediately. Best-in-class runtime performance with the ART runtime and profiled AOT compilation. Largest mobile ecosystem with 3B+ active devices, mature tooling, and comprehensive first-party libraries. Large talent pool with deep specialization."
+        cons="Zero code sharing with iOS — separate codebase, separate team. Steep learning curve combining Kotlin, Compose, coroutines, Hilt, Room, and architecture patterns. Higher dual-platform development cost compared to cross-platform alternatives. App review process (Play Store) can delay releases by hours to days."
+    />
+
+    <Callout title="Platform Access Is the Decisive Factor">
+        If your app needs the latest OS APIs on day one — satellite connectivity, foldable display features, predictive back gesture, or Credential Manager passkey support — native Android is the only option. Cross-platform frameworks must wait for binding updates, creating a 3-12 month lag behind platform releases. For features tied to a specific Android release (Android 15 Private Space, Android 14 Photo Picker), native has no substitute.
+    </Callout>
+
+    ### When to Choose Native Android
+
+    - **OS-First Features**: Apps integrating with Wallet, Auto, TV, Wear OS, or Health Connect.
+    - **Hardware Integration**: Camera, sensors, Bluetooth LE, NFC, UWB, or ARCore require native SDK access.
+    - **Platform Excellence**: Apps where animation smoothness, startup time, and battery efficiency differentiate the product.
+    - **Existing Google Ecosystem**: Migrating from or integrating with Google services (Maps, Drive, Sheets API).
+
+    ```kotlin
+    {
+    // Example: Platform-specific API only available on native
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    fun registerSatelliteMessaging(callback: SatelliteCallback) {
+        val manager = getSystemService(SatelliteManager::class.java)
+        manager.requestSatelliteEnabled(callback)
+        // No cross-platform binding exists for satellite APIs
+    }
+    }
+    ```
+
+    ### When NOT to Choose Native Android
+
+    - **Cross-Platform Required**: The same app must ship on both iOS and Android with one codebase.
+    - **Tight Dual-Platform Budget**: Maintaining two native teams exceeds the available engineering headcount.
+    - **Prototype-First Approach**: Validating product-market fit before investing in platform-specific engineering.
+    - **Simple Content-First Apps**: Apps that are primarily server-driven UIs with minimal hardware interaction.
+
+    ```text
+    ┌─────────────────────────────────────────────────┐
+    │          Decision Flow for Native Android        │
+    ├─────────────────────────────────────────────────┤
+    │  1. Need platform-specific hardware API?        │
+    │     └─ YES → Native Android                     │
+    │  2. Single platform only?                       │
+    │     └─ YES → Native Android                     │
+    │  3. Existing native Android team?               │
+    │     └─ YES → Stay native                        │
+    │  4. Performance-critical (60fps UI, camera)?    │
+    │     └─ YES → Native Android                     │
+    │  5. Need Wear OS/Auto/TV/Wallet?                │
+    │     └─ YES → Native Android                     │
+    │  6. Otherwise → evaluate cross-platform         │
+    └─────────────────────────────────────────────────┘
+    ```
+
+    ### Score Breakdown
+
+    **Platform Access (5/5)**: Unmatched. Native SDKs released simultaneously with platform betas. Cross-platform frameworks require additional engineering to expose new APIs, typically lagging by one to two platform releases.
+
+    **Code Sharing (1/5)**: The weakest dimension. Kotlin Multiplatform Mobile (KMP/KMM) improves this for shared business logic, but UI remains fully platform-specific. No code sharing with iOS for UI layer.
+
+    **Performance (5/5)**: ART runtime with profiled AOT compilation delivers near-native execution. Compose's Skia-based rendering pipeline achieves 120fps on mid-range devices. Baseline profiles eliminate JIT warmup.
+
+    **Ecosystem (5/5)**: 3B+ devices, mature tooling (Android Studio, Profiler, Layout Inspector), extensive Jetpack libraries, Play Console, Firebase, Crashlytics. Largest app marketplace.
+
+    **Hiring (4/5)**: Large talent pool but split between Kotlin/Compose and legacy Java/XML expertise. Senior engineers with cross-platform Compose skill are scarce.
+
+    **Learning Curve (3/5)**: Moderate difficulty. Kotlin is approachable, but the full stack — Compose, coroutines, Hilt, Room, Navigation, modularization — requires months to reach production proficiency.

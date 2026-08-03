@@ -1,0 +1,144 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    Android testing spans three tiers: local unit tests, instrumented tests, and
+    end-to-end scenarios. Compose introduced a declarative testing API with semantic
+    matchers that eliminate fragile resource-ID lookups.
+
+    <StatGrid>
+        <StatItem value="3" label="Test tiers: Local, Instrumented, E2E" />
+        <StatItem value="1500+" label="Tests/sec on modern CI runner (local)" />
+        <StatItem value="2-5" label="Minutes typical instrumented suite" />
+        <StatItem value="3" label="Compose test phases: Find, Action, Assert" />
+    </StatGrid>
+
+    ### JUnit 5 and MockK
+
+    MockK provides Kotlin-first mocking with coroutine support via `coEvery`/`coVerify`:
+
+    ```kotlin
+    class CheckoutViewModelTest {
+        private val repo = mockk<CheckoutRepository>()
+        private val viewModel = CheckoutViewModel(repo)
+        @Test
+        fun `processPayment marks success`() = runTest {
+            coEvery { repo.charge(any(), any()) } returns PaymentResult.Success("txn_123")
+            viewModel.processPayment("tok_abc")
+            assertEquals("txn_123", viewModel.transactionId.value)
+            coVerify { repo.charge("tok_abc", 4599) }
+        }
+        @Test
+        fun `processPayment emits error on failure`() = runTest {
+            coEvery { repo.charge(any(), any()) } throws NetworkException("timeout")
+            viewModel.processPayment("tok_abc")
+            assertTrue(viewModel.error.value.contains("timeout"))
+        }
+    }
+    ```
+
+    `runTest` advances `TestDispatcher` automatically.
+
+    ### Coroutines Testing
+
+    `TestScope` enables deterministic async testing with virtual time:
+
+    ```kotlin
+    class CoroutineTest {
+        @Test
+        fun `delay does not block the test thread`() = runTest {
+            val elapsed = measureTimeMillis { delay(10_000) }
+            assertTrue(elapsed < 100)
+        }
+    }
+    ```
+
+    <Callout title="Never use `runBlocking` in tests">
+
+        `runBlocking` blocks the JVM thread and causes flaky timeouts. Always use `runTest`.
+
+    </Callout>
+
+    ### Compose Testing API
+
+    `ComposeTestRule` renders composables with semantic matchers:
+
+    ```kotlin
+    @RunWith(AndroidJUnit4::class)
+    class CheckoutScreenTest {
+        @get:Rule val composeRule = createComposeRule()
+        @Test
+        fun `pay button disabled when cart is empty`() {
+            composeRule.setContent { CheckoutScreen(cartUiState = CartUiState.Empty) }
+            composeRule.onNodeWithText("Pay Now").assertIsNotEnabled()
+        }
+    }
+    ```
+
+    Key matchers: `onNodeWithText`, `onNodeWithTag(testTag)`, `onAllNodes(hasClickAction())`.
+
+    ### Espresso
+
+    Espresso operates on the View hierarchy, auto-waiting for the UI thread:
+
+    ```kotlin
+    @Test
+    fun `login navigates to home`() {
+        onView(withId(R.id.email_input))
+            .perform(typeText("user@example.com"), closeSoftKeyboard())
+        onView(withId(R.id.login_button)).perform(click())
+        onView(withId(R.id.home_screen)).check(matches(isDisplayed()))
+    }
+    ```
+
+    ### UI Automator
+
+    Crosses app boundaries for system dialogs:
+
+    ```kotlin
+    @Test
+    fun permissionDialog_allowsCamera() {
+        UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+            .findObject(UiSelector().textContains("allow")).click()
+    }
+    ```
+
+    ### Screenshot Testing
+
+    Roborazzi captures Compose screenshots and diffs against reference images:
+
+    ```kotlin
+    @Test
+    fun checkoutScreen_snapshot() {
+        composeRule.setContent { CheckoutScreen(prefilledState) }
+        composeRule.onRoot().captureRoboImage("screenshots/checkout_screen.png")
+    }
+    ```
+
+    ### CI Test Execution
+
+    Gradle Managed Devices boot emulators with sharding:
+
+    ```kotlin
+    android {
+        testOptions {
+            managedDevices {
+                devices {
+                    pixel6api35(ManagedVirtualDevice) {
+                        device = "Pixel 6"; apiLevel = 35
+                    }
+                }
+            }
+        }
+    }
+    ./gradlew pixel6api35DebugAndroidTest \
+        -Pandroid.testInstrumentationRunnerArguments.numTestsPerShard=50
+    ```
+
+    <DecisionMatrix
+        scores={[
+            { label: "Compose UI Tests", score: 9 },
+            { label: "Espresso", score: 7 },
+            { label: "UI Automator", score: 5 },
+        ]}
+        pros="Compose testing is type-safe and avoids fragmentary IDs. Espresso has the widest legacy support."
+        cons="Compose tests only work on Compose screens. Espresso is fragile with animations."
+    />

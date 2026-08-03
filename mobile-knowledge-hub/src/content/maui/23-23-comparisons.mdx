@@ -1,0 +1,104 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Comparison Overview
+
+This page provides a balanced, technically detailed comparison of .NET MAUI against six alternatives. Each section examines architecture, performance, ecosystem, and developer experience trade-offs. The focus is on concrete technical differences — rendering models, runtime execution, package ecosystems, and team productivity patterns.
+
+### MAUI vs Flutter
+
+**Architecture** — MAUI maps each control to a native platform widget via Handlers. A `Button` becomes `UIButton` on iOS and `MaterialButton` on Android. Flutter draws everything with its own Skia engine. Controls are custom-painted canvases, not native widgets. Flutter has pixel-perfect cross-platform consistency; MAUI inherits native scroll physics, keyboard behavior, and accessibility for free. Flutter's rendering pipeline uses a separate rasterization thread; MAUI delegates drawing to the platform's native pipeline.
+
+**Performance** — Flutter compiles to native ARM via Dart AOT. MAUI runs on Mono's JIT, adding ~1-3s startup vs Flutter's sub-1s. Flutter wins on binary size (~5 MB vs ~20 MB). Runtime scrolling is comparable for standard ListView/CollectionView layouts. Flutter's `AnimationController` enables complex custom transitions; MAUI's `View.TranslateTo` and `FadeTo` cover basic transitions only — anything beyond requires platform handlers or `Microsoft.Maui.Graphics`.
+
+**Ecosystem** — Flutter pub.dev hosts 40,000+ packages with mobile focus (maps, payments, camera). MAUI NuGet has 100,000+ total packages but fewer mobile-specific ones. MAUI wins on enterprise: Azure SDK, Entity Framework, MSAL are first-class packages tested by Microsoft. Flutter's Firebase integration is deeper; MAUI's Azure integration is deeper.
+
+**Team Productivity** — Flutter's hot-reload is sub-1s with state preservation. MAUI Hot Reload is slower and sometimes requires a full rebuild after XAML changes. XAML IntelliSense lags behind Dart's analysis server. C# debugging in Visual Studio is more mature than Dart DevTools for complex breakpoint-based sessions.
+
+### MAUI vs React Native
+
+**Architecture** — RN uses a JavaScript bridge (JSI in newer versions with Fabric renderer) to communicate with native modules. Every crossing requires JSON serialization. MAUI runs C# directly via Mono with no bridge, giving lower latency for native API calls. The JSI bridge in RN 0.76+ reduces overhead but still requires marshaling between JS and native heaps. MAUI's direct-call model shows a measurable advantage in high-frequency native access (camera frames, sensor data, file I/O).
+
+**State Management** — RN relies on Redux, MobX, Zustand, or Context API — flexibility with fragmentation across projects and onboarding. MAUI with CommunityToolkit.Mvvm provides `ObservableObject`, `[RelayCommand]`, and `IMessenger` as a single opinionated path. For convention-over-configuration teams, MAUI's MVVM is more prescriptive. RN teams spend more time on architecture decisions upfront.
+
+**Code Reuse** — RN shares JS business logic; UI must be restyled per platform or use third-party libraries. MAUI shares both logic and XAML UI with conditional markup (`OnPlatform`, `OnIdiom`). Typical reuse: RN ~60-70% for a well-structured app, MAUI ~80-90% for LOB apps sharing both logic and UI.
+
+**Ecosystem** — RN's npm is enormous and mobile-native (React Navigation, Expo, Reanimated). MAUI's is smaller but tightly integrated with Microsoft tooling. RN has more third-party UI kits; MAUI has better first-party enterprise auth (MSAL) and data access (EF Core, SQLite built-in).
+
+### MAUI vs Kotlin Multiplatform (KMP)
+
+**Architecture** — KMP shares business logic (domain, data, networking) via Kotlin common modules. Each platform provides its own UI: SwiftUI for iOS, Jetpack Compose for Android. MAUI shares both logic and UI from a single C# codebase. KMP gives native-fidelity UI at the cost of maintaining two UI codebases. MAUI gives faster development for simple forms at the cost of some platform-chrome depth.
+
+**Performance** — KMP UI is fully native, matching platform performance exactly. MAUI's Handler abstraction adds small per-control overhead for property mapping and layout measurement (sub-millisecond per control). For CPU-bound logic, both compile to native code and perform comparably. KMP's advantage is only significant in UI-heavy or animation-heavy scenarios.
+
+**Tooling** — KMP requires Xcode + Android Studio + Gradle + CocoaPods/SPM. MAUI requires only Visual Studio with the MAUI workload. For a .NET shop, MAUI's single-toolchain setup is dramatically simpler. KMP's Kotlin-to-Swift interop remains fragile across Kotlin and Xcode version bumps.
+
+### MAUI vs Native (SwiftUI / Jetpack Compose)
+
+**Code Sharing** — Native offers zero code sharing: two separate apps in two languages (Swift, Kotlin) with two UI frameworks and two build systems. MAUI offers 80-90% code sharing from a single `.csproj`. The trade-off: native apps consume new OS APIs on day zero; MAUI waits 1-3 months for the .NET SDK binding.
+
+**Performance** — Native has no abstraction layers: direct Metal/Vulkan rendering, minimal binary size (~8 MB for Kotlin). MAUI adds ~15-30 MB and ~1-3s cold start. For CPU-intensive apps (3D games, video processing, AR), native is the only realistic choice. For CRUD and forms, the performance difference is imperceptible.
+
+**Developer Experience** — SwiftUI and Compose previews offer instant visual feedback. MAUI Hot Reload is slower and less reliable. Swift's value semantics and Kotlin's structured concurrency represent modern language design; C# matches with records and async streams, but XAML feels dated compared to Compose's Kotlin DSL.
+
+### MAUI vs Ionic / Capacitor
+
+**Architecture** — Ionic wraps a web app (Angular/React/Vue) in a WebView and bridges native APIs via Capacitor plugins. MAUI renders native controls directly. Ionic's WebView means scrolling physics, text rendering, and keyboard behavior feel web-like rather than native. MAUI feels native because every control renders as the platform's own widget.
+
+**Performance** — Ionic's WebView adds 30-80ms latency per interaction (tap-to-highlight, scroll-deceleration). Memory is 50-100 MB higher due to separate WebView heap allocation. MAUI controls are native widgets with native memory management. Ionic suits simple data-display apps; MAUI handles higher-interaction UIs with smooth native transitions.
+
+**Access to Native Features** — Capacitor exposes ~200 plugins. Missing features require a custom CocoaPod/Android Library bridged through Capacitor. MAUI exposes the entire .NET platform surface directly — no bridge layer needed. For deep platform integration (BLE scanning, NFC tag writing, camera pipeline processing), MAUI is significantly easier to implement and debug.
+
+### MAUI vs Xamarin.Forms
+
+**Project Structure** — MAUI uses a single-project format with multiple `TargetFrameworks` (`net8.0-android`, `net8.0-ios`). Xamarin.Forms required one project per platform plus a shared project, creating 3-4 projects per solution. MAUI eliminates this overhead and the `.Forms` suffix namespace (now `Microsoft.Maui` instead of `Xamarin.Forms`).
+
+**Control Architecture** — Xamarin.Forms used Renderers (heavy `IVisualElementRenderer` classes). MAUI uses Handlers: lightweight `PropertyMapper` + `CommandMapper` dictionaries. Customizing a Button in MAUI takes ~10 lines with a custom Handler. In Xamarin.Forms it required a full Renderer class (~80 lines).
+
+**DI and Configuration** — MAUI has `MauiProgram.CreateMauiApp()` with `Microsoft.Extensions.DependencyInjection` built in. Xamarin.Forms required a third-party container (Unity, Autofac) or manual `DependencyService`. MAUI's `IServiceProvider` is available from any page via `Handler.MauiContext.Services`.
+
+### Code Comparison: Same Feature Across Frameworks
+
+**HTTP GET request + JSON deserialization in MAUI:**
+```csharp
+public class WeatherService
+{
+    readonly HttpClient _http;
+    public WeatherService(HttpClient http) => _http = http;
+
+    public async Task<Weather> GetForecastAsync(string city)
+    {
+        var json = await _http.GetStringAsync($"/weather/{city}");
+        return JsonSerializer.Deserialize<Weather>(json);
+    }
+}
+```
+
+**Same feature in Flutter (Dart with http package):**
+```dart
+class WeatherService {
+  final http.Client client;
+  WeatherService(this.client);
+
+  Future<Weather> getForecast(String city) async {
+    final response = await client.get(Uri.parse('/weather/$city'));
+    return Weather.fromJson(jsonDecode(response.body));
+  }
+}
+```
+
+**Same feature in React Native (TypeScript with fetch):**
+```typescript
+class WeatherService {
+  async getForecast(city: string): Promise<Weather> {
+    const response = await fetch(`/weather/${city}`);
+    const json = await response.json();
+    return json as Weather;
+  }
+}
+```
+
+The patterns are structurally similar across all three. MAUI's advantage is the typed `JsonSerializer` with source generators, no dynamic typing, and the same `HttpClient` API used across all .NET targets.
+
+<Callout variant="info" title="Framework Selection Guide">
+Choose MAUI when: .NET team + Windows target + LOB app. Flutter when: mobile-only + fast iteration + custom UI. RN when: web team going mobile + existing React investment. Native when: peak performance or latest OS features required. Ionic when: web team and app is primarily data display. KMP when: native UI fidelity is required and you can invest in two UI codebases.
+</Callout>

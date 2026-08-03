@@ -1,0 +1,119 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="4" label="Dev menu options" />
+  <StatItem value="2023" label="Flipper deprecated" />
+  <StatItem value="3" label="Debugger types (JS, Hermes, Native)" />
+</StatGrid>
+
+### React Native DevTools
+
+Since Flipper's deprecation, **React Native DevTools** is the primary debugging interface. Access it via the developer menu (shake gesture or `Cmd+D` on iOS simulator, `Cmd+M` on Android emulator). DevTools provides: a component inspector mapping JS components to native view hierarchies, a JS debugger using the Chrome DevTools Protocol, a Hermes debugger with breakpoints and step-through, a network inspector showing all fetch/XHR calls, and a performance profiler for flame charts.
+
+```javascript
+// Enable Hermes debugging (metro.config.js)
+module.exports = {
+  transformer: {
+    inlineRequires: true, // Required for Hermes source maps
+  },
+};
+```
+
+### React DevTools Integration
+
+Standalone `react-devtools` connects to the RN app for React component tree inspection. Install: `npm install -D react-devtools` then `npx react-devtools`. Shows component props, state, hooks values, and the rendered tree. Enable "Highlight updates" to visualize re-renders — components outlined in blue/red indicate unnecessary renders. The profiler tab records a commit-by-commit flame chart showing component render durations.
+
+```bash
+npx react-devtools --port 8097
+```
+
+### Metro Bundler Debugging
+
+Metro serves the JS bundle and exposes debugging endpoints. `http://localhost:8081/json` lists available debugging targets. Source maps must be enabled for TypeScript line numbers in stack traces. Use `react-native-bundle-visualizer` to identify bloated dependencies. When stack traces don't match source lines, reset Metro cache: `npx react-native start --reset-cache`.
+
+```
+Debugging Architecture
+═══════════════════════
+
+  ┌──────────────┐     Chrome DevTools      ┌──────────────┐
+  │  RN DevTools │◄──── Protocol ──────────►│   Hermes     │
+  │  (standalone)│                          │   Engine     │
+  └──────┬───────┘                          └──────┬───────┘
+         │  Metro localhost:8081                    │
+         ▼                                         ▼
+  ┌──────────────┐                          ┌──────────────┐
+  │ Source Maps  │                          │  Native      │
+  │ Bundle Graph │                          │  Crashes     │
+  └──────────────┘                          └──────────────┘
+```
+
+<Callout title="Dev menu cheat sheet">
+  On-device developer menu: shake gesture on physical device, Cmd+D (iOS simulator), Cmd+M (Android emulator). Key options: "Open Hermes Debugger" (preferred over legacy Chrome debugger), "Show Perf Monitor" (FPS overlay), "Show Layout Inspector" (native view bounds), "Toggle Element Inspector" (tap-to-inspect components).
+</Callout>
+
+### Error Handling and Crash Reporting
+
+Wrap the app root in an **ErrorBoundary** for render-phase errors. Use a global handler for unhandled promise rejections. For production, integrate **Sentry** (`@sentry/react-native`) — captures JS exceptions, native crashes (KSCrash on iOS, Breakpad on Android), breadcrumbs, and user context. **Firebase Crashlytics** via `@react-native-firebase/crashlytics` is the alternative.
+
+```typescript
+// RN ErrorBoundary with Sentry
+import React, {Component, ErrorInfo, ReactNode} from 'react';
+import * as Sentry from '@sentry/react-native';
+
+interface State {hasError: boolean; error: Error | null}
+export class AppErrorBoundary extends Component<{children: ReactNode}, State> {
+  state: State = {hasError: false, error: null};
+  static getDerivedStateFromError(error: Error): State {
+    return {hasError: true, error};
+  }
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    Sentry.captureException(error, {extra: {componentStack: info.componentStack}});
+  }
+  render() {
+    if (this.state.hasError) return this.props.children ?? <Text>Error</Text>;
+    return this.props.children;
+  }
+}
+```
+
+### Structured Logging Strategy
+
+Native `console.log` blocks the JS thread — avoid in production. Adopt structured logging with correlation IDs, screen context, and severity levels. Use `react-native-log-ios` to pipe to iOS unified logging (`os_log`) or `react-native-android-log` for Android logcat. Strip console calls in release builds with `babel-plugin-transform-remove-console`.
+
+```typescript
+// Structured logger
+class Logger {
+  private tag: string;
+  constructor(tag: string) { this.tag = tag; }
+
+  debug(msg: string, data?: Record<string, unknown>) {
+    if (__DEV__) console.log(JSON.stringify({level: 'DEBUG', tag: this.tag, msg, data}));
+  }
+
+  error(msg: string, error?: Error, data?: Record<string, unknown>) {
+    const entry = {level: 'ERROR', tag: this.tag, msg, error: error?.message, stack: error?.stack, data};
+    if (__DEV__) console.log(JSON.stringify(entry));
+    else remoteLog('error', this.tag, msg, data);
+  }
+}
+```
+
+### Debugging Native Crashes
+
+When the app crashes without a JS stack trace, it's a native crash — typically in native module code, memory corruption, or a C++ exception in Hermes. On iOS, open the `.xcworkspace` in Xcode and add an **Exception Breakpoint** (all exceptions). On Android, use `adb logcat *:E` and look for `FATAL EXCEPTION` lines with the process PID. For production, Sentry and Crashlytics capture native crash stacks automatically.
+
+<Callout title="Native vs JS crash signatures">
+  Error says "[native] Error" or stack ends at a native module call = native crash. Common causes: null/undefined passed to native functions, unsupported types in JSI calls, thread safety violations, missing pod install/Gradle sync. Always test a release build before shipping — some bugs only reproduce with Hermes bytecode compilation.
+</Callout>
+
+### Platform-Specific Debugging
+
+**Xcode Instruments**: Time Profiler for CPU, Allocations for memory, System Trace for thread scheduling. Profile a release build via Product > Profile. **Android Studio Profiler**: CPU profiler with method traces, Memory profiler with heap dump, Network profiler. Use `adb shell dumpsys gfxinfo <package>` for frame timing. **Hermes profiler**: `npx react-native profile-hermes` generates CPU flame charts from release builds. Always profile on a physical device with a release build — simulators and debug builds mask performance issues.
+
+### Common Pitfalls
+
+**Debug vs release divergence** — Some bugs only appear with Hermes bytecode or ProGuard/R8 stripping. Always test a release build. **Source map misalignment** — `inlineRequires` in Metro can misalign stack traces. Reset cache: `npx react-native start --reset-cache`. **console.log blocking UI** — It's synchronous on the JS thread. Remove with `babel-plugin-transform-remove-console` for production builds. **Over-reliance on deprecated Flipper** — Flipper is deprecated; migrate to RN DevTools. Avoid building new workflows around it.
+
+### Comparison to Flutter
+
+Flutter uses **Dart DevTools** — a unified UI for widget inspector, timeline, memory, network, and debugger. Flutter's hot reload is faster (sub-second vs Metro's 1-3s) because Dart's JIT compiles at the function level. RN debugging is more fragmented (three threads, two platform toolchains, npm dependencies). However, RN leverages the full Chrome DevTools ecosystem and deep Xcode/Android Studio integration. Flutter's tooling feels more cohesive out of the box, while RN's is more powerful for native-platform debugging.

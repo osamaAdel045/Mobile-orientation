@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      ### Native Integration on iOS
+
+      The defining advantage of native iOS is direct API access without bridging or serialization.
+      Swift calls Metal for GPU compute, CoreML for on-device inference, ARKit for spatial
+      computing, and Accelerate for vectorized math.
+
+      <StatGrid columns={4}>
+        <StatItem value="Swift-ObjC" label="Bidirectional Interop" />
+        <StatItem value="C++ Interop" label="Swift 5.9+" />
+        <StatItem value="Metal GPU" label="Direct Compute" />
+        <StatItem value="CoreML + ANE" label="On-Device ML" />
+      </StatGrid>
+
+      ### Swift ↔ Objective-C Interop
+
+      Swift and Obj-C share the same runtime. Call Obj-C from Swift via bridging header;
+      expose Swift to Obj-C with `@objc`.
+
+      ```objc
+      // LegacyObjCClass.h — consumed via bridging header
+      @interface LegacyObjCClass : NSObject
+      - (NSString *)processData:(NSData *)data;
+      @property (nonatomic, strong) NSString *identifier;
+      @end
+      ```
+
+      ```swift
+      func useLegacy() {
+          let legacy = LegacyObjCClass()
+          legacy.identifier = "session-1"
+          let result = legacy.processData(someData)
+      }
+
+      @objc class SwiftBridge: NSObject {
+          @objc let name: String
+          @objc init(name: String) { self.name = name }
+          @objc func compute(value: Int) -> Int { value * 2 }
+      }
+      ```
+
+      Both compile to the same binary — no IPC, no bridge. ### C++ Interop (Swift 5.9+)
+
+      Direct C++ interop eliminates the C wrapper. Types map automatically: `std::string` ↔
+      `String`, `std::vector<T>` ↔ `[T]`, `std::optional<T>` ↔ `T?`.
+
+      ```cpp
+      namespace Processor {
+          class Pipeline {
+          public:
+              Pipeline(int bufferSize);
+              std::vector<float> transform(const std::vector<float>& input);
+          };
+      }
+      ```
+
+      ```swift
+      let pipeline = Processor.Pipeline(bufferSize: 1024)
+      let result = pipeline.transform([1.0, 2.0, 3.0]) // [Float]
+      ```
+
+      ### Metal — GPU Access
+
+      Metal provides low-overhead GPU compute. `MTLDevice` represents the GPU.
+
+      ```swift
+      import Metal
+      guard let device = MTLCreateSystemDefaultDevice(),
+            let queue = device.makeCommandQueue(),
+            let function = device.makeDefaultLibrary()?.makeFunction(name: "matrixMultiply"),
+            let pipeline = try? device.makeComputePipelineState(function: function)
+      else { fatalError("Metal unavailable") }
+
+      let cmdBuf = queue.makeCommandBuffer()!
+      let encoder = cmdBuf.makeComputeCommandEncoder()!
+      encoder.setComputePipelineState(pipeline)
+      encoder.setBuffer(inputBuffer, offset: 0, index: 0)
+      encoder.setBuffer(outputBuffer, offset: 0, index: 1)
+      encoder.dispatchThreads(MTLSize(width: 1024, height: 1, depth: 1),
+                              threadsPerThreadgroup: MTLSize(width: 64, height: 1, depth: 1))
+      encoder.endEncoding()
+      cmdBuf.commit()
+      cmdBuf.waitUntilCompleted()
+      ```
+
+      ### CoreML and Apple Neural Engine
+
+      CoreML runs models on CPU, GPU, or ANE — a dedicated neural processor in A12+ and M1+
+      chips (up to 38 TOPS). Profile with `coremltools` to verify ANE deployment.
+
+      ```swift
+      func classifyImage(_ image: CIImage) async throws -> String {
+          let config = MLModelConfiguration()
+          config.computeUnits = .all
+          let request = VNCoreMLRequest(
+              model: VNCoreMLModel(for: try await ResNet50(configuration: config).model))
+          try VNImageRequestHandler(ciImage: image).perform([request])
+          guard let result = request.results?.first as? VNClassificationObservation
+          else { throw PredictionError.lowConfidence }
+          return result.identifier
+      }
+      ```
+
+      ### ARKit and RealityKit
+
+      ARKit provides world tracking, plane detection, and LiDAR scene reconstruction. RealityKit
+      renders 3D with Metal-backed PBR. LiDAR adds `.meshWithClassification` for real-time 3D
+      meshes with semantic labels.
+
+      ```swift
+      func startARSession(in arView: ARView) {
+          let config = ARWorldTrackingConfiguration()
+          config.planeDetection = [.horizontal, .vertical]
+          config.environmentTexturing = .automatic
+          config.sceneReconstruction = .meshWithClassification
+          arView.session.run(config)
+      }
+      ```
+
+      <Callout title="No Bridge Overhead — True Native Performance">
+        Unlike Flutter's platform channels (JSON over method channel) or Android's JNI,
+        native iOS APIs are called through direct vtable dispatch or Obj-C message send.
+        A CoreML inference goes Swift → ANE driver → neural engine with zero intermediate
+        representation.
+      </Callout>
+
+      ### Common Pitfalls
+
+      **Bridging header**: Use one per target. **ANE fallback**: Profile with Metal Debugger.
+      **Metal sync**: Read after `waitUntilCompleted()`. **ARKit**: Needs physical device.
+
+      ```
+        App (Swift) ──direct call──> +─── CoreML (ANE)
+                                     +─── Metal (GPU)
+                                     +─── Accelerate (CPU)
+      ```
+
+      ### iOS-Specific Insight
+
+      The ANE has its own memory bus, cache hierarchy, and power rail — an inference consumes
+      1/10th the energy of the same workload on the GPU. For always-on ML features, designing
+      for ANE deployment extends battery life from hours to days.
+
+      ### Cross-Platform Comparison
+
+      Android's JNI requires `GetFloatArrayElements` with memory copies. Swift's C++ interop
+      passes `std::vector` contiguously with no copy. Flutter's `dart:ffi` uses explicit
+      `Pointer` types. Metal has no cross-platform equivalent — Vulkan is closest but requires
+      more boilerplate. Android's NNAPI provides on-device ML with API-level fragmentation.

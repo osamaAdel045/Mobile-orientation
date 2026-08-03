@@ -1,0 +1,145 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+
+    <StatGrid columns={3}>
+      <StatItem value="GetIt + Injectable" label="Service locator with code-gen registration" />
+      <StatItem value="Riverpod" label="Provider graph as DI container, compile-time safe" />
+      <StatItem value="No Reflection" label="AOT compilation prevents runtime DI frameworks" />
+    </StatGrid>
+
+    ### Why Flutter Needs a DI Strategy
+
+    Dart's AOT (ahead-of-time) compilation — the mechanism that gives Flutter its fast startup and smooth 60fps performance — prohibits reflection. Reflection requires runtime metadata that AOT compilation strips away. This means you cannot use runtime DI frameworks like Guice (Android) or Typhoon (iOS) in Flutter. Instead, Flutter developers are limited to two patterns: **service locators** (explicit registration + manual resolution) and **compile-time provider graphs** (Riverpod's approach where every dependency is resolved by the compiler). Both patterns are valid, and choosing between them depends on team size, testability requirements, and runtime scoping needs.
+
+    ### GetIt: Service Locator Pattern
+
+    GetIt is a Singleton-based service locator. You register dependencies once at app startup and access them globally via `getIt<T>()`. It is simple, fast (direct map lookup), and has zero boilerplate beyond registration.
+
+    ```dart
+    // Setup in main() or an injector module
+    final getIt = GetIt.instance;
+
+    void setupDependencies() {
+      // Singleton — one instance for the app lifetime
+      getIt.registerSingleton<Dio>(createDio());
+
+      // LazySingleton — created on first access, cached afterward
+      getIt.registerLazySingleton<AuthRepository>(() =>
+        AuthRepositoryImpl(getIt()));
+
+      // Factory — new instance every time
+      getIt.registerFactory<LoginViewModel>(() =>
+        LoginViewModel(getIt()));
+    }
+
+    // Usage
+    final viewModel = getIt<LoginViewModel>();
+    ```
+
+    <Callout title="Service Locator Is Not an Anti-Pattern in Flutter">
+      The "service locator is an anti-pattern" rule applies to runtime environments where DI frameworks exist (JVM, .NET). In AOT-compiled Dart, GetIt is the pragmatic default — it is explicit, testable, and avoids the million-line XML configs that made Java service locators problematic. The real anti-pattern is accessing `getIt()` deep inside widget build methods instead of passing dependencies through constructors or providers.
+    </Callout>
+
+    ### Injectable: Code Generation for GetIt
+
+    `injectable` generates the `setupDependencies()` call from annotations, eliminating manual registration and preventing registration-order bugs.
+
+    ```dart
+    @injectable
+    class AuthRepositoryImpl implements AuthRepository {
+      final Dio _dio;
+      AuthRepositoryImpl(this._dio); // automatically resolved
+    }
+
+    @module
+    abstract class RegisterModule {
+      @singleton
+      Dio get dio => createDio();
+
+      @Named('baseUrl')
+      String get baseUrl => 'https://api.example.com';
+    }
+    ```
+
+    Run `dart run build_runner build` and the generated `dependencies.config.dart` contains the full `getIt.init()` call. Annotations control scope:
+
+    | Annotation | Scope | Behavior |
+    |---|---|---|
+    | `@singleton` | App lifetime | One instance, created eagerly at init |
+    | `@lazySingleton` | App lifetime | One instance, created on first access |
+    | `@factoryParam` | Per-call | Accepts runtime params, new instance per param value |
+    | `@preResolve` | Init-time | Async creation (e.g., DB connection) resolved before app starts |
+
+    ### Riverpod as Compile-Time-Safe DI
+
+    Riverpod replaces the DI container with a graph of `Provider` objects. Every provider can reference other providers, and the compiler validates the graph at compile time. No runtime wiring, no missing-dependency crashes.
+
+    ```dart
+    // A provider that depends on another provider
+    final dioProvider = Provider<Dio>((ref) => createDio());
+
+    final authRepositoryProvider = Provider<AuthRepository>((ref) {
+      return AuthRepositoryImpl(ref.read(dioProvider));
+    });
+
+    // Async provider with auto-dispose
+    final userProfileProvider = FutureProvider.family<User, String>((ref, userId) {
+      final repo = ref.read(authRepositoryProvider);
+      return repo.fetchUser(userId);
+    });
+
+    // Override for testing
+    void main() {
+      test('login success', () {
+        final container = ProviderContainer(overrides: [
+          authRepositoryProvider.overrideWithValue(MockAuthRepository()),
+        ]);
+        // ...
+      });
+    }
+    ```
+
+    The `overrideWithValue` system is Riverpod's killer feature for testing — you can swap any dependency without touching widget code. No `setUp`/`tearDown` of a global locator, no risk of stale registrations leaking between tests.
+
+    ### Scoping: Singleton vs LazySingleton vs Factory
+
+    - **Singleton** (`registerSingleton` / `@singleton`): Created at registration time. Use for clients that hold no mutable state and are expensive to create (Dio, database instances, analytics trackers).
+    - **LazySingleton** (`registerLazySingleton` / `@lazySingleton`): Created on first access. Same lifecycle as singleton but avoids the startup cost. Prefer over eager singletons unless you need pre-warming (e.g., loading a JIT compiler).
+    - **Factory** (`registerFactory` / `@factoryParam`): New instance every time. Use for ViewModels, BLoCs, or any object that holds mutable per-screen state.
+
+    <Callout title="Environment-Based DI (Dev vs Prod)">
+      Use `@environment('dev')` and `@environment('prod')` annotations in Injectable to register different implementations for the same abstract type. In dev, register a `MockAnalyticsService`; in prod, the real `FirebaseAnalyticsService`. Pass the environment string to `getIt.init(environment: flavor)` at startup. In Riverpod, use `final analyticsProvider = Provider<AnalyticsService>((ref) { if (kReleaseMode) return FirebaseAnalytics(); return DevConsoleAnalytics(); });`
+    </Callout>
+
+    ### GetIt vs Riverpod: Decision Guide
+
+    <DecisionMatrix
+      scores={[
+        { label: "GetIt + Injectable", score: 4 },
+        { label: "Riverpod", score: 4 },
+      ]}
+      pros="GetIt: simple mental model, works with any state management, excellent for pure DI (services, repositories). Riverpod: compile-time safety, built-in dispose lifecycle, override system for testing without setUp/tearDown."
+      cons="GetIt: hidden dependencies (no compile-time check that everything is registered), global mutable state if abused, no automatic disposal. Riverpod: forces the entire app into the Provider pattern, steep learning curve for team members new to the concept."
+    />
+
+    If you need DI only (services, repos, data sources) and prefer BLoC or ChangeNotifier for state, use GetIt + Injectable. If you want a unified DI + state management solution with scoped disposal and test overrides, use Riverpod. Many production apps use both: GetIt for pure DI and Riverpod for state.
+
+    ### Testing with Mocked Dependencies
+
+    ```dart
+    // GetIt
+    setUp(() { getIt.registerFactory<AuthRepository>(() => MockAuthRepository()); });
+    tearDown(() => getIt.reset());
+
+    // Riverpod (no tearDown needed — per-test container)
+    final container = ProviderContainer(overrides: [
+      authRepositoryProvider.overrideWithValue(MockAuthRepository()),
+    ]);
+    ```
+
+    Riverpod's per-test isolation is cleaner — no global state to reset. With GetIt, forgetting `getIt.reset()` causes test pollution. Use `getIt.pushNewScope()` / `popScope()` for isolation.
+
+    ### Comparison: Dagger/Hilt (Android) and Swinject (iOS)
+
+    Android's Hilt uses annotation-based DI similar to Injectable. Key difference: Hilt integrates with Android's lifecycle via `@HiltViewModel` (survives config changes) and `@AndroidEntryPoint`. Flutter has no equivalent lifecycle — widgets must be scoped manually. Swinject (iOS) uses a container pattern like GetIt with `Container.register` closures — structurally similar to GetIt's `registerLazySingleton`, though Swinject resolution is runtime-checked while GetIt throws at the call site.

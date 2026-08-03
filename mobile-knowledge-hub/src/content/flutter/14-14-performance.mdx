@@ -1,0 +1,199 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="16.67ms" label="Frame budget at 60fps" />
+  <StatItem value="8.33ms" label="Frame budget at 120fps" />
+  <StatItem value="~40%" label="Reduction from const constructors" />
+  <StatItem value="4-7MB" label="Release binary size" />
+  <StatItem value="300-800ms" label="Cold start range" />
+  <StatItem value="0" label="Shader jank (Impeller)" />
+</StatGrid>
+
+### Frame Budget Deep Dive
+
+Every frame in Flutter goes through three phases within the engine: **build**, **layout**, and **paint** (followed by the GPU **compositing** stage). The framework has 16.67ms (at 60fps) to complete all three before the display refreshes. If it exceeds this window, the frame is dropped, causing visible jank. On modern 120Hz screens (iPad Pro, Android flagships), the budget shrinks to 8.33ms.
+
+The timeline for a typical healthy frame breaks down roughly: **build** (2-4ms) — your widget tree's `build()` methods run, returning configuration objects. **Layout** (1-3ms) — the framework sizes and positions each RenderObject using the R-Tree layout algorithm (a single-pass, O(n) traversal unique to Flutter; unlike the Web's multi-pass layout). **Paint** (2-5ms) — RenderObjects paint into layer canvases. **Compositing** (1-3ms) — the engine sends GPU commands via Skia or Impeller.
+
+```dart
+// Monitoring frame budget programmatically
+import 'package:flutter/scheduler.dart';
+
+class FrameMonitor extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    SchedulerBinding.instance.addTimingsCallback((List<FrameTiming> timings) {
+      final ts = timings.last;
+      final buildDuration = ts.buildDuration.inMicroseconds;
+      final rasterDuration = ts.rasterDuration.inMicroseconds;
+      final total = buildDuration + rasterDuration;
+
+      debugPrint('Frame: build=${buildDuration}µs raster=${rasterDuration}µs '
+          'total=${total}µs ${total > 16667 ? "JANK" : "OK"}');
+    });
+    return const MyApp();
+  }
+}
+```
+
+<Callout title="const constructors are free at runtime">
+  The `const` keyword does more than prevent mutation. Dart's compiler recognizes `const` constructors at compile time, allocating the object into the **canonicalized constant pool** — a single instance shared across the entire app. On every subsequent rebuild, the framework compares the new widget configuration against the previous one using `operator==`. Since two `const` instances of the same type and arguments are identical by identity, the comparison is a pointer check (nanoseconds). The result: the subtree is **short-circuited entirely** — no build, no layout, no paint. In widget-heavy screens, this can reduce rebuild cost by 40%.
+</Callout>
+
+### List Performance Characteristics
+
+Choosing the right list widget is critical for scroll performance:
+
+```dart
+// BAD — builds all children upfront, O(n) memory
+ListView(
+  children: List.generate(10000, (i) => ListTile(title: Text('Item $i'))),
+)
+
+// GOOD — lazy builder, O(1) memory for visible items
+ListView.builder(
+  itemCount: 10000,
+  itemBuilder: (ctx, i) => ListTile(title: Text('Item $i')),
+)
+
+// BEST — separated for lists with dividers (efficient spacer reuse)
+ListView.separated(
+  itemCount: 10000,
+  itemBuilder: (ctx, i) => ListTile(title: Text('Item $i')),
+  separatorBuilder: (ctx, i) => const Divider(height: 1),
+)
+```
+
+**Performance characteristics:**
+- `ListView(children: [...])` — Eagerly builds the entire list. Fine for < 10 items. Exponential memory growth beyond that. Never use for dynamic or long lists.
+- `ListView.builder` — Lazy, on-demand. Builds only visible items plus a cache extent (default 250px ahead/behind). O(n) memory where n is visible items only (~10-15 items), regardless of total length.
+- `ListView.separated` — Same as `builder` but optimizes the separator widgets by reusing them. Without this, the separator is rebuilt as part of each list item; with it, separators are independently managed and cached.
+
+### RepaintBoundary Strategy
+
+`RepaintBoundary` creates a compositing layer in the engine — the child subtree renders into an offscreen buffer. When the child repaints, only that buffer is invalidated; the parent and siblings skip repainting entirely. However, offscreen buffers consume GPU memory and add a render target switch cost.
+
+```dart
+// Strategic RepaintBoundary usage
+RepaintBoundary(
+  child: Column(
+    children: [
+      // Static header — no repaint boundary needed
+      const Header(),
+
+      // Animated content — wrap to isolate repaints
+      RepaintBoundary(
+        child: AnimatedList(
+          key: _listKey,
+          itemBuilder: (ctx, i, anim) => ListItem(i: i),
+        ),
+      ),
+
+      // Static footer — no repaint boundary needed
+      const Footer(),
+    ],
+  ),
+)
+```
+
+**When to use:** Around animated widgets that redraw frequently (animations, video, custom painters, animated lists). When NOT to use: around static content — it wastes GPU memory for no benefit. **Verify effectiveness** by enabling the `debugRepaintRainbowEnabled` flag — each colored flash is a repaint. If a RepaintBoundary child flashes, the boundary is doing its job; if the parent flashes too, the boundary is broken (e.g., the parent's layout depends on child size changes).
+
+### Widget Rebuild Optimization (Riverpod/Provider)
+
+```dart
+// Provider v6+ — Selector avoids rebuilding for unrelated state changes
+final userProvider = StateNotifierProvider<UserNotifier, UserState>((ref) {
+  return UserNotifier();
+});
+
+// BAD — rebuilds entire widget when ANY user state changes
+class ProfileScreen extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final userState = ref.watch(userProvider);
+    return Column(
+      children: [
+        Avatar(url: userState.avatarUrl),     // specific
+        Bio(text: userState.bio),              // specific
+        const FollowingCountWidget(),          // static — no rebuild needed
+      ],
+    );
+  }
+}
+
+// GOOD — each widget watches only what it needs
+class UserAvatar extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Only rebuilds when avatarUrl changes
+    final avatarUrl = ref.watch(userProvider.select((s) => s.avatarUrl));
+    return Avatar(url: avatarUrl);
+  }
+}
+```
+
+### Image Optimization
+
+Images are the #1 performance bottleneck in most Flutter apps. Every unoptimized image costs GPU memory and layout passes:
+
+```dart
+// BAD — full-resolution image loaded everywhere
+Image.network('https://example.com/photo_4k.jpg')
+
+// GOOD — resolution-aware with caching
+CachedNetworkImage(
+  imageUrl: 'https://example.com/photo_4k.jpg',
+  cacheKey: 'photo_4k',
+  placeholder: (ctx, url) => const Shimmer(),
+  // Pre-cache for instant display
+)
+
+// Pre-cache critical images at app startup
+Future<void> precacheAppImages(BuildContext context) async {
+  await Future.wait([
+    precacheImage(AssetImage('assets/splash.png'), context),
+    precacheImage(NetworkImage('https://.../hero.jpg'), context),
+  ]);
+}
+```
+
+### Performance Profiling Workflow
+
+```bash
+# Enable performance overlay — frame time rendered on-device
+flutter run --profile
+
+# Full profiling with DevTools
+flutter run --profile --devtools
+# DevTools opens at http://127.0.0.1:9100
+```
+
+The diagnostic workflow: **Measure** → **Identify** → **Fix** → **Re-measure**. Run in `--profile` mode (not `--debug` — debug mode has assertions and observability overhead that skews results). Open the Timeline view in DevTools, look for frames exceeding the budget, and inspect the frame chart to identify whether the bottleneck is in build, layout, paint, or platform thread.
+
+<Callout title="Impeller eliminates shader jank">
+  Before Impeller, Flutter apps stuttered on first run because Skia compiled shaders at draw time — the infamous "first-time shader jank." Impeller pre-compiles all shaders at build time using the Metal (iOS) and Vulkan (Android) backends. The result is zero runtime shader compilation. Enabled by default on iOS and Android since Flutter 3.x, Impeller makes the first frame as smooth as the thousandth. You can verify it's active by checking `--enable-impeller=true` in the engine log.
+</Callout>
+
+### Binary Size Optimization
+
+```bash
+# Flags that meaningfully reduce binary size:
+flutter build apk --release \
+  --split-debug-info=build/debug-info/ \  # strips symbols: ~40% smaller
+  --obfuscate                              # renames symbols: ~10% further
+
+# Tree-shaking unused fonts and icons
+flutter build apk --release --tree-shake-icons
+
+# Deferred loading of rarely-used features
+# In pubspec.yaml:
+flutter:
+  deferred-components:
+    - name: admin_panel
+      libraries:
+        - package:my_app/admin.dart
+```
+
+### Comparison: Flutter vs React Native vs Native
+
+React Native delegates layout to the Yoga engine (C++ port of CSS Flexbox) and bridges to native widgets via the "bridge" — a serialization bottleneck. Flutter's Impeller/Skia pipeline renders directly to the GPU via Dart, bypassing the bridge entirely. On iOS, UIKit's Auto Layout solves a system of constraints (O(n) in the worst case), while Flutter's R-Tree layout is a single-pass O(n) algorithm. For animations, Flutter's `AnimatedBuilder` runs entirely on the Dart UI thread + GPU, while React Native requires serializing animation frames through the bridge (unless using React Native's new architecture with JSI). Native (SwiftUI/Compose) achieves the best raw performance by running entirely in the platform's rendering engine, but Flutter's cross-platform consistency — identical rendering on all platforms — is unmatched.

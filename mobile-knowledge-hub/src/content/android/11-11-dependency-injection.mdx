@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    ### Quick Stats on Dependency Injection
+
+    <StatGrid columns={3}>
+      <StatItem value="2.5ms" label="Median Hilt init time on Pixel 7" />
+      <StatItem value="150+" label="Dagger-generated classes per average module" />
+      <StatItem value="90%" label="of Google I/O apps use Hilt" />
+    </StatGrid>
+
+    ### Hilt Setup
+
+    Hilt is Google's opinionated DI framework built on Dagger. It standardizes components and provides concise annotations: `@HiltAndroidApp`, `@AndroidEntryPoint`, `@Inject`, `@Module`, `@Provides`, `@HiltViewModel`.
+
+    ```kotlin
+    // plugins { id("com.google.dagger.hilt.android") version "2.51.1"; id("com.google.devtools.ksp") }
+    // implementation("com.google.dagger:hilt-android:2.51.1")
+    // ksp("com.google.dagger:hilt-compiler:2.51.1")
+    // implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+
+    @HiltAndroidApp
+    class OrderApp : Application()
+
+    @AndroidEntryPoint
+    class MainActivity : ComponentActivity() {
+        override fun onCreate(savedInstanceState: Bundle?) {
+            super.onCreate(savedInstanceState)
+            setContent { MyTheme { MainScreen() } }
+        }
+    }
+    ```
+
+    ### Modules and @Provides
+
+    Modules declare dependencies that can't be constructor-injected — interfaces, third-party classes, or objects requiring context.
+
+    ```kotlin
+    @Module @InstallIn(SingletonComponent::class)
+    object NetworkModule {
+        @Provides @Singleton
+        fun provideOkHttpClient(authInterceptor: AuthInterceptor): OkHttpClient =
+            OkHttpClient.Builder().addInterceptor(authInterceptor)
+                .connectTimeout(30, TimeUnit.SECONDS).build()
+
+        @Provides @Singleton
+        fun provideRetrofit(client: OkHttpClient): Retrofit = Retrofit.Builder()
+            .baseUrl(BuildConfig.API_BASE_URL).client(client)
+            .addConverterFactory(kotlinxSerializationConverter()).build()
+
+        @Provides @Singleton
+        fun provideOrderApi(retrofit: Retrofit): OrderApi = retrofit.create(OrderApi::class.java)
+    }
+
+    @Module @InstallIn(SingletonComponent::class)
+    object DatabaseModule {
+        @Provides @Singleton
+        fun provideDatabase(@ApplicationContext context: Context): AppDatabase =
+            AppDatabase.getInstance(context)
+
+        @Provides
+        fun provideOrderDao(db: AppDatabase): OrderDao = db.orderDao()
+    }
+    ```
+
+    <Callout title="Qualifiers for Same-Type Dependencies">
+      When you need two instances of the same type (e.g., two Retrofit instances for different
+      base URLs), use `@Qualifier` annotations. Define a custom qualifier annotation per instance —
+      never rely on `@Named("string")` which is stringly-typed and checked only at runtime.
+    </Callout>
+
+    ### Scoping
+
+    Hilt scopes map to Android lifecycle components: `@Singleton` (Application), `@ActivityScoped`, `@FragmentScoped`, `@ViewScoped`.
+
+    ```kotlin
+    @Module @InstallIn(SingletonComponent::class)
+    object AnalyticsModule {
+        @Provides @Singleton
+        fun provideAnalyticsService(): AnalyticsService = MixpanelAnalyticsService()
+    }
+
+    @Module @InstallIn(ActivityComponent::class)
+    object CameraModule {
+        @Provides @ActivityScoped
+        fun provideCameraManager(@ApplicationContext context: Context): CameraManager =
+            CameraManager(context)
+    }
+    ```
+
+    ### ViewModel Injection
+
+    `@HiltViewModel` eliminates manual ViewModel factories.
+
+    ```kotlin
+    @HiltViewModel
+    class OrderViewModel @Inject constructor(
+        private val getOrdersUseCase: GetOrdersUseCase,
+        private val savedStateHandle: SavedStateHandle
+    ) : ViewModel() {
+        val uiState: StateFlow<OrderUiState> = getOrdersUseCase()
+            .map { orders -> OrderUiState(orders = orders) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), OrderUiState())
+    }
+
+    @Composable
+    fun OrderScreen(viewModel: OrderViewModel = hiltViewModel()) {
+        val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    }
+    ```
+
+    ### Dagger vs Koin
+
+    ```kotlin
+    // Koin module (runtime DSL)
+    val orderModule = module {
+        single { OkHttpClient.Builder().build() }
+        single { Retrofit.Builder().baseUrl("https://api.example.com").client(get()).build() }
+        factory { OrderRepositoryImpl(get(), get()) as OrderRepository }
+        viewModel { OrderViewModel(get(), get()) }
+    }
+
+    class OrderApp : Application() {
+        override fun onCreate() {
+            super.onCreate()
+            startKoin { androidContext(this@OrderApp); modules(orderModule, networkModule) }
+        }
+    }
+    ```
+
+    Dagger fails at compile time if a dependency is missing; Koin crashes at runtime when `get()` is called for an unregistered dependency. Dagger is safer for large teams; Koin is faster for iteration (no annotation processing rebuilds).
+
+    ### Common Pitfalls
+
+    - **Scope leaks**: A `@Singleton` holding an `@ActivityScoped` reference creates a leak. Dependencies must only depend on same or narrower scopes.
+    - **KAPT vs KSP**: Hilt 2.49+ supports KSP for 2x faster builds. Use `ksp("com.google.dagger:hilt-compiler:2.51.1")`.
+    - **Fragment injection missing**: Fragments need `@AndroidEntryPoint`. Missing it causes `null` from `viewModels()`.
+    - **Circular dependencies**: Hilt detects cycles at compile time. Refactor by introducing an interface or using `Provider<Dependency>`.
+
+    ### Comparison to GetIt and Swinject
+
+    <DecisionMatrix
+      scores={[
+        { label: "Compile-time safety", score: 5 },
+        { label: "Scoping granularity", score: 5 },
+        { label: "Build time impact", score: 2 },
+        { label: "Learning curve", score: 2 },
+      ]}
+      pros="Hilt catches missing dependencies at compile time — no runtime DI crashes. Scoping matches every Android lifecycle component. Navigation Compose integration is first-party."
+      cons="Annotation processing adds 30-60 seconds per build. GetIt has near-zero setup cost. Swinject assembles modules in code without annotation processing."
+    />

@@ -1,0 +1,194 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="6" label="DevTools tool views" />
+  <StatItem value="9100" label="Default DevTools port" />
+  <StatItem value="3" label="Debug paint modes" />
+  <StatItem value="2" label="Global error handlers" />
+  <StatItem value="~200ms" label="DevTools connection latency" />
+  <StatItem value="5-15%" label="Overhead in debug mode" />
+</StatGrid>
+
+### DevTools Complete Walkthrough
+
+Flutter DevTools is a browser-based suite of six profiling and debugging tools, launched automatically from `flutter run --debug` or accessible separately via `dart devtools`. Each tool targets a specific debugging concern:
+
+**Widget Inspector** — The most-used tool. It displays two synchronized trees: the **widget tree** (your `Widget build()` calls) and the **render tree** (the `RenderObject` layer that handles layout and paint). Click any widget on screen (or in the tree) to see its key, constraints, size, and layout properties. The **details tree** view shows the full widget ancestry with all constructor parameters. Enable "Select Widget Mode" to tap on the device/emulator screen and jump directly to the corresponding widget in the inspector — invaluable for understanding why a widget is positioned or sized unexpectedly.
+
+**Timeline View** — Displays frame rendering as a flame chart. Each frame is a horizontal bar with colored segments: blue for build, green for layout, orange for paint, purple for compositing. Frames exceeding the budget appear in red. The **frame chart** (a scrolling line graph) shows frame times over the last few seconds — a flat line under the budget line means smooth rendering; spikes above indicate jank. Use the timeline to answer: is the jank in build (slow widget creation), layout (expensive constraint calculations), or paint (costly `CustomPainter` or layers)?
+
+```dart
+// Enable debug paint modes programmatically
+import 'package:flutter/rendering.dart';
+
+void enableDebugVisualizations() {
+  // Shows padding, alignment, and margins as colored overlays
+  debugPaintSizeEnabled = true;
+
+  // Shows repainted areas as rainbow-colored overlays
+  debugRepaintRainbowEnabled = true;
+
+  // Highlights layers being composited
+  debugPaintPointersEnabled = true;
+
+  // Shows baseline alignment guides
+  debugPaintBaselinesEnabled = true;
+
+  // Highlights RenderObject overflow areas
+  debugPaintLayerBordersEnabled = true;
+}
+```
+
+**CPU Profiler** — Records method call stacks during a user interaction. The **flame chart** shows the call stack over time (wide blocks = more time spent). The **flame graph** aggregates those stacks into a flat, bottom-up view sorted by total time. Use **top-down** to see "which method called the most expensive code" and **bottom-up** to see "which leaf methods consumed the most total time." For Dart code, focus on `dart:` and `package:` frames — engine/skia frames are generally non-actionable.
+
+**Memory View** — Essential for leak detection. Take a **heap snapshot**, interact with your app, then take another snapshot and **diff** them. The diff shows: new allocations by class, objects that grew in count, objects that should have been garbage collected but weren't. Common leaks: `StreamSubscription` not cancelled in `dispose()`, `AnimationController` not disposed, `BuildContext` captured in async closures after widget disposal, and static collections retaining widget references.
+
+```dart
+// Proper disposal — prevents common memory leaks
+class MyScreen extends StatefulWidget {
+  const MyScreen({super.key});
+  @override
+  State<MyScreen> createState() => _MyScreenState();
+}
+
+class _MyScreenState extends State<MyScreen> {
+  late final StreamSubscription _sub;
+
+  @override
+  void initState() {
+    super.initState();
+    _sub = someStream.listen((event) {
+      // WARNING: accessing `context` after disposal crashes here
+      if (mounted) {
+        setState(() { /* update UI */ });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _sub.cancel();               // MUST cancel subscriptions
+    _controller.dispose();       // MUST dispose controllers
+    super.dispose();
+  }
+}
+```
+
+<Callout title="Debug mode is slower by design">
+  Debug mode runs Dart in the JIT (Just-In-Time) interpreter with assertions, observability, and DevTools wire protocols enabled. Expect 5-15% overhead on frame time and significantly more on CPU operations. Always profile in `--profile` or `--release` mode. The golden rule: debug to fix correctness, profile to fix performance.
+</Callout>
+
+### Error and Crash Handling
+
+Flutter provides two global error handlers that catch every unhandled exception:
+
+```dart
+import 'package:flutter/material.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
+
+void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Catches errors during the build/layout/paint phases
+  FlutterError.onError = (FlutterErrorDetails details) {
+    // In debug, use the standard red screen
+    if (kDebugMode) {
+      FlutterError.dumpErrorToConsole(details);
+    } else {
+      // In release, report to crash service
+      FirebaseCrashlytics.instance.recordFlutterError(details);
+    }
+  };
+
+  // Catches ALL other Dart errors (async, platform channels, timers)
+  PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+    FirebaseCrashlytics.instance.recordError(error, stack);
+    return true; // true = don't terminate the app
+  };
+
+  runApp(const MyApp());
+}
+```
+
+```dart
+// Sentry integration (alternative)
+import 'package:sentry_flutter/sentry_flutter.dart';
+
+Future<void> main() async {
+  await SentryFlutter.init(
+    (options) {
+      options.dsn = 'https://[key]@[org].ingest.sentry.io/[project]';
+      options.tracesSampleRate = 0.2;  // 20% of sessions get performance tracing
+    },
+    appRunner: () => runApp(const MyApp()),
+  );
+}
+```
+
+### Logging Strategy
+
+A structured logging approach enables debugging production issues without compromising security:
+
+```dart
+import 'package:logging/logging.dart';
+
+// Define hierarchical loggers
+final _log = Logger('my_app.network.dio');
+final _uiLog = Logger('my_app.ui.screens');
+final _authLog = Logger('my_app.auth');
+
+void setupLogging() {
+  // In debug: verbose console output
+  if (kDebugMode) {
+    Logger.root.level = Level.ALL;
+    Logger.root.onRecord.listen((record) {
+      debugPrint('[${record.loggerName}] ${record.level.name}: ${record.message}');
+    });
+  } else {
+    // In release: only warnings and errors, redact sensitive fields
+    Logger.root.level = Level.WARNING;
+    Logger.root.onRecord.listen((record) {
+      final safeMessage = _redactSensitiveData(record.message);
+      FirebaseCrashlytics.instance.log('${record.loggerName}: $safeMessage');
+    });
+  }
+}
+
+String _redactSensitiveData(String message) {
+  return message
+    .replaceAll(RegExp(r'Authorization: Bearer \S+'), 'Authorization: Bearer [REDACTED]')
+    .replaceAll(RegExp(r'password=\S+'), 'password=[REDACTED]')
+    .replaceAll(RegExp(r'\b[\w.]+@[\w.]+\.\w+\b'), '[EMAIL REDACTED]');
+}
+```
+
+### Debugging Platform Channels
+
+Platform channel communication is invisible by design — errors surface as opaque `MissingPluginException` or garbled data. Enable channel debugging:
+
+```dart
+// Enable platform channel logging
+debugDefaultTargetPlatformOverride = TargetPlatform.iOS;  // test iOS behavior on Android
+
+// In Flutter 3.x+, use the channel buffering inspector:
+// 1. Set the environment variable:
+//    FLUTTER_TIMELINE_ALLOW_PLATFORM_CHANNELS=1
+// 2. Platform channel calls appear in the Timeline view
+```
+
+### Debugging Performance Issues — Workflow
+
+The systematic approach to performance debugging follows a strict cycle:
+
+```
+1. MEASURE  → Run in --profile, capture DevTools Timeline
+2. IDENTIFY → Which phase (build/layout/paint) exceeds budget?
+3. FIX      → Apply targeted optimization (const constructor, RepaintBoundary, etc.)
+4. RE-MEASURE → Confirm fix with the same scenario and metrics
+```
+
+Never optimize without measurement. A fix that sounds good but doesn't move the frame budget is just complexity added for no benefit.
+
+### Comparison: DevTools vs React DevTools vs Xcode Instruments
+
+React DevTools offers component tree inspection and profiler similar to Widget Inspector, but the profiler only captures React's reconciliation phase — it can't see native bridge calls or layout. Xcode's Instruments provides unmatched OS-level profiling (syscalls, power, GPU, networking) but requires macOS and an iOS device. DevTools occupies a middle ground: it knows about Flutter's architecture (build/layout/paint phases, RenderObject tree) and doesn't require macOS, but it can't instrument platform-native code below the engine layer. For platform-level issues (GPU driver, Metal performance, memory mapping), fall back to Instruments (iOS) or Perfetto (Android).

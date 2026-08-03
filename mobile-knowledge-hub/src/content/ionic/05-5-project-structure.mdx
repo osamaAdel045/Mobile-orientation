@@ -1,0 +1,132 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Ionic Version" value="8+" />
+  <StatItem label="Build Output" value="www/" />
+  <StatItem label="Native Projects" value="android/ + ios/" />
+  <StatItem label="Config File" value="capacitor.config.ts" />
+  <StatItem label="Entry Point" value="src/main.ts" />
+  <StatItem label="Live Reload" value="Port 8100" />
+</StatGrid>
+
+### Core Layout
+
+Every Ionic project follows a web-app structure with two native project directories and a shared configuration layer. The `src/` directory holds all application code regardless of framework choice.
+
+```
+my-app/
+├── src/
+│   ├── app/              # Root component, routing, module
+│   ├── pages/            # Page components (one per route)
+│   ├── components/       # Reusable UI widgets
+│   ├── services/         # API clients, business logic
+│   ├── theme/            # CSS variables, global styles
+│   └── environments/     # env-specific configs
+├── www/                  # Built web assets (webDir target)
+├── android/              # Android Gradle project
+├── ios/                  # iOS Xcode project
+├── capacitor.config.ts   # Capacitor runtime configuration
+├── ionic.config.json     # Ionic CLI project metadata
+└── package.json
+```
+
+### Framework Structure Variations
+
+**Angular** organizes with `@NgModule` modules. Each page is a folder containing `.ts`, `.html`, and `.scss` files. Routing uses `loadChildren` for lazy loading and the build system is Angular CLI backed by esbuild.
+
+```typescript
+// src/app/app-routing.module.ts
+import { Routes } from '@angular/router';
+
+const routes: Routes = [
+  {
+    path: 'dashboard',
+    loadChildren: () => import('./pages/dashboard/dashboard.module')
+      .then(m => m.DashboardPageModule),
+  },
+];
+```
+
+**React** keeps pages as single-file components under `src/pages/`. Routing uses `react-router-dom` wrapped in `IonReactRouter`. Services are plain TypeScript modules or custom hooks with no DI container.
+
+```typescript
+// src/App.tsx
+import { IonApp, IonRouterOutlet } from '@ionic/react';
+import { IonReactRouter } from '@ionic/react-router';
+import { Route } from 'react-router-dom';
+import Dashboard from './pages/Dashboard';
+
+const App: React.FC = () => (
+  <IonApp>
+    <IonReactRouter>
+      <IonRouterOutlet>
+        <Route exact path="/dashboard" component={Dashboard} />
+      </IonRouterOutlet>
+    </IonReactRouter>
+  </IonApp>
+);
+```
+
+**Vue** places pages in `src/views/` with `.vue` single-file components co-locating template, script, and styles. Routing uses Vue Router with lazy-loaded imports.
+
+```typescript
+// src/router/index.ts
+import { createRouter, createWebHistory } from 'vue-router';
+
+const routes = [
+  { path: '/dashboard', component: () => import('@/views/Dashboard.vue') },
+];
+```
+
+### capacitor.config.ts Deep Dive
+
+```typescript
+import { CapacitorConfig } from '@capacitor/cli';
+
+const config: CapacitorConfig = {
+  appId: 'com.example.myapp',
+  appName: 'MyApp',
+  webDir: 'www',
+  server: {
+    url: 'http://192.168.1.42:8100',
+    cleartext: true,
+  },
+  plugins: {
+    SplashScreen: { launchAutoHide: false },
+    PushNotifications: { presentationOptions: ['badge', 'sound', 'alert'] },
+  },
+};
+
+export default config;
+```
+
+`webDir` points Capacitor to the framework's build output. `server.url` enables live reload on physical devices — the WebView loads from your LAN dev server instead of the filesystem. `appId` is the reverse-domain bundle identifier used by both Android (`applicationId`) and iOS (`CFBundleIdentifier`).
+
+<Callout type="warning">
+Do not commit `android/` and `ios/` to version control if your CI runs `npx cap sync` from scratch. Add them to `.gitignore` and regenerate with `npx cap add android` after checkout. For teams that customize native code, commit only the native projects and use `npx cap copy` for web asset updates.
+</Callout>
+
+### Live Reload Data Flow
+
+```
+┌──────────────┐   HTTP (LAN)    ┌──────────────┐
+│  Vite Dev    │  ◄──────────►   │  Device       │
+│  Server      │                 │  WebView      │
+│  :8100       │                 │  capacitor    │
+│  └─src/      │   HMR push      │  config.ts    │
+│    change ───┼────────────────►│  server.url   │
+└──────────────┘                 └──────────────┘
+```
+
+Run `ionic capacitor run android -l --external` to start live reload. The CLI automatically detects your LAN IP and writes it into `server.url` in `capacitor.config.ts`, then launches the native app pointing at the dev server.
+
+### Common Pitfalls
+
+- **webDir misalignment**: Framework builds to `dist/` but config says `webDir: 'www'`. Result: blank WebView. Use `npx cap copy` after every build.
+- **Plugin registration**: Adding a plugin requires `npx cap sync` to install the native pod or Gradle dependency. Omission causes `"Not implemented"` runtime errors.
+- **Port conflicts**: Live reload defaults to 8100. If another process occupies it, use `--port` to override.
+- **iOS Info.plist permissions**: Camera, location, and other native features require entries in `ios/App/App/Info.plist` with usage description strings.
+
+<Callout type="tip">
+Run `npx cap doctor` to diagnose configuration drift between `capacitor.config.ts`, the native projects, and installed plugins. It checks for version mismatches, missing permissions, and stale platform references.
+</Callout>

@@ -1,0 +1,139 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="5+" label="Patterns in Use" />
+  <StatItem value="RN 0.73+" label="Fabric + JSI" />
+  <StatItem value="Feature-First" label="Modern Organizing" />
+  <StatItem value="jest.mock" label="Test-Friendly DI" />
+  <StatItem value="MVVM-like" label="Hook as VM" />
+</StatGrid>
+
+### Container/Presentational
+
+Separate data-fetching (Container) from rendering (Presentational). The Container owns state, side effects, and mutations; the Presentational receives props and renders UI.
+
+```tsx
+// Container — manages data fetching and mutations
+function UserProfileContainer() {
+  const { data: user, isLoading } = useUserQuery(userId);
+  const { mutate: updateBio } = useUpdateBioMutation();
+  if (isLoading) return <LoadingSkeleton />;
+  return <UserProfile user={user} onUpdateBio={updateBio} />;
+}
+
+// Presentational — pure rendering, no side effects
+function UserProfile({ user, onUpdateBio }: UserProfileProps) {
+  const [editing, setEditing] = useState(false);
+  return (<View> <Avatar uri={user.avatarUrl} size="large" />
+    <Text style={styles.name}>{user.name}</Text>
+    {editing ? (<BioEditor initial={user.bio} onSubmit={(b) => { onUpdateBio(b); setEditing(false); }} />)
+      : (<BioText bio={user.bio} onEditPress={() => setEditing(true)} />)}
+  </View>);
+}
+```
+
+### Custom Hooks (Reusable Logic)
+
+Encapsulate complex stateful logic into hooks — the primary Code reuse mechanism in RN. A hook can manage form state, authentication, network status, or any cross-cutting concern.
+
+```tsx
+function useAuth() {
+  const [user, setUser] = useState<User | null>(null);
+  const signIn = async (email: string, password: string) => {
+    const token = await api.auth.signIn({ email, password });
+    await secureStorage.set('token', token);
+    setUser(decodeToken(token));
+  };
+  const signOut = async () => { await secureStorage.delete('token'); setUser(null); };
+  return { user, isAuthenticated: user !== null, signIn, signOut };
+}
+```
+
+### Compound Components
+
+A parent component exposes child sub-components that share implicit state via React Context. The consumer arranges them flexibly while the parent orchestrates the logic.
+
+```tsx
+type TabCtx = { activeTab: string; setActiveTab: (t: string) => void };
+const TabCtx = createContext<TabCtx>(null!);
+
+function TabView({ defaultTab, children }: { defaultTab: string; children: ReactNode }) {
+  const [activeTab, setActiveTab] = useState(defaultTab);
+  return <TabCtx.Provider value={{ activeTab, setActiveTab }}>{children}</TabCtx.Provider>;
+}
+
+TabView.Tab = function Tab({ id, label }: { id: string; label: string }) {
+  const { activeTab, setActiveTab } = useContext(TabCtx);
+  return (<TouchableOpacity onPress={() => setActiveTab(id)} style={activeTab === id && styles.active}>
+    <Text>{label}</Text></TouchableOpacity>);
+};
+
+TabView.Panel = function Panel({ id, children }: { id: string; children: ReactNode }) {
+  const { activeTab } = useContext(TabCtx);
+  return activeTab === id ? <>{children}</> : null;
+};
+```
+
+### Feature-Sliced Design (FSD)
+
+Organize by feature modules with strict layer boundaries. Each module exposes a public API (`index.ts`) and communicates only with layers below it. Layers: `app` > `processes` > `pages` > `features` > `entities` > `shared`.
+
+```
+src/
+  shared/       (UI primitives, API client, config)
+  entities/     (business models: User, Order)
+  features/     (use cases: LoginForm, OrderCheckout)
+  pages/        (compositions of features/entities)
+  app/          (providers, navigation, store)
+
+// features/auth/index.ts — public API
+export { useAuth } from './lib/useAuth';
+export { AuthGuard } from './ui/AuthGuard';
+// Internal modules are not importable outside the feature
+```
+
+<Callout title="FSD in RN">
+Feature-Sliced Design prevents circular imports in large RN monorepos by enforcing one-directional dependency flow. Combined with modular `tsconfig.json` paths, each feature is independently testable and lazily-loadable via Metro's inline requires.
+</Callout>
+
+### MVVM with Custom Hooks
+
+React Hooks naturally implement the ViewModel pattern. The hook (VM) holds reactive state and exposes actions; the component (View) binds to them with zero business logic.
+
+```tsx
+// ViewModel (Hook) — owns all state and mutations
+function useProfileViewModel(userId: string) {
+  const { data, isLoading } = useQuery(['profile', userId], () => api.getProfile(userId));
+  const { mutate: save, isLoading: isSaving } = useMutation(() => api.updateProfile(form.values));
+  return { profile: data, isLoading, isSaving, save };
+}
+
+// View (Component) — pure binding
+function ProfileScreen({ route }) {
+  const { profile, isLoading, save } = useProfileViewModel(route.params.userId);
+  if (isLoading) return <Spinner />;
+  return (<Screen><TextField label="Name" value={profile!.name} /><Button title="Save" onPress={save} /></Screen>);
+}
+```
+
+### Pattern Decision Matrix
+
+<DecisionMatrix scores={[
+  {label: "Container/Presentational", score: 8},
+  {label: "Custom Hooks (MVVM)", score: 9},
+  {label: "Compound Components", score: 7},
+  {label: "Feature-Sliced Design", score: 9},
+  {label: "Clean Architecture (Layers)", score: 7},
+]} pros="FSD: scales to 50+ screens, enforces boundaries, testable" cons="FSD: overhead for small apps; Container: boilderplate for simple screens" />
+
+### Anti-Patterns
+
+**The Giant Screen Component**: 500-line components that fetch data, manage state, handle navigation, and render everything. Fix: extract into Container + Presentational, move business logic into hooks.
+
+**Hook That Does Everything**: A single hook that fetches, tracks analytics, manages geolocation, and handles push notifications. Fix: single-responsibility hooks that compose.
+
+**Props Drilling Masquerading as Architecture**: Passing data through 6+ levels instead of using Context or data-fetching hooks at the point of need.
+
+### RN vs Flutter vs Native
+
+Flutter uses BLoC / Riverpod with explicit streams — more boilerplate but clearer data flow. Native iOS uses MVVM with Combine/@Published; Android uses MVVM with ViewModel + StateFlow. All platforms converge on **unidirectional data flow, separation of concerns, and a ViewModel-like layer** — RN achieves this through idiomatic Hooks + React Query instead of framework-enforced patterns.

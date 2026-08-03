@@ -1,0 +1,126 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Code Gen" label="AI Strengths" />
+        <StatItem value="expect/actual" label="Scaffolding" />
+        <StatItem value="Small Corpus" label="Limitations" />
+      </StatGrid>
+
+      ### AI-Generated expect/actual Scaffolding
+
+      AI excels at generating expect/actual pairs for common patterns —
+      file system access, biometric auth, and secure storage.
+
+      ```kotlin
+      // AI-generated expect/actual for file system access
+      // commonMain
+      expect class FileSystem {
+          fun readFile(path: String): ByteArray
+          fun writeFile(path: String, data: ByteArray)
+          fun deleteFile(path: String)
+          fun fileExists(path: String): Boolean
+      }
+
+      // androidMain
+      actual class FileSystem(private val context: Context) {
+          actual fun readFile(path: String): ByteArray =
+              context.filesDir.resolve(path).readBytes()
+          actual fun writeFile(path: String, data: ByteArray) =
+              context.filesDir.resolve(path).writeBytes(data)
+          actual fun deleteFile(path: String) =
+              context.filesDir.resolve(path).delete()
+          actual fun fileExists(path: String): Boolean =
+              context.filesDir.resolve(path).exists()
+      }
+
+      // iosMain
+      actual class FileSystem {
+          private val fm = NSFileManager.defaultManager
+          private val docsDir = fm.URLForDirectory(
+              NSDocumentDirectory, NSUserDomainMask, null, true, null
+          )!!.path
+          actual fun readFile(path: String): ByteArray = fm.contentsAtPath("$docsDir/$path")!!
+          // writeFile, deleteFile, fileExists with NSFileManager APIs
+      }
+      ```
+
+      ### AI for Shared Model Generation
+
+      ```kotlin
+      // AI-generated DTO + domain model pair
+      @Serializable
+      data class UserDto(
+          @SerialName("user_id") val id: String,
+          @SerialName("full_name") val fullName: String,
+          @SerialName("email_addr") val email: String
+      ) {
+          fun toDomain() = User(id, fullName, email, Instant.parse(created))
+      }
+
+      data class User(val id: String, val name: String, val email: String, val createdAt: Instant)
+      ```
+
+      ### AI for SQLDelight Schema Generation
+
+      ```sql
+      -- AI-generated: user settings table
+      CREATE TABLE user_settings (
+          user_id TEXT NOT NULL PRIMARY KEY,
+          theme TEXT NOT NULL DEFAULT 'system',
+          notifications_enabled INTEGER NOT NULL DEFAULT 1,
+          font_size INTEGER NOT NULL DEFAULT 16,
+          updated_at INTEGER NOT NULL DEFAULT 0
+      );
+
+      observeSettings:
+      SELECT * FROM user_settings WHERE user_id = ?;
+
+      upsertSettings:
+      INSERT OR REPLACE INTO user_settings
+      (user_id, theme, notifications_enabled, font_size, updated_at)
+      VALUES (?, ?, ?, ?, ?);
+      ```
+
+      <Callout title="AI Verification Required">
+        AI-generated KMP code must be verified. Common failures include: using
+        JVM-only APIs (`java.io.*`), using reflection-based libraries that don't
+        work on Native, omitting platform engine dependencies, and incorrect
+        Gradle configuration. Always compile and test on both targets before
+        committing. The KMP ecosystem changes rapidly — AI training data may
+        reference outdated library versions.
+      </Callout>
+
+      ### AI for Migration: Single-Platform to KMP
+
+      AI can refactor Android-specific code by extracting interfaces into
+      `commonMain` and leaving platform implementations in `androidMain`.
+
+      ```kotlin
+      // Input: Android-specific repository
+      class AndroidUserRepository(private val dao: UserDao) {
+          suspend fun getUsers(): List<User> = dao.getAllUsers()
+      }
+
+      // AI refactored — interface in commonMain
+      interface UserRepository { suspend fun getUsers(): List<User> }
+      // Implementation stays in androidMain
+      class AndroidUserRepository(private val dao: UserDao) : UserRepository
+      ```
+
+      ### AI Limitations in KMP
+
+      | Area | AI Capability | AI Blind Spots |
+      |------|---------------|----------------|
+      | expect/actual | Basic scaffolding | Platform API nuances |
+      | Gradle config | Known templates | Version compatibility matrix |
+      | Coroutines | Basic usage | Native dispatcher behavior |
+      | Compose MP | UI structure | iOS rendering quirks |
+
+      ### KMP Insight
+
+      AI is most effective for KMP's **syntactic boilerplate** — expect/actual
+      pairs, data classes, SQL schemas, and Gradle configuration. It is weakest
+      at ecosystem-specific knowledge like library version compatibility and
+      Kotlin/Native limitations. The small KMP training corpus (relative to JS
+      or Swift) means AI produces simpler examples — always pair with
+      compilation testing.

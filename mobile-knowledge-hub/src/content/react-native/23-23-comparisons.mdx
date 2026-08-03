@@ -1,0 +1,107 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+### Quick Stats
+
+<StatGrid columns={3}>
+<StatItem value="2015" label="RN Released" />
+<StatItem value="2018" label="Flutter Released" />
+<StatItem value="2M+" label="npm vs 50K pub.dev" />
+<StatItem value="15MB" label="RN Binary Baseline" />
+</StatGrid>
+
+### React Native vs Flutter
+
+This is the most常见的 comparison in cross-platform mobile development. Both frameworks take fundamentally different approaches to the same problem.
+
+**Rendering philosophy** — RN renders native platform controls (UIView on iOS, View on Android) composed via the Yoga layout engine. Flutter renders everything itself using Impeller (or Skia on older versions), drawing every pixel. RN's approach means apps automatically get OS-level accessibility, font rendering, and text selection; Flutter's approach gives it consistent rendering across platforms but requires reimplementing every platform behavior.
+
+**Performance profile** — Flutter's Impeller engine renders at 120fps on modern devices and handles complex animations without jank. RN's New Architecture (JSI + Fabric) has closed the gap significantly for normal UI, but animation-heavy workloads still favor Flutter. For I/O-bound apps (API calls, image loading, list scrolling), the difference is negligible.
+
+| Dimension | React Native 0.76+ | Flutter 3.x |
+|---|---|---|
+| Rendering | Native platform controls | Impeller custom engine |
+| Language | TypeScript/JavaScript | Dart |
+| Compilation | Hermes AOT bytecode | Dart AOT native code |
+| Package Count | 2M+ (npm) | 50K+ (pub.dev) |
+| OTA Updates | Yes (CodePush, EAS Update) | No |
+| Hot Reload | Yes (Metro HMR) | Yes (faster: stateful hot reload) |
+| Animation | Reanimated for smooth 60fps | Impeller: native 120fps |
+| Binary Size | ~15MB baseline | ~12MB baseline |
+| Release | 2015 (Meta) | 2018 (Google) |
+| License | MIT | BSD-3-Clause |
+
+**Ecosystem** — RN's access to npm is its defining advantage. Most JS/TS libraries (React Query, Zustand, Axios, Zod, date-fns) work without modification. Flutter's pub.dev has fewer packages, but core plugins (camera, maps, payments) are first-party and better maintained than their RN community equivalents.
+
+**Tooling** — Flutter's all-in-one toolchain (dart analyze, dart format, flutter test, DevTools) is more cohesive than RN's hodgepodge (Metro, Flipper, React DevTools, third-party lint configs). Expo bridges some of this gap for RN but is an additional abstraction layer.
+
+<Callout title="Flutter's toolchain wins for team productivity; RN's ecosystem wins for feature velocity">
+The trade-off is clear: Flutter teams spend less time on configuration and debugging tooling, while RN teams spend less time writing code from scratch because most solutions already exist as npm packages.
+</Callout>
+
+### React Native vs Native iOS/Android
+
+**Code sharing** — RN shares 60-80% of code across platforms. Native development shares approximately 0% at the UI layer (SwiftUI vs Jetpack Compose) and perhaps 30-40% at the business logic layer with KMP. For a team building two identical apps, RN cuts total code volume roughly in half.
+
+**Platform access** — Native development provides same-day access to every API Apple and Google announce at WWDC/Google I/O. RN depends on community module authors or in-house native developers to wrap new APIs. This typically creates a 3-12 month lag for new platform features.
+
+**Performance ceiling** — Native apps have no abstraction layer overhead. For 95% of apps, users cannot distinguish RN from native. For the top 5% (games, AR, real-time video processing, heavy background computation), native is the only choice.
+
+**Team structure implications:**
+- **Native teams** need 2+ platform specialists (iOS + Android) — coordinated releases, divergent codebases, double the feature work
+- **RN teams** need 1 cross-platform engineer per feature area + optionally 1 native specialist for Turbo Modules
+- **Mixed teams** (RN + native) use RN for features and native for performance-critical paths — the most scalable but hardest to coordinate
+
+### React Native vs Ionic (Capacitor)
+
+**Rendering** — RN uses native UI components. Ionic renders in a WebView (WKWebView/WebView). This is the fundamental difference: RN apps feel native because they ARE native views; Ionic apps feel like web pages in a browser frame.
+
+**Performance** — RN's native rendering gives it smooth 60fps scrolling, native text selection, and native keyboard handling. Ionic's WebView adds 100-300ms latency on every interaction, struggles with smooth scrolling, and has visible white flash on navigation.
+
+**Developer experience** — Ionic is arguably easier for web developers (write HTML/CSS/JS as-is). RN requires learning the RN component vocabulary (no div, no span, no className). However, RN apps look and feel professional; Ionic apps are immediately identifiable as WebView-based.
+
+**When to pick Ionic over RN:** The app is a simple content wrapper around a web app, the team has zero mobile development time, or cross-platform desktop (PWA) is the primary target. For anything beyond a form-over-data app, RN provides a better user experience.
+
+### React Native vs Kotlin Multiplatform (KMP)
+
+**Code sharing philosophy** — KMP shares business logic only (domain models, networking, data layer) while keeping UI native per platform. RN shares UI and logic together in a single codebase. KMP is more flexible architecturally; RN is more productive for pure code sharing.
+
+**Team composition** — KMP requires native iOS (Swift) and Android (Kotlin) developers who also write shared Kotlin logic. RN requires TypeScript developers who understand the RN component model. KMP teams are harder to hire for; RN teams are not.
+
+**Performance** — KMP produces native binaries with no abstraction overhead. RN has the JSI bridge layer. For compute-intensive logic, KMP wins. For I/O-heavy logic (which is most mobile apps), the difference is irrelevant.
+
+```
+// KMP: Share logic, keep UI native
+// shared/src/commonMain/kotlin/com/app/UseCases.kt
+class GetFeedUseCase(private val repo: FeedRepository) {
+  suspend operator fun invoke(userId: String): Flow<List<Post>> { ... }
+}
+
+// Android: Compose UI calls shared use case
+// iOS: SwiftUI calls shared use case via KMP framework
+
+// RN: Share logic AND UI
+// useFeed.ts — shared hook
+export function useFeed(userId: string) {
+  return useQuery({ queryKey: ['feed', userId], queryFn: () => api.getFeed(userId) });
+}
+// FeedScreen.tsx — shared UI component that renders native views
+```
+
+<Callout title="KMP for the logic layer, RN for the UI layer — they're complementary">
+These frameworks solve different problems. A production pattern gaining traction: KMP for shared business logic and data layer, RN for shared UI rendering on top of KMP modules via Turbo Modules. This combines KMP's type-safe shared logic with RN's rapid UI development.
+</Callout>
+
+### React Native vs .NET MAUI
+
+**Ecosystem maturity** — RN has been in production since 2015 with 1M+ apps shipped. MAUI (2022, successor to Xamarin.Forms) has a fraction of that adoption. RN's ecosystem of third-party libraries, troubleshooting guides, and Stack Overflow answers is orders of magnitude larger.
+
+**Language** — RN uses TypeScript (the most popular language on GitHub). MAUI uses C# (strongly typed, but with a smaller mobile developer community). The hiring pool for RN is 10-20x larger than MAUI for mobile roles.
+
+**Performance** — MAUI compiles to native code via .NET, so it has no bridge overhead for native calls. However, MAUI's rendering pipeline (handling platform view abstraction) has historically introduced its own overhead. RN's New Architecture JSI bindings achieve comparable performance to MAUI's P/Invoke calls.
+
+**Cross-platform target** — MAUI targets iOS, Android, Windows, and macOS from a single codebase. RN targets iOS and Android (with community solutions for Windows and macOS). If Windows/desktop is a primary target, MAUI is stronger.
+
+### Version-Specific Notes (New Architecture Impact)
+
+The comparisons above assume RN 0.76+ with the New Architecture enabled. Projects still on the Old Architecture (Bridge-based, pre-0.73) should mentally downgrade RN's performance scores by 1-2 points and ecosystem compatibility by 1 point (many newer libraries require the New Architecture). Flutter's Impeller engine (3.x+) similarly changed the animation comparison — pre-Impeller Flutter used Skia, which had worse performance on low-end devices. Always compare specific versions, not framework names.

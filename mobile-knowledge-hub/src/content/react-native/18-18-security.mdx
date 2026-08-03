@@ -1,0 +1,146 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="AES-256" label="Encrypted storage key size" />
+  <StatItem value="3+" label="Security layers (JS, native, OS)" />
+  <StatItem value="TLS 1.3" label="Minimum TLS recommended" />
+</StatGrid>
+
+### RN Security Model
+
+React Native operates in multi-layered security. The **JS runtime** (Hermes engine) runs in a process sandbox — it cannot access system APIs directly. The **platform sandbox** (iOS sandbox, Android app isolation) restricts file, network, and hardware access per entitlements. The **JS bundle** is the most exposed layer: in debug builds, bytecode or plain JS is bundled into the app binary and readable with decompilation tools. Secrets, API keys, and sensitive algorithms must live outside the JS bundle.
+
+```
+Application Security Layers
+════════════════════════════
+
+  ┌─────────────────────────────────────────────────────┐
+  │          JS Bundle (Hermes bytecode)                 │
+  │  ┌───────────────────────────────────────────────┐  │
+  │  │          Turbo Module Boundary (JSI)          │  │
+  │  └───────────────────────────────────────────────┘  │
+  └─────────────────────────────────────────────────────┘
+          │                          │
+          ▼                          ▼
+  ┌──────────────┐          ┌──────────────┐
+  │  iOS Keychain │          │  Android     │
+  │  Sandbox     │          │  Keystore    │
+  └──────────────┘          └──────────────┘
+```
+
+### Secure Storage Deep Dive
+
+`react-native-encrypted-storage` wraps platform-native secure storage. On iOS, it uses **Keychain Services** (AES-256-GCM, hardware-backed on Secure Enclave devices). On Android, it uses **EncryptedSharedPreferences** with keys encrypted by AES-256 and the master key in **Android Keystore** (hardware-backed on TEE/StrongBox). For biometric-gated access, `react-native-keychain` supports Face ID / Touch ID / Android BiometricPrompt.
+
+```typescript
+// Secure token storage
+import EncryptedStorage from 'react-native-encrypted-storage';
+
+export const TokenManager = {
+  async storeTokens(accessToken: string, refreshToken: string): Promise<void> {
+    await EncryptedStorage.setItem('access_token', accessToken);
+    await EncryptedStorage.setItem('refresh_token', refreshToken);
+  },
+  async getAccessToken(): Promise<string | null> {
+    try { return await EncryptedStorage.getItem('access_token'); } catch { return null; }
+  },
+  async clearTokens(): Promise<void> {
+    await EncryptedStorage.removeItem('access_token');
+    await EncryptedStorage.removeItem('refresh_token');
+  },
+};
+
+// Biometric-gated storage
+import * as Keychain from 'react-native-keychain';
+await Keychain.setGenericPassword('refresh_token', tokenValue, {
+  accessControl: Keychain.ACCESS_CONTROL.BIOMETRY_CURRENT_SET_OR_DEVICE_PASSCODE,
+  accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+});
+```
+
+### SSL/TLS Certificate Pinning
+
+Pinning prevents MitM attacks by verifying the server certificate against an embedded public key hash. Use `react-native-ssl-pinning` (wraps OkHttp CertificatePinner on Android, AFNetworking on iOS). ATS enforces TLS 1.2+ on iOS by default — pinning adds server-specific validation. Pin the certificate's **public key** rather than the full certificate, so you can reissue (same key pair) without an app update.
+
+```typescript
+import {fetch} from 'react-native-ssl-pinning';
+
+const response = await fetch('https://api.example.com/v1/data', {
+  method: 'GET',
+  sslPinning: {certs: ['cert_public_key_sha256']},
+  headers: {Authorization: `Bearer ${await TokenManager.getAccessToken()}`},
+});
+```
+
+<Callout title="Pinning rotation strategy">
+  Embed the SHA-256 hash of your **current and next** public keys in the app. When rotating, deploy the server with the new key first, then remove the old key in a subsequent app update. This prevents lockout if the server key changes before the app updates. Never pin a single certificate without a backup hash.
+</Callout>
+
+### API Key Protection
+
+API keys must not appear in the JS bundle. Use `react-native-config` to inject values at build time from `.env` files. Values embed into native build artifacts (Info.plist on iOS, BuildConfig on Android). While extractable from the binary, it prevents trivial scraping from JS source. For critical secrets, serve them from a backend endpoint on first launch rather than baking into the build.
+
+```
+  .env (gitignored)  ->  react-native-config  ->  Info.plist / BuildConfig / Config.*
+```
+
+### Authentication Token Management
+
+Store **access tokens** (short-lived, 15-60 min) in encrypted storage. Store **refresh tokens** (long-lived, 30-90 days) with biometric protection. On 401 responses, attempt silent token refresh. If refresh fails, clear all tokens and route to login. Implement a token interceptor in your HTTP client.
+
+```typescript
+import axios, {AxiosError} from 'axios';
+
+const api = axios.create({baseURL: Config.API_URL});
+
+api.interceptors.request.use(async (config) => {
+  const token = await TokenManager.getAccessToken();
+  if (token && config.headers) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+api.interceptors.response.use(
+  (r) => r,
+  async (error: AxiosError) => {
+    if (error.response?.status === 401) {
+      const refreshed = await TokenManager.refreshTokens();
+      if (refreshed && error.config) {
+        const newToken = await TokenManager.getAccessToken();
+        error.config.headers!.Authorization = `Bearer ${newToken}`;
+        return api(error.config);
+      }
+      await TokenManager.clearTokens();
+    }
+    return Promise.reject(error);
+  }
+);
+```
+
+### Code Obfuscation and Integrity
+
+`metro-obfuscator` transforms identifiers and control flow to hinder reverse engineering. However, JS obfuscation is **reversibility-limited** — a determined analyst can reconstruct logic. Hermes bytecode adds meaningful friction: tools like `hermes-dec` exist but are poorly maintained. For truly sensitive logic (payment processing, proprietary algorithms), move code to a **native Turbo Module** — compiled to ARM machine code, it benefits from the same protection as any native binary.
+
+### Root/Jailbreak Detection
+
+`jail-monkey` provides root/jailbreak detection on both platforms. These checks can be bypassed by sophisticated users (Magisk Hide, kernel jailbreak hiding). Pair with **server-side attestation**: Google Play Integrity API (replacement for SafetyNet) on Android, Apple DeviceCheck on iOS. These generate server-verifiable tokens proving device integrity.
+
+```typescript
+import JailMonkey from 'jail-monkey';
+
+function checkIntegrity(): boolean {
+  if (__DEV__) return true;
+  return !JailMonkey.isJailBroken() && !JailMonkey.isOnExternalStorage();
+}
+```
+
+<Callout title="Hermes bytecode obscurity ≠ encryption">
+  Hermes bytecode is **not encrypted** — it is a custom bytecode format that adds friction but does not prevent reverse engineering. Treat your JS bundle as public-read. Never embed secrets in client code that you wouldn't want an attacker to read. Server-side enforcement is the only real security boundary.
+</Callout>
+
+### Common Pitfalls
+
+**Hardcoded API keys in JS** — Most common RN failure. Keys in the bundle are trivially extractable. **Ignoring ATS** — Apple rejects apps making cleartext HTTP requests. **AsyncStorage for tokens** — Unencrypted on disk. Use EncryptedStorage. **Self-signed certs** — Only disable validation in dev. **Over-reliance on client checks** — Root detection and obfuscation are bypassable. The server is the only trust boundary.
+
+### Comparison to Flutter
+
+Flutter (AOT ARM) is harder to reverse than JS but decompilable with `reDart`. Flutter uses `flutter_secure_storage` (same Keychain/Keystore backing). Flutter's key advantage: no exposed JS bundle. Both rely on the same OS primitives (Keychain, Keystore, sandbox, TLS). RN's primary vulnerability is the JS bundle; Flutter's is Dart introspection. For enterprise security, both need native modules for hardware-backed keystore and attestation.

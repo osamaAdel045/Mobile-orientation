@@ -1,0 +1,147 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      ### Architecture Patterns on iOS
+
+      iOS architecture evolved from Apple's MVC through community patterns optimized for
+      SwiftUI's reactive model. The right choice depends on team size, state complexity,
+      and deployment target.
+
+      <StatGrid columns={4}>
+        <StatItem value="MVVM" label="Standard (SwiftUI)" />
+        <StatItem value="MVC" label="Legacy (UIKit)" />
+        <StatItem value="TCA" label="Complex State" />
+        <StatItem value="Clean" label="Domain-Driven" />
+      </StatGrid>
+
+      ### MVVM with @Observable (iOS 17+)
+
+      The `@Observable` macro eliminates ObservableObject boilerplate. Views subscribe to only
+      the properties they read — per-property tracking is more efficient than full-object
+      `ObservableObject` notification. The ViewModel is a plain class; the View wraps it in
+      `@State` and reads its properties directly.
+
+      ```swift
+      @Observable
+      final class SearchViewModel {
+          var query = ""
+          var results: [SearchResult] = []
+          var isSearching = false
+
+          @ObservationIgnored
+          private let service: SearchServiceProtocol
+
+          init(service: SearchServiceProtocol = SearchService()) { self.service = service }
+
+          @MainActor
+          func search() async {
+              isSearching = true
+              defer { isSearching = false }
+              do { results = try await service.search(query) }
+              catch { results = [] }
+          }
+      }
+
+      struct SearchView: View {
+          @State private var vm = SearchViewModel()
+
+          var body: some View {
+              List(vm.results, id: \.id) { result in Text(result.title) }
+                  .searchable(text: $vm.query)
+                  .onSubmit(of: .search) { Task { await vm.search() } }
+                  .overlay { if vm.isSearching { ProgressView() } }
+          }
+      }
+      ```
+
+      ### MVC and the Massive View Controller Problem
+
+      UIKit enforces MVC by default. In practice, UIViewControllers accumulate data-fetching,
+      formatting, and navigation logic — surveys show the average ViewController exceeds 400
+      lines. Migrating to MVVM extracts business logic into testable ViewModels, leaving the
+      ViewController responsible only for lifecycle events and UI wiring.
+
+      ### The Composable Architecture (TCA)
+
+      TCA enforces unidirectional data flow: `Store` holds `State`, `Reducer` transforms it
+      in response to `Action` values, and side effects return `Effect` values. TCA's
+      `TestStore` verifies async effects deterministically through its test scheduler.
+
+      ```swift
+      import ComposableArchitecture
+
+      @Reducer
+      struct SearchFeature {
+          @ObservableState
+          struct State: Equatable {
+              var query = ""
+              var results: [SearchResult] = []
+              var isSearching = false
+          }
+
+          enum Action: BindableAction, Equatable {
+              case binding(BindingAction<State>)
+              case searchResponse(Result<[SearchResult], Error>)
+          }
+
+          @Dependency(\.searchClient) var searchClient
+
+          var body: some ReducerOf<Self> {
+              BindingReducer()
+              Reduce { state, action in
+                  switch action {
+                  case .binding: return .none
+                  case let .searchResponse(.success(results)):
+                      state.results = results
+                      state.isSearching = false
+                      return .none
+                  case .searchResponse(.failure):
+                      state.isSearching = false
+                      return .none
+                  }
+              }
+          }
+      }
+      ```
+
+      ### Clean Architecture and VIPER
+
+      Three layers: **Presentation** (SwiftUI views and ViewModels), **Domain** (use cases,
+      repository protocols — pure Swift, no Apple framework imports), **Data** (repository
+      implementations using CoreData, URLSession, or SwiftData). The Dependency Rule ensures
+      source code dependencies point inward. VIPER decomposes each screen into five roles
+      (View, Interactor, Presenter, Entity, Router) — justified only for teams of 8+.
+
+      ```
+                        ┌─────────────────────────────────────┐
+                        │         MVVM Data Flow              │
+                        └─────────────────────────────────────┘
+          View (SwiftUI) ──── action ────> ViewModel ──── fetch ────> Model
+               ^                         (@Observable)                  │
+               │                           @Published                   │
+               └───────────────────── state update ─────────────────────┘
+      ```
+
+      <Callout title="Avoid Massive View Controller in UIKit">
+        Extract business logic into ViewModels or UseCases. A ViewController should own only
+        lifecycle events and wire ViewModel outputs to UI. Test your ViewModels, not your
+        UIViewControllers.
+      </Callout>
+
+      ### Common Pitfalls
+
+      **Leaking Combine into MVVM**: async/await replaces Combine for most async work. Avoid
+      `PassthroughSubject` unless bridging UIKit delegates. **Over-engineering with TCA**: TCA
+      boilerplate slows simple CRUD apps. **Domain layer importing Foundation**: Keep use cases
+      free of URLSession and UIKit — use repository protocols to invert dependencies.
+
+      ### iOS-Specific Insight
+
+      Swift's value semantics (structs, enums) align naturally with state-driven architectures.
+      Every `let` binding is immutable by default — making TCA's `Equatable` state conformance
+      trivial and MVVM's `@Observable` tracking precise without manual diffing.
+
+      ### Cross-Platform Comparison
+
+      Flutter's BLoC mirrors MVVM — Events in, States out via Dart streams. TCA parallels
+      React/Redux with a single store and reducers. Android's MVVM with StateFlow matches
+      SwiftUI's `@Observable` but requires explicit `stateIn()` scope management.

@@ -1,0 +1,95 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Ionic Storage" value="KV wrapper, auto-selects backend" />
+  <StatItem label="Capacitor SQLite" value="Full SQL, iOS + Android" />
+  <StatItem label="Preferences" value="Simple KV, ~6MB limit" />
+  <StatItem label="Secure Storage" value="Keychain / Keystore" />
+</StatGrid>
+
+### Key-Value Storage: Preferences & Ionic Storage
+
+For simple key-value data, Capacitor provides two tiers. **`@capacitor/preferences`** is a lightweight KV store backed by UserDefaults (iOS) and SharedPreferences (Android), with a ~6MB practical limit. **Ionic Storage** wraps Preferences or IndexedDB and provides a unified `get/set/remove` API with automatic JSON serialization:
+
+```typescript
+import { Preferences } from '@capacitor/preferences';
+await Preferences.set({ key: 'theme', value: 'dark' });
+const { value } = await Preferences.get({ key: 'theme' });
+
+import { Storage } from '@ionic/storage';
+const store = new Storage();
+await store.create();
+await store.set('user', { id: 1, name: 'Alice' });
+const user = await store.get('user');
+```
+
+Ionic Storage attempts to use SQLite native when available, falling back to IndexedDB in the WebView. This makes it safe for web-first builds and PWA deployments where the native SQLite plugin is unavailable.
+
+### Relational Storage: Capacitor SQLite
+
+For structured or queryable data, **capacitor-sqlite** provides full SQLite access on both platforms with TypeScript bindings. It supports encrypted databases via SQLCipher, pre-populated databases bundled with the app, and JSON import/export:
+
+```typescript
+import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
+
+const sqlite = new SQLiteConnection(CapacitorSQLite);
+const db = await sqlite.createConnection('mydb', false, 'no-encryption', 1);
+await db.open();
+
+await db.execute(`CREATE TABLE IF NOT EXISTS users (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT UNIQUE
+)`);
+
+const result = await db.query('SELECT * FROM users WHERE id = ?', [1]);
+```
+
+The plugin runs native SQLite on each platform — the iOS implementation uses `sqlite3` via Swift, and the Android implementation uses the Android SQLite API. This gives you sub-millisecond queries on datasets of tens of thousands of rows.
+
+### Sync-Friendly Storage: PouchDB + CouchDB
+
+For offline-first apps that synchronize with a server, **PouchDB** runs inside the WebView using IndexedDB as its backing store and replicates bidirectionally with CouchDB-compatible servers:
+
+```typescript
+import PouchDB from 'pouchdb-browser';
+const db = new PouchDB('todos');
+
+db.replicate.to('https://admin:password@couch.example.com/todos', {
+  live: true, retry: true,
+});
+```
+
+PouchDB handles conflict detection, revision tracking, and incremental sync automatically. This is the only local storage solution in the Ionic ecosystem that provides built-in bidirectional sync without additional infrastructure.
+
+<Callout type="tip">
+  Each storage layer targets a distinct use case. Preferences are fastest for simple flags (< 100ms reads). SQLite excels at filtered queries on thousands of rows. PouchDB shines when you need offline writes that sync to a server. Mixing layers within one app is common — choose by access pattern, not convenience.
+</Callout>
+
+### Secure Storage
+
+Sensitive data (auth tokens, keys, PII) should use the OS secure enclave. **capacitor-secure-storage-plugin** and **@aparajita/capacitor-secure-storage** wrap iOS Keychain and Android Keystore:
+
+```typescript
+import { SecureStorage } from '@aparajita/capacitor-secure-storage';
+await SecureStorage.set({ key: 'auth_token', value: token });
+const saved = await SecureStorage.get({ key: 'auth_token' });
+```
+
+These values survive app uninstall on iOS and can be scoped to biometric authentication (Face ID / fingerprint) on supported devices. Reads trigger the OS authentication dialog automatically when biometric scope is set.
+
+```
+┌─────────────────────────┬──────────────────────────┐
+│ Use Case                │ Recommended Solution     │
+├─────────────────────────┼──────────────────────────┤
+│ Simple KV (flags, prefs)│ @capacitor/preferences   │
+│ Structured queries      │ capacitor-sqlite         │
+│ Offline-first with sync │ PouchDB + CouchDB        │
+│ Secrets / tokens        │ capacitor-secure-storage │
+│ Simple KV with PWA      │ Ionic Storage            │
+└─────────────────────────┴──────────────────────────┘
+```
+
+### Pitfalls
+
+Ionic Storage's fallback behavior means web and PWA builds use IndexedDB — benchmark query performance there, not just on native. Capacitor SQLite encryption via SQLCipher adds ~2MB to the binary size. PouchDB's sync history grows unbounded without periodic `db.compact()` — set a compaction interval for long-running apps. Preferences data is cleared on app uninstall on iOS but may persist on Android; never store secrets there.

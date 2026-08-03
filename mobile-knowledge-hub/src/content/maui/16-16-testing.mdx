@@ -1,0 +1,146 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Unit Test Runtime" value="< 100ms" />
+  <StatItem label="UI Test Platforms" value="3" />
+  <StatItem label="Mocking Libraries" value="5+" />
+  <StatItem label="Test Frameworks" value="3+" />
+</StatGrid>
+
+### Unit Testing with xUnit
+
+xUnit is the most widely used test framework for .NET MAUI. Tests run in a standard .NET console context — no device or emulator required — making them suitable for CI/CD pipelines. Tests use `[Fact]` (parameterless) or `[Theory]` (parameterized).
+
+```csharp
+using Xunit;
+using Moq;
+using MyApp.ViewModels;
+using MyApp.Services;
+
+public class LoginViewModelTests
+{
+    private readonly Mock<IAuthService> _authServiceMock;
+    private readonly LoginViewModel _viewModel;
+
+    public LoginViewModelTests()
+    {
+        _authServiceMock = new Mock<IAuthService>();
+        _viewModel = new LoginViewModel(_authServiceMock.Object);
+    }
+
+    [Fact]
+    public async Task LoginCommand_WithValidCredentials_InvokesAuthService()
+    {
+        _authServiceMock
+            .Setup(s => s.LoginAsync("user@example.com", "correct-password"))
+            .ReturnsAsync(new AuthResult { Success = true });
+
+        _viewModel.Username = "user@example.com";
+        _viewModel.Password = "correct-password";
+        await _viewModel.LoginCommand.ExecuteAsync(null);
+
+        _authServiceMock.Verify(
+            s => s.LoginAsync("user@example.com", "correct-password"),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task LoginCommand_WithInvalidCredentials_SetsErrorMessage()
+    {
+        _authServiceMock
+            .Setup(s => s.LoginAsync(It.IsAny<string>(), It.IsAny<string>()))
+            .ReturnsAsync(new AuthResult { Success = false, ErrorMessage = "Invalid credentials" });
+
+        _viewModel.Username = "user@example.com";
+        _viewModel.Password = "wrong";
+        await _viewModel.LoginCommand.ExecuteAsync(null);
+
+        Assert.False(_viewModel.IsLoggedIn);
+        Assert.Equal("Invalid credentials", _viewModel.ErrorMessage);
+    }
+}
+```
+
+### Testable ViewModels with CommunityToolkit.Mvvm
+
+Source generators produce `INotifyPropertyChanged` and `ICommand` at compile time, enabling ViewModel testing without a UI thread.
+
+```csharp
+public partial class LoginViewModel : ObservableObject
+{
+    private readonly IAuthService _authService;
+    public LoginViewModel(IAuthService authService) => _authService = authService;
+
+    [ObservableProperty] private string _username = string.Empty;
+    [ObservableProperty] private string _password = string.Empty;
+    [ObservableProperty] private string _errorMessage = string.Empty;
+    [ObservableProperty] private bool _isLoggedIn;
+
+    [RelayCommand]
+    private async Task LoginAsync()
+    {
+        var result = await _authService.LoginAsync(Username, Password);
+        IsLoggedIn = result.Success;
+        ErrorMessage = result.Success ? string.Empty : result.ErrorMessage;
+    }
+}
+```
+
+Properties are source-generated auto-properties — the ViewModel tests entirely in-memory with mocked dependencies.
+
+### Running Tests in CI
+
+```bash
+dotnet test MyApp.Tests.csproj --configuration Release --logger "console;verbosity=detailed"
+dotnet test --collect "XPlat Code Coverage" --settings coverlet.runsettings
+```
+
+For CI pipelines, install the .NET SDK and run `dotnet test`. No emulator or device needed. Use `coverlet.msbuild` for cross-platform coverage.
+
+<Callout type="tip" title="Platform-Specific Code Requires Abstraction">
+  Code that calls platform APIs directly (Android `Platform.CurrentActivity`, iOS `UIApplication.SharedApplication`) cannot be unit tested. Wrap platform calls behind interfaces (`IAuthService`, `IFilePicker`, `INetworkConnectivity`) and inject mocks. `FilePicker.PickAsync` requires mocking `IFilePicker`.
+</Callout>
+
+### UI Testing with Appium
+
+Appium is the primary cross-platform UI testing approach for MAUI. It drives devices via the WebDriver protocol, locating elements by accessibility ID — MAUI's `AutomationId` maps to `content-desc` (Android) and `accessibilityIdentifier` (iOS).
+
+```csharp
+var options = new AppiumOptions();
+options.PlatformName = "Android";
+options.App = "/path/to/app.apk";
+options.AutomationName = "UiAutomator2";
+var driver = new AndroidDriver(options);
+
+driver.FindElement(MobileBy.AccessibilityId("UsernameEntry")).SendKeys("user@example.com");
+driver.FindElement(MobileBy.AccessibilityId("PasswordEntry")).SendKeys("password123");
+driver.FindElement(MobileBy.AccessibilityId("LoginButton")).Click();
+
+var homeLabel = driver.FindElement(
+    MobileBy.AccessibilityId("WelcomeLabel"), TimeSpan.FromSeconds(10));
+Assert.NotNull(homeLabel);
+```
+
+Set `AutomationId="UsernameEntry"` in XAML. Run Appium locally or via BrowserStack/Sauce Labs.
+
+### Mocking Comparison
+
+```csharp
+// Moq: fluent setup
+var mock = new Mock<IAuthService>();
+mock.Setup(s => s.LoginAsync(It.IsAny<string>(), It.IsAny<string>()))
+    .ReturnsAsync(new AuthResult { Success = true });
+
+// NSubstitute: record-and-return
+var sub = Substitute.For<IAuthService>();
+sub.LoginAsync(Arg.Any<string>(), Arg.Any<string>())
+   .Returns(new AuthResult { Success = true });
+```
+
+### Pitfalls
+
+**Testing MAUI-specific types:** `Color`, `Command` (with `CanExecute`) need a valid `Dispatcher`. Avoid `Microsoft.Maui.Controls` types in your interfaces. **No MAUI test host:** Unlike Android `ActivityTestRule` or iOS XCTest, MAUI has no official in-process test host — use Appium. **Dispatcher-bound properties:** Properties touching `Dispatcher` or `MainThread` throw without a `SynchronizationContext`. Inject `IDispatcher` as a dependency.
+
+### Framework Insight
+
+MAUI's unit testing is mature — xUnit, Moq, and CommunityToolkit.Mvvm enable thorough TDD on business logic and ViewModels. The gap is in UI testing: Flutter's `integration_test` provides first-party widget-level testing with no external server, while MAUI relies on Appium. SwiftUI previews with XCTest on iOS and Jetpack Compose Test on Android offer richer in-process UI testing. The MAUI team is building a first-party solution, but as of .NET 8, Appium remains the recommended path for automated UI validation.

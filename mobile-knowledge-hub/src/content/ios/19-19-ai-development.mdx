@@ -1,0 +1,139 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+        <StatItem value="Xcode Completion" label="On-device ML" />
+        <StatItem value="Copilot" label="Third-party" />
+        <StatItem value="ChatGPT" label="General Purpose" />
+        <StatItem value="SwiftGen" label="Code Generation" />
+    </StatGrid>
+
+    ### AI-Assisted iOS Development
+
+    AI tools for iOS span Apple's on-device ML in Xcode, third-party extensions,
+    general-purpose LLMs, and specialized code generators. Each fills a distinct niche.
+
+    #### Xcode Predictive Code Completion
+
+    Apple's model (Xcode 15+, Apple Silicon) runs locally with zero network egress.
+    Trained exclusively on Swift and Apple SDK code, it completes modifier chains,
+    Core Data descriptors, and XCTest assertions idiomatically.
+
+    ```swift
+    // Partial "Button("Save")" — Xcode suggests the full chain
+    Button("Save") {
+        Task { await store.save() }
+    }
+    .buttonStyle(.borderedProminent)
+    .disabled(!store.canSave)
+    .keyboardShortcut("s", modifiers: .command)
+    ```
+
+    #### LLMs for SwiftUI Scaffolding
+
+    ChatGPT and Claude generate SwiftUI views, SwiftData schemas, Codable models,
+    and XCTest suites. Output quality depends on deployment-target specificity.
+
+    ```swift
+    // Prompt: "iOS 17+ settings with @Observable, sections, SecureField, errors"
+    @Observable
+    final class SettingsViewModel {
+        var displayName: String = ""
+        var email: String = ""
+        var oldPassword: String = ""
+        var newPassword: String = ""
+        var isSaving = false
+        var errorMessage: String?
+
+        var isValid: Bool {
+            !displayName.trimmingCharacters(in: .whitespaces).isEmpty
+                && email.contains("@")
+                && (newPassword.isEmpty || newPassword.count >= 8)
+        }
+
+        @MainActor
+        func save() async {
+            isSaving = true
+            errorMessage = nil
+            defer { isSaving = false }
+            do {
+                try await KeychainActor.shared.update(password: newPassword)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    struct SettingsView: View {
+        @Bindable private var model = SettingsViewModel()
+
+        var body: some View {
+            Form {
+                Section("Profile") {
+                    TextField("Display Name", text: $model.displayName)
+                    TextField("Email", text: $model.email)
+                        .textContentType(.emailAddress)
+                        .autocapitalization(.none)
+                        .keyboardType(.emailAddress)
+                }
+                Section("Security") {
+                    SecureField("Current Password", text: $model.oldPassword)
+                    SecureField("New Password", text: $model.newPassword)
+                }
+                Section {
+                    Button("Save Changes") {
+                        Task { await model.save() }
+                    }
+                    .disabled(!model.isValid || model.isSaving)
+                }
+                if let error = model.errorMessage {
+                    Section { Text(error).foregroundColor(.red) }
+                }
+            }
+            .navigationTitle("Settings")
+        }
+    }
+    ```
+
+    <Callout title="Specify Deployment Target in Every Prompt">
+        SwiftUI changed per version: iOS 13-15 used NavigationView and ObservableObject;
+        iOS 16 introduced NavigationStack and Charts; iOS 17+ uses @Observable and
+        @Bindable. Prefix prompts with "iOS 17+ using @Observable" for correct output.
+    </Callout>
+
+    #### AI Efficacy by Domain
+
+    | Domain | Effectiveness | Reason |
+    |--------|--------------|--------|
+    | Codable conformance | High | Repetitive, stable pattern |
+    | SwiftData / Core Data models | High | Boilerplate-heavy |
+    | SwiftUI list layouts | Medium-High | Version-dependent |
+    | XCTest methods | Medium | Needs project context |
+    | Metal shaders | Low | Sparse training data |
+    | Accessibility traits | Low | Device-behavior nuance |
+
+    #### Limitations
+
+    Apple's WWDC-gated docs are underrepresented in training data. LLMs emit
+    deprecated APIs — NavigationView, ObservableObject, @Published — even for
+    iOS 17+ targets. AI cannot reason about App Review, provisioning profiles,
+    or Dynamic Island layout quirks.
+
+    #### AI Workflow
+
+    ```
+    Prompt ──> AI generates ──> Dev reviews ──> Xcode compiles ──> Test on device
+    ```
+
+    #### Cross-Platform Comparison
+
+    Apple's on-device completion is unique: Android Studio Gemini sends code to
+    the cloud; Flutter and React Native lack first-party assistants. GitHub
+    Copilot is platform-agnostic, but Apple's local model provides privacy and
+    latency advantages. AI code review weight is higher on iOS given WWDC API
+    churn across yearly releases.
+
+    <Callout title="AI Cannot Test on Real Hardware">
+        Generated code compiles and previews but fails on devices — notch/Dynamic
+        Island breaks layout, Stage Manager changes behavior, haptics differ.
+        Always verify on real hardware across your device matrix.
+    </Callout>

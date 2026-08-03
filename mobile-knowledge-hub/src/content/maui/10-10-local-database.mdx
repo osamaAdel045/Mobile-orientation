@@ -1,0 +1,123 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Local DB" value="SQLite (sqlite-net-pcl)" />
+  <StatItem label="Key-Value" value="Preferences API" />
+  <StatItem label="Secrets" value="SecureStorage" />
+  <StatItem label="NoSQL Option" value="LiteDB" />
+</StatGrid>
+
+### SQLite via sqlite-net-pcl
+
+The `sqlite-net-pcl` package is the established ORM for SQLite in .NET MAUI, providing attribute-based table mapping, async CRUD, and LINQ queries without a separate SQL file in the project.
+
+```csharp
+using SQLite;
+
+[Table("weather_cache")]
+public class WeatherRecord
+{
+    [PrimaryKey, AutoIncrement]
+    public int Id { get; set; }
+
+    [Indexed, MaxLength(100)]
+    public string City { get; set; } = string.Empty;
+
+    public double TemperatureC { get; set; }
+    public string Condition { get; set; } = string.Empty;
+    public DateTime LastUpdated { get; set; }
+}
+```
+
+### CRUD Operations
+
+Open a connection with the database path — use `FileSystem.AppDataDirectory` to store the file in the app's sandbox, then perform async CRUD.
+
+```csharp
+public class WeatherDatabase
+{
+    private SQLiteAsyncConnection? _db;
+
+    private async Task InitAsync()
+    {
+        if (_db is not null) return;
+        var path = Path.Combine(FileSystem.AppDataDirectory, "weather.db3");
+        _db = new SQLiteAsyncConnection(path);
+        await _db.CreateTableAsync&lt;WeatherRecord&gt;();
+    }
+
+    public async Task&lt;List&lt;WeatherRecord&gt;&gt; GetAllAsync()
+    {
+        await InitAsync();
+        return await _db.Table&lt;WeatherRecord&gt;().ToListAsync();
+    }
+
+    public async Task&lt;int&gt; SaveAsync(WeatherRecord record)
+    {
+        await InitAsync();
+        return await _db.InsertOrReplaceAsync(record);
+    }
+
+    public async Task&lt;int&gt; DeleteAsync(WeatherRecord record)
+    {
+        await InitAsync();
+        return await _db.DeleteAsync(record);
+    }
+}
+```
+
+<Callout type="warning">
+  `sqlite-net-pcl` does **not** handle migrations automatically. Use manual
+  schema versioning — check `pragma user_version` on connect and apply DDL
+  statements incrementally. For migration-heavy apps, consider EF Core with
+  the SQLite provider, which includes built-in migration tooling.
+</Callout>
+
+### Preferences and SecureStorage
+
+For lightweight key-value storage, use `Preferences` for settings and `SecureStorage` for sensitive credentials. Both are thread-safe and built into MAUI without extra packages.
+
+```csharp
+// Save and load a user preference
+Preferences.Set("theme", "dark");
+var theme = Preferences.Get("theme", "light");
+
+// Secure credential storage (uses Keychain on iOS, EncryptedSharedPrefs on Android)
+await SecureStorage.SetAsync("auth_token", token);
+var token = await SecureStorage.GetAsync("auth_token");
+```
+
+### LiteDB — Embedded NoSQL
+
+For document-oriented data, **LiteDB** offers a MongoDB-like experience in a single file. It supports BSON documents, LINQ queries, and indexes without a separate server process.
+
+```csharp
+using LiteDB;
+
+var db = new LiteDatabase(Path.Combine(FileSystem.AppDataDirectory, "app.db"));
+var col = db.GetCollection&lt;WeatherRecord&gt;("weather");
+col.Insert(new WeatherRecord { City = "London", TemperatureC = 15 });
+var london = col.FindOne(w => w.City == "London");
+```
+
+<Callout type="tip">
+  LiteDB v5 ships as a single DLL (~450 KB) and supports full-text search,
+  map/reduce, and file storage. Use it over SQLite when your schema is
+  polymorphic or evolves rapidly without migrations.
+</Callout>
+
+### Comparison — SQLite vs Room vs Drift vs CoreData
+
+| Feature | .NET MAUI (sqlite-net) | Android (Room) | Flutter (Drift) | iOS (CoreData) |
+|---|---|---|---|---|
+| Table def | Attributes on POCO | `@Entity` annotation | Generated from SQL | `.xcdatamodeld` |
+| Queries | LINQ | `@Dao` / `@Query` | DAO + SQL | `NSFetchRequest` |
+| Migrations | Manual | Auto (DDL + testing) | `SchemaVersion` + DSL | Lightweight / Mapping |
+| Reactive | Manual | `Flow&lt;List&lt;T&gt;&gt;` | `Stream&lt;List&lt;T&gt;&gt;` | `NSFetchedResultsController` |
+
+<Callout type="info">
+  **Realm .NET** (now Atlas Device SDK) was a popular alternative offering live
+  objects and auto-sync with MongoDB Atlas, but MongoDB deprecated the .NET
+  SDK in 2024. For new projects, prefer SQLite or LiteDB unless you have an
+  existing Atlas deployment.
+</Callout>

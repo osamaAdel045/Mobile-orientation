@@ -1,0 +1,104 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+    <StatGrid columns={3}>
+        <StatItem value="5/5" label="UI Flexibility" />
+        <StatItem value="5/5" label="Performance (60/120fps)" />
+        <StatItem value="5/5" label="Code Sharing (UI + Logic)" />
+        <StatItem value="4/5" label="Ecosystem (pub.dev)" />
+        <StatItem value="3/5" label="Platform Feel" />
+        <StatItem value="3/5" label="Binary Size" />
+        <StatItem value="4/5" label="Team Availability" />
+        <StatItem value="4/5" label="Learning Curve" />
+        <StatItem value="5/5" label="Developer Tooling" />
+        <StatItem value="4/5" label="Production Readiness" />
+    </StatGrid>
+
+    ### Decision Matrix: Scoring Dimensions
+
+    <DecisionMatrix
+      scores={[
+        { label: "UI Flexibility", score: 5 },
+        { label: "Performance", score: 5 },
+        { label: "Code Sharing", score: 5 },
+        { label: "Ecosystem", score: 4 },
+        { label: "Platform Feel", score: 3 },
+        { label: "Binary Size", score: 3 },
+        { label: "Team Availability", score: 4 },
+        { label: "Learning Curve", score: 4 },
+        { label: "Tooling", score: 5 },
+        { label: "Production Readiness", score: 4 },
+      ]}
+      pros="Flutter's custom renderer gives pixel-perfect control unmatched by any cross-platform framework — every pixel on screen is drawn by your code, not delegated to native controls. The AOT compilation to native ARM delivers consistent 60/120fps without the bridge overhead of React Native. Full code sharing across iOS, Android, web, and desktop with a single codebase. DevTools, hot reload, and the inspector provide a debugging experience that rivals native tooling."
+      cons="Larger binary size (~4.5 MB minimal) compared to native (~1 MB). Non-native default widgets look foreign on both platforms until customized. Dart ecosystem, while growing (50K+ packages), is smaller than npm (2M+ packages). Platform API support lags behind native — new OS features (iOS 18 APIs, Android 15 features) arrive in Flutter weeks to months after release. Web support is performant but not a drop-in replacement for a React SPA."
+    />
+
+    <Callout title="Score Justifications">
+        UI Flexibility (5/5): Flutter paints every pixel itself — no native widget delegation means zero platform constraints. You can implement any design system precisely. Performance (5/5): Impeller renderer with AOT-compiled shaders eliminates the shader compilation jank that plagued Skia. Consistent frame times even on mid-range devices. Code Sharing (5/5): One Dart codebase for UI, business logic, data layer, and tests across all platforms — no separate UI layer per platform. Ecosystem (4/5): Strong core packages from Google (Firebase, GoRouter, flutter_test), but third-party package quality varies widely. Platform Feel (3/5): Default Material widgets look out of place on iOS. Cupertino library covers basics but misses many iOS 17+ patterns. Binary Size (3/5): Impeller adds ~1 MB, engine totals ~3.5 MB. Total minimal app ~4.5 MB vs ~1 MB native. Team Availability (4/5): Dart developers are less common than JS/TS developers but significantly more common than Kotlin Multiplatform or .NET MAUI specialists. Learning Curve (4/5): Dart is familiar to Java/C#/JS developers. Reactive declarative UI paradigm is the main learning investment. Tooling (5/5): Hot reload is transformative for UI iteration. DevTools provides widget inspector, performance profiler, memory viewer, network tracker, and flame chart. Production Readiness (4/5): Proven at scale (Google Pay, Alibaba, Reflectly, Toyota), but still newer than React Native in production environments.
+    </Callout>
+
+    ### When to Choose Flutter
+
+    **Custom branded UI, pixel-perfect designs.** If your design system includes custom widgets, micro-animations, or branded components that go beyond Material Design or Cupertino, Flutter's custom renderer is a decisive advantage. Apps like Google Pay, Alibaba, and Reflectly demonstrate that Flutter can produce visually distinctive UIs that would be challenging to replicate consistently across native platforms.
+
+    **Hardware-accelerated animations and graphics.** Flutter's Impeller renderer provides predictable GPU-accelerated 120fps rendering for animations, transitions, and custom painted graphics. Apps with complex animated transitions, chart visualizations, or creative tools benefit from Flutter's ability to compose and animate at 60fps on mid-range devices where React Native or Ionic would struggle to maintain 30fps.
+
+    **Startup MVP targeting iOS + Android simultaneously.** A single Flutter team of 2-3 developers can produce a production-quality iOS and Android app in the time it takes a 4-5 person native team to ship one platform. The code sharing extends beyond UI into business logic, data layer, and tests. For startups iterating on product-market fit, Flutter's iteration speed is unmatched.
+
+    **Embedded GUI applications.** Flutter's embedded device support (via `flutter-pi`, `ubuntu-frame`, and direct embedder APIs) makes it the leading choice for kiosks, point-of-sale systems, smart displays, and IoT dashboards. The ability to render complex UIs on low-power ARM hardware with no OS-level widget toolkit is unique to Flutter.
+
+    **Apps needing consistent behavior across OS versions.** Flutter controls its own rendering pipeline, so a button rendered on iOS 15 behaves identically on iOS 18. Native platform controls change appearance and behavior with OS updates — Flutter apps maintain visual consistency until the developer explicitly updates the design.
+
+    ### When NOT to Choose Flutter
+
+    **Apps requiring platform-native look-and-feel with minimal customization.** If your design philosophy is "it should look and feel exactly like every other iOS app," native development produces a more authentic result with less effort. While Flutter's Cupertino library provides basic iOS styling, it doesn't match the system feel of UIKit's native controls, particularly for complex patterns like navigation bar large titles, spring animations, and context menus.
+
+    **Simple content-forward apps better as PWAs.** For a content-focused app (news reader, blog, documentation viewer) where offline support and push notifications are the primary requirements, a Progressive Web App (PWA) achieves 90% of the functionality at 10% of the development cost. Flutter's 4.5 MB binary is disproportionate for an app that a React PWA delivers in 200 KB of cached assets.
+
+    **Apps requiring sub-3 MB binary.** If your target market includes emerging markets with limited storage or if you're distributing through channels with strict size limits, Flutter's engine overhead (3.5 MB minimum) is a disadvantage. Native Android can produce a minimal APK under 1 MB, and native iOS under 2 MB.
+
+    **3D games.** Flutter is a UI toolkit, not a game engine. For 3D rendering, physics simulation, or complex game loops, use Unity, Unreal, or a dedicated game framework. While Flutter has basic canvas and shader support, it lacks the game engine infrastructure (spatial audio, physics, asset pipelines) needed for commercial games.
+
+    **Apps heavily dependent on latest platform APIs.** If your product roadmap depends on iOS 18 APIs (Live Activities, Apple Intelligence integration) or Android 15 features on day zero of release, Flutter's platform channel latency will be a bottleneck. Native development provides immediate access to new OS APIs; Flutter requires platform channel development or third-party plugin updates.
+
+    ### Team Composition Decision Tree
+
+    ```
+    Your team:
+    │
+    ├─ Has web (React/Vue) developers?
+    │   └─ YES → React Native is faster to adopt, cheaper to hire
+    │   └─ NO → Continue ⬇
+    │
+    ├─ Has iOS + Android specialists?
+    │   └─ YES, and app needs platform-specific excellence → Native
+    │   └─ YES, but app is UI-heavy/custom → Flutter
+    │   └─ NO → Continue ⬇
+    │
+    ├─ Neither web nor native — new team?
+    │   └─ Dart is learnable in 2 weeks for Java/C#/JS devs → Flutter
+    │   └─ Team has Kotlin experience → Kotlin Multiplatform
+    │
+    └─ Enterprise with MS ecosystem?
+        └─ .NET MAUI is natural for C#/Azure shops
+    ```
+
+    <Callout title="The Neutral Decision Framework">
+        No single framework is universally correct. The best choice is the one your team can ship efficiently and maintain for 2+ years. Flutter excels when UI fidelity and cross-platform consistency are the top priorities. Native excels when platform integration and latest-API access matter most. React Native excels when web developer availability and OTA update capability are decisive. Evaluate against your specific constraints — team composition, performance requirements, and design philosophy — not against abstract framework rankings.
+    </Callout>
+
+    ### Comparison Summary: Flutter vs React Native vs Native
+
+    | Dimension | Flutter | React Native | Native (iOS/Android) |
+    |---|---|---|---|
+    | Rendering | Custom (Impeller) | Native controls via Fabric | Platform controls |
+    | Language | Dart | TypeScript/JavaScript | Swift/Kotlin |
+    | Compilation | AOT native (ARM) | Hermes bytecode | Native (ARM) |
+    | Binary Size | ~4.5 MB minimal | ~6 MB (with Hermes) | ~1 MB each |
+    | Startup Time | 300-800ms cold | 400-1200ms cold | 100-300ms cold |
+    | Animated Perf | 60/120fps consistent | 60fps (jank on JS thread) | 60/120fps native |
+    | Code Sharing | UI + Logic (100%) | UI + Logic (90%) | Logic only (KMP) |
+    | OTA Updates | No (app store) | Yes (CodePush) | No |
+    | Ecosystem | 50K packages | 2M+ npm packages | Platform SDKs |
+    | Learning Curve | Moderate | Low (JS devs) | Steep (2 languages) |
+    | Mature Companies | Google Pay, Alibaba | Meta, Shopify, Pinterest | All major apps |

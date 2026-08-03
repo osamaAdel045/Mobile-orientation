@@ -1,0 +1,109 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Maven Central" label="Repository" />
+        <StatItem value="Gradle MP Plugin" label="Build Tool" />
+        <StatItem value="XCFramework" label="iOS Artifact" />
+      </StatGrid>
+
+      ### Gradle with Kotlin Multiplatform Plugin
+
+      KMP uses `org.jetbrains.kotlin.multiplatform` Gradle plugin. Each target
+      is declared in `build.gradle.kts` with dependencies scoped to source sets.
+      The plugin generates the correct compilation pipeline per target — JVM
+      backend for Android, Kotlin/Native for iOS.
+
+      ```gradle_kotlin
+      // shared/build.gradle.kts
+      plugins {
+          id("org.jetbrains.kotlin.multiplatform") version "2.0.21"
+          id("org.jetbrains.kotlin.plugin.serialization") version "2.0.21"
+          id("app.cash.sqldelight") version "2.0.2"
+      }
+
+      kotlin {
+          androidTarget { publishLibraryVariants("release", "debug") }
+          listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach { target ->
+              target.binaries.framework { baseName = "SharedModule"; isStatic = true }
+          }
+          sourceSets {
+              commonMain.dependencies {
+                  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+                  implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+                  implementation("io.ktor:ktor-client-core:3.0.1")
+                  implementation("io.insert-koin:koin-core:4.0.0")
+              }
+              androidMain.dependencies { implementation("io.ktor:ktor-client-okhttp:3.0.1") }
+              iosMain.dependencies { implementation("io.ktor:ktor-client-darwin:3.0.1") }
+          }
+      }
+      ```
+
+      ### Version Catalogs
+
+      Gradle version catalogs (`libs.versions.toml`) centralize dependency
+      versions — critical in KMP because Kotlin version must align across all
+      plugins and libraries. Mismatched versions are the most common source
+      of cryptic build errors.
+
+      ```yaml
+      # gradle/libs.versions.toml
+      [versions]
+      kotlin = "2.0.21"
+      coroutines = "1.9.0"
+      ktor = "3.0.1"
+
+      [libraries]
+      kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+      ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
+      ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+      ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
+
+      [plugins]
+      kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+      ```
+
+      <Callout title="Kotlin Version Compatibility">
+        All KMP libraries must use the same Kotlin version. Mixing libraries
+        compiled with different versions produces `IncompatibleClassChangeError`
+        or `NoClassDefFoundError`. Version catalogs help enforce alignment.
+        The `kotlin-bom` can centralize version management across dependencies.
+      </Callout>
+
+      ### Publishing KMP Libraries
+
+      Android publishes AAR files to Maven Central. iOS publishes XCFrameworks
+      bundling device, simulator, and x86_64 slices. The multiplatform plugin
+      handles both.
+
+      ```gradle_kotlin
+      publishing {
+          repositories {
+              maven {
+                  url = uri("https://s01.oss.sonatype.org/content/repositories/releases/")
+                  credentials {
+                      username = project.findProperty("ossrhUsername") as String?
+                      password = project.findProperty("ossrhPassword") as String?
+                  }
+              }
+          }
+      }
+      ```
+
+      ### Comparison: Package Systems
+
+      | Aspect | KMP | Flutter | React Native |
+      |--------|-----|---------|--------------|
+      | Package Manager | Maven Central | pub.dev | npm |
+      | Build System | Gradle | Dart + CocoaPods | Metro + CocoaPods |
+      | iOS Distribution | XCFramework | CocoaPods/spm | CocoaPods/spm |
+      | Version Alignment | Version catalog | pubspec.lock | package-lock |
+
+      ### KMP Insight
+
+      KMP's package system inherits from the JVM ecosystem — Maven Central,
+      Gradle, and semantic versioning are infrastructure that has served Java
+      and Android for decades. The key constraint: KMP libraries must explicitly
+      target each platform. A JVM-only library (Retrofit) won't compile on
+      Kotlin/Native. The ecosystem has reached critical mass (Ktor, SQLDelight,
+      Koin all ship KMP-native), but verify target support before adopting.

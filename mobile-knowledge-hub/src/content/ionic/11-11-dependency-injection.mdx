@@ -1,0 +1,109 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Angular" value="Hierarchical DI, 3 scope levels" />
+  <StatItem label="React" value="Context API + hooks pattern" />
+  <StatItem label="Vue" value="provide/inject, composables" />
+  <StatItem label="Capacitor" value="Plugins as singletons" />
+</StatGrid>
+
+### Angular: Hierarchical DI
+
+Angular's DI system operates at three levels — **root**, **NgModule**, and **Component** — each creating a separate injector instance. A service provided at root is a singleton app-wide; at the component level, each component instance receives a fresh service:
+
+```typescript
+import { Injectable } from '@angular/core';
+
+@Injectable({ providedIn: 'root' })
+export class ApiService {
+  constructor(private http: HttpClient) {}
+  getUsers() { return this.http.get('/users'); }
+}
+```
+
+Component-scoped providers are useful for per-component state that shouldn't leak between routes. Angular creates a child injector for each component with `providers: [MyService]`, so the service instance lives as long as the component. The compile-time resolution means a missing provider fails at build, not runtime.
+
+```typescript
+@Component({
+  selector: 'app-users',
+  providers: [SessionState], // new instance per component
+  template: `...`,
+})
+export class UsersComponent {
+  constructor(private session: SessionState) {}
+}
+```
+
+### React: Context API
+
+React achieves DI through composition and the Context API. A provider component makes values available to its subtree, and `useContext` retrieves them. This is flatter than Angular — no injector tree — but supports the same scope-per-subtree pattern:
+
+```typescript
+import { createContext, useContext, useMemo } from 'react';
+
+const ApiContext = createContext<ApiService | null>(null);
+
+export function ApiProvider({ children }: { children: React.ReactNode }) {
+  const api = useMemo(() => new ApiService(), []);
+  return <ApiContext.Provider value={api}>{children}</ApiContext.Provider>;
+}
+
+export function useApi(): ApiService {
+  const ctx = useContext(ApiContext);
+  if (!ctx) throw new Error('useApi must be inside <ApiProvider>');
+  return ctx;
+}
+```
+
+React doesn't enforce a DI lifecycle — services are plain objects. The `useMemo` pattern ensures a single instance per provider mount, but unmounting the provider destroys it. Nested providers at different route levels can override values for subtrees.
+
+### Vue: provide / inject
+
+Vue's `provide` and `inject` pair mirrors Angular's hierarchical DI: a parent component provides a value, and any descendant injects it. The scope follows the component tree:
+
+```typescript
+import { provide, inject, ref, type Ref } from 'vue';
+
+// In ancestor component
+const userState = ref({ name: 'Alice' });
+provide('user', userState);
+
+// In descendant
+const user = inject<Ref<{ name: string }>>('user')!;
+```
+
+Vue's dependency tree is implicit — keys are strings, so naming collisions require convention. Prefix injected keys with a namespace like `'myapp:user'` to avoid collisions with third-party components or libraries.
+
+<Callout type="info">
+  Angular is the only framework with compile-time DI — providers are resolved and optimized during build. React and Vue rely on runtime lookup via the component tree. This means Angular catches missing provider errors at build time, while React and Vue throw runtime exceptions (or silently return undefined if no default is set).
+</Callout>
+
+### Capacitor Plugins as Singletons
+
+Capacitor plugins are inherently singleton — importing `Camera` from `@capacitor/camera` always returns the same instance. This design means plugins don't need DI management in any framework:
+
+```typescript
+import { Camera, CameraResultType } from '@capacitor/camera';
+const photo = await Camera.getPhoto({ resultType: CameraResultType.Uri });
+```
+
+For testability, wrap plugins in a thin abstraction. An Angular service that proxies `Geolocation` keeps business logic testable while preserving the native singleton underneath. The same pattern applies to React hooks and Vue composables.
+
+```
+┌──────────────┬────────────────┬────────────────────┐
+│ Framework    │ Scope Units    │ Resolution Timing  │
+├──────────────┼────────────────┼────────────────────┤
+│ Angular      │ Root, Module,  │ Compile-time       │
+│              │ Component      │                    │
+│ React        │ Provider       │ Runtime (tree      │
+│ (Context)    │ subtree        │ walk)              │
+│ Vue          │ Component      │ Runtime (string    │
+│ (inject)     │ tree           │ key lookup)        │
+│ Capacitor    │ App-wide       │ Import-time        │
+│ plugins      │ singleton      │ (static)           │
+└──────────────┴────────────────┴────────────────────┘
+```
+
+### Pitfalls
+
+In Angular, providing a service in multiple lazy-loaded NgModules creates separate instances — use `providedIn: 'root'` for true app-wide singletons. In React, a context provider inside a route component means each navigation instantiates a new service (and loses state). In Vue, string-keyed injects collide across packages — namespace them. Capacitor plugins are synchronous singletons; mocking them in tests requires a wrapper at the DI boundary that can be swapped in TestBed, Jest mocks, or Vitest.

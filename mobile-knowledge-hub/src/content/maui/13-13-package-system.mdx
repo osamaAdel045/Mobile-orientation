@@ -1,0 +1,85 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Total NuGet Packages" value="300,000+" />
+  <StatItem label="MAUI-Compatible" value="15,000+" />
+  <StatItem label="Community Toolkit Controls" value="60+" />
+  <StatItem label="Avg Restore Time" value="2-8s" />
+</StatGrid>
+
+### NuGet in the MAUI Ecosystem
+
+NuGet is the package manager for .NET, hosting over 300,000 packages on nuget.org. For MAUI developers, the compatible subset targets .NET 6+ with `net8.0-android`, `net8.0-ios`, `net8.0-maccatalyst`, and `net8.0-windows` target frameworks. Many general-purpose .NET libraries (Serilog, Polly, AutoMapper, Newtonsoft.Json) work because they target .NET Standard 2.0+, which all MAUI platforms satisfy. MAUI-specific packages remain fewer than Flutter's pub.dev or npm, but the ecosystem is growing rapidly with each .NET release.
+
+### PackageReference in .csproj
+
+Modern MAUI projects use the SDK-style `.csproj` format with `PackageReference` items. Unlike the legacy `packages.config`, `PackageReference` is declarative, supports transitive pinning with `CentralPackageManagement`, and is restored automatically by the .NET SDK. Each package declares its target framework compatibility in its `.nupkg`, and MSBuild selects the best matching TFM at restore time.
+
+```csharp
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0-android;net8.0-ios;net8.0-maccatalyst</TargetFrameworks>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
+    <PackageReference Include="CommunityToolkit.Maui" Version="9.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
+    <PackageReference Include="Polly.Core" Version="8.2.0" />
+  </ItemGroup>
+</Project>
+```
+
+Use `dotnet list package --vulnerable` to audit known CVEs. For large solutions, enable `Directory.Packages.props` for centralized version management so all projects share a single version definition.
+
+### Essential MAUI NuGet Packages by Category
+
+**MVVM & Data Binding:** CommunityToolkit.Mvvm (source generators for `[ObservableProperty]` and `[RelayCommand]`), ReactiveUI.Maui (reactive bindings with `WhenActivated`), Prism.Maui (navigation, regions, DI container abstraction). **HTTP & Networking:** Refit (declarative REST client from interfaces), Polly (resilience pipeline with retry, circuit-breaker, timeout), GraphQL.Client for GraphQL APIs. **Local Storage:** LiteDB (embedded NoSQL, zero config), sqlite-net-pcl (async SQLite ORM), Akavache (async key-value cache backed by SQLite). **Maps & Location:** Microsoft.Maui.Controls.Maps (native map wrappers), Mapsui (cross-platform map component with tile support). **Charts & Visualization:** LiveChartsCore.SkiaSharpView.Maui (GPU-accelerated animated charts), Microcharts.Maui (lightweight sparkline library). **Logging & Telemetry:** Serilog.Extensions.Hosting (structured file/console logging), Application Insights MAUI SDK, Sentry.Maui (crash reporting).
+
+### Creating a NuGet Package for a Shared Library
+
+When extracting shared business logic or custom controls into a reusable NuGet package, target `net8.0` for pure .NET code or multi-target for MAUI-specific types. The SDK-style project makes packing trivial.
+
+```csharp
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net8.0;net8.0-android;net8.0-ios</TargetFrameworks>
+    <IsPackable>true</IsPackable>
+    <PackageId>MyCompany.Maui.Controls</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>MyCompany</Authors>
+    <Description>Reusable MAUI controls and utilities</Description>
+  </PropertyGroup>
+</Project>
+```
+
+Run `dotnet pack -c Release` to produce a `.nupkg` in `bin/Release/`. Publish to nuget.org with `dotnet nuget push bin/Release/MyCompany.Maui.Controls.1.0.0.nupkg --api-key $NUGET_API_KEY`. For CI/CD, use the official `NuGet/publish` GitHub Action.
+
+### NuGet Restore Flow
+
+```
+  .csproj (PackageReference entries)
+       |
+       v
+  dotnet restore
+       |
+       v
+  ~/.nuget/packages/<package-id>/<version>/
+       |
+       v
+  obj/project.assets.json (resolved graph)
+       |
+       v
+  MSBuild consumes resolved assemblies per TFM
+```
+
+<Callout type="warning" title="Package Version Compatibility">
+  Always verify that a NuGet package targets `net8.0-android` or `net8.0-ios` specifically, not just `net6.0`. MAUI assemblies compiled against .NET 6 may cause `MissingMethodException` or `TypeLoadException` at runtime on .NET 8 due to breaking changes in the BCL and MAUI framework. Run `dotnet nuget why <package>` to trace transitive dependency chains before upgrading.
+</Callout>
+
+### Pitfalls with NuGet in MAUI
+
+**Multi-targeting complexity:** A package must explicitly include `net8.0-android` and `net8.0-ios` TFMs to access platform-specific MAUI APIs. Pure `netstandard2.0` packages cannot reference `Microsoft.Maui.Controls`. **Transitive version conflicts:** Two packages requesting different major versions of the same dependency cause `NU1107` resolution errors — inspect with `dotnet nuget why <project> <package>`. **Native binary bundling:** SDK packages like Firebase or Stripe ship `.AAR` (Android) and `.xcframework` (iOS) binaries. Verify the NuGet includes the correct native binaries for each TFM you build. Missing native bindings manifest as `DllNotFoundException` or `Java.Lang.ClassNotFoundException` at runtime.
+
+### Framework Insight: NuGet vs pub.dev and npm
+
+NuGet's advantage is its mature dependency resolution, static graph restore (no install-time code execution), and multi-targeting — one package ships platform-specific binaries for Android, iOS, Windows, and macOS. Unlike npm, NuGet never runs scripts during install. The tradeoff is discoverability: MAUI-specific packages number only around 15,000 compared to Flutter's 50,000+ on pub.dev. Expect to wrap native SDKs or write P/Invoke bindings more frequently than in the Flutter or web ecosystems.

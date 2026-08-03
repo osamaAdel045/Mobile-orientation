@@ -1,0 +1,100 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      <StatGrid>
+<StatItem value="Microsoft" label="Company" />
+        <StatItem value="C#" label="Language" />
+        <StatItem value="2022" label="Released" />
+        <StatItem value="MIT" label="License" />
+</StatGrid>
+
+### From Xamarin to MAUI
+
+MAUI is the evolution of Xamarin.Forms — redesigned for .NET 6+ and reaching v8 with .NET 8. Xamarin.Forms used **Renderers** (per-platform UI factory classes, ~300 lines per control). MAUI uses **Handlers** — a lightweight mapping layer averaging ~30 lines per control. Handlers use property mappers (dictionaries of `Action<IViewHandler, IView>`) rather than virtual method overrides, reducing memory per control instance by roughly 40% in typical scenarios.
+
+The .NET runtime on each platform handles JIT/AOT compilation, garbage collection (Server GC on Windows, SGen on Android/iOS), and managed memory. MAUI targets: Android, iOS, macOS (Mac Catalyst), Windows (WinUI 3), and Tizen — from a single C#/XAML codebase.
+
+### Core Runtime Model
+
+MAUI apps run on top of the .NET runtime, not a custom rendering engine. The runtime layer is:
+
+- **Windows:** CoreCLR with RyuJIT — the same runtime powering ASP.NET and WPF. Full Server GC available.
+- **Android:** Mono runtime with a JIT compiler (or opt-in AOT via `<RunAOTCompilation>true</RunAOTCompilation>`). Uses SGen generational GC.
+- **iOS / Mac Catalyst:** Mono runtime with **full AOT** compilation to ARM64 at build time. Apple App Store policy prohibits JIT, so all IL is pre-compiled. The Mono GC is statically linked.
+
+<Callout type="info">
+Unlike React Native which bridges JavaScript to native widgets via a JSON-serialized bridge, MAUI controls are first-class .NET objects. There is no serialize-deserialize cycle — property changes call native setters directly through the handler mapper.
+</Callout>
+
+### When to Choose MAUI
+
+MAUI fits best in these profiles:
+
+- **.NET shop:** The team already knows C#, MSBuild, NuGet. Shared validation logic, data access (Entity Framework Core), and service clients across web + mobile.
+- **Windows + Mobile target:** MAUI is the only framework shipping native Windows (WinUI 3) alongside Android and iOS from a single codebase.
+- **Legacy Xamarin.Forms migration:** The migration path is incremental — most Xamarin.Forms APIs map directly to MAUI equivalents. Microsoft provides a migration analyzer tool.
+- **Line-of-business apps:** Forms-over-data patterns, CRUD screens, REST API consumption. MAUI's data-binding and MVVM tooling (CommunityToolkit.Mvvm) excel here.
+
+### When NOT to Choose MAUI
+
+- **GPU-intensive games:** MAUI uses the platform's native UI stack (CoreAnimation, Android View hierarchy). For custom OpenGL/Metal/Vulkan rendering, use a game engine (Unity, Godot) or SkiaSharp for 2D.
+- **iOS-first, pixel-perfect design:** MAUI abstracts platform controls; achieving platform-specific animations or transitions often requires custom Handlers or platform interop.
+- **Web-first team:** If the team knows React/TypeScript, React Native or Expo will be more productive. MAUI's webview story (Blazor Hybrid) is maturing but not primary.
+
+### XAML Hello World
+
+```xml
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="MyApp.MainPage">
+    <VerticalStackLayout Padding="30">
+        <Label Text="Hello, MAUI!"
+               FontSize="24"
+               FontAttributes="Bold"
+               HorizontalOptions="Center" />
+        <Button Text="Tap Me"
+                Clicked="OnButtonClicked"
+                HorizontalOptions="Center" />
+    </VerticalStackLayout>
+</ContentPage>
+```
+
+```csharp
+public partial class MainPage : ContentPage
+{
+    private int _count;
+
+    private void OnButtonClicked(object sender, EventArgs e)
+    {
+        _count++;
+        ((Button)sender).Text = $"Tapped {_count} time(s)";
+    }
+}
+```
+
+### Ecosystem
+
+MAUI ships with over 40 built-in controls (Button, Entry, ListView, CollectionView, CarouselView, maps, WebView). The control library extends through:
+
+- **CommunityToolkit.Maui** — Behaviors, converters, animations (Toast, Snackbar, SemanticEffects)
+- **SkiaSharp** — Hardware-accelerated 2D canvas rendering via SKCanvasView
+- **Mapbox / Google Maps** — Via platform-specific Handlers or WebView integration
+- **Blazor Hybrid** — Embed Blazor WebAssembly components inside MAUI native shell for code-sharing with web
+
+### Xamarin.Forms vs MAUI: Key Migration Differences
+
+| Concern | Xamarin.Forms | MAUI |
+|---------|--------------|------|
+| Control factory | Renderer (~300 lines) | Handler (~30 lines) |
+| Property mapping | Override methods | Dictionary delegates |
+| .NET version | Mono 6.x (.NET Core 2.x) | .NET 6+ (unified) |
+| Target platforms | iOS, Android, UWP | iOS, Android, Windows, macOS, Tizen |
+| Single project | No (platform projects required) | Yes (multi-targeting in .csproj) |
+
+<Callout type="warning">
+MAUI is not a drop-in replacement for Xamarin.Forms. The Shell navigation API changed, page lifecycle differs (OnAppearing/OnDisappearing remain, but `Application.Current` patterns have shifted), and many third-party Xamarin.Forms plugins lack MAUI equivalents. Audit dependencies before migrating.
+</Callout>
+
+### Windows Presentation Foundation (WPF) Familiarity
+
+Developers coming from WPF or UWP will recognize MAUI's architecture: XAML markup, dependency properties (replaced by BindableProperty in MAUI), data binding with `{Binding Path}` syntax, and the MVVM pattern. The key difference: MAUI controls map to native platform widgets, not DirectX-rendered elements. A `<Button>` in WPF is a DirectX-rendered visual; in MAUI on Windows it is a WinUI `Button` control backed by the Windows composition engine.

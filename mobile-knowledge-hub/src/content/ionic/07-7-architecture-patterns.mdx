@@ -1,0 +1,146 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Angular Pattern" value="Services + DI" />
+  <StatItem label="React Pattern" value="Hooks + Context" />
+  <StatItem label="Vue Pattern" value="Composables" />
+  <StatItem label="Data Access" value="Repository Pattern" />
+  <StatItem label="Lifecycle Hooks" value="ionViewWillEnter/Leave" />
+</StatGrid>
+
+### Angular: Services and Dependency Injection
+
+Angular's architecture centers on injectable services. A service handles a single concern — API calls, state management, or native device access — via Angular's DI container. Services are singletons by default when provided at the root level.
+
+```typescript
+import { Injectable } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Observable, retry, catchError } from 'rxjs';
+
+@Injectable({ providedIn: 'root' })
+export class OrderService {
+  private baseUrl = 'https://api.example.com/v1';
+  constructor(private http: HttpClient) {}
+
+  getOrders(page: number): Observable<Order[]> {
+    return this.http.get<Order[]>(`${this.baseUrl}/orders?page=${page}`).pipe(
+      retry(2),
+      catchError(this.handleError),
+    );
+  }
+}
+```
+
+Use `providedIn: 'root'` for app-wide singletons. Provide at the component level for per-instance scoping — useful for reusable feature modules that need isolated service instances.
+
+### React: Hooks and Context
+
+React replaces DI containers with custom hooks that encapsulate logic and state. The Context API provides dependency propagation without prop drilling. Hooks compose naturally and are tree-shakeable.
+
+```typescript
+import { useState, useEffect } from 'react';
+
+function useOrders() {
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetch('/api/orders')
+      .then(res => res.json())
+      .then(setOrders)
+      .finally(() => setLoading(false));
+  }, []);
+
+  return { orders, loading };
+}
+```
+
+Context provides a DI-like mechanism for passing dependencies like repository implementations through the component tree without props at every level.
+
+### Vue: Composables
+
+Vue 3's Composition API enables composables — functions that use Vue's reactivity system outside of components. Composables are Vue's equivalent of React hooks and Angular services.
+
+```typescript
+import { ref, onMounted, computed } from 'vue';
+import { Geolocation } from '@capacitor/geolocation';
+
+export function useLocation() {
+  const coords = ref<{ lat: number; lng: number } | null>(null);
+  const error = ref<string | null>(null);
+  const isValid = computed(() => coords.value !== null);
+
+  async function refreshLocation() {
+    try {
+      const pos = await Geolocation.getCurrentPosition();
+      coords.value = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    } catch (e) {
+      error.value = 'Location permission denied';
+    }
+  }
+
+  onMounted(() => refreshLocation());
+  return { coords, error, isValid, refreshLocation };
+}
+```
+
+### Service Layer and Repository Pattern
+
+A repository abstracts data access behind a clean interface so the app does not know whether data comes from a REST API, local SQLite, or Capacitor Preferences.
+
+```typescript
+interface OrderRepository {
+  getAll(): Promise<Order[]>;
+  getById(id: string): Promise<Order | null>;
+}
+
+// API-backed implementation
+class ApiOrderRepository implements OrderRepository {
+  async getAll(): Promise<Order[]> {
+    const res = await fetch('/api/orders');
+    return res.json();
+  }
+}
+
+// Offline implementation
+class OfflineOrderRepository implements OrderRepository {
+  async getAll(): Promise<Order[]> {
+    return await CapacitorSQLite.query({ statement: 'SELECT * FROM orders' });
+  }
+}
+```
+
+<Callout type="tip">
+Inject the repository implementation at the app's composition root. In Angular use `useClass` provider overrides; in React pass via Context; in Vue provide through `app.provide()`. This lets you swap API for offline storage without changing business logic.
+</Callout>
+
+### IonRouterOutlet Lifecycle Integration
+
+Page lifecycle events must tie into your architecture pattern. Ionic fires `ionViewWillEnter`, `ionViewDidEnter`, `ionViewWillLeave`, and `ionViewDidLeave` on every page visit — unlike framework lifecycle hooks that fire once.
+
+```typescript
+// Angular: service method called from lifecycle hook
+export class OrdersPage {
+  constructor(private orderRepo: OrderRepository) {}
+
+  ionViewWillEnter() {
+    this.orders$ = this.orderRepo.getAll(); // Re-fetches every tab visit
+  }
+}
+```
+
+```typescript
+// React: custom hook composing lifecycle + repository
+function useOrdersPage(repo: OrderRepository) {
+  const [orders, setOrders] = useState<Order[]>([]);
+  useIonViewWillEnter(async () => {
+    const data = await repo.getAll();
+    setOrders(data);
+  });
+  return orders;
+}
+```
+
+<Callout type="warning">
+Avoid heavy synchronous work inside `ionViewWillEnter` — it runs before the page transition animation completes. Set loading flags and let the UI render a skeleton while async work completes in the background. Use `ionViewDidEnter` for non-blocking tasks like analytics.
+</Callout>

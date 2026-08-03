@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem value="CommunityToolkit" label="MVVM Toolkit" />
+  <StatItem value="Compiled" label="Bindings (x:DataType)" />
+  <StatItem value="Shell" label="Navigation" />
+  <StatItem value="CollectionView" label="List Control" />
+</StatGrid>
+
+### MVVM with CommunityToolkit.Mvvm
+
+The CommunityToolkit.Mvvm source generators eliminate boilerplate by producing `INotifyPropertyChanged` and `ICommand` implementations at compile time. Decorate fields with `[ObservableProperty]` and methods with `[RelayCommand]`:
+
+```csharp
+public partial class ProductsViewModel : ObservableObject
+{
+    [ObservableProperty]
+    private string _searchText;
+
+    [ObservableProperty]
+    private bool _isLoading;
+
+    [ObservableProperty]
+    private List<Product> _products;
+
+    [RelayCommand]
+    private async Task LoadProductsAsync()
+    {
+        IsLoading = true;
+        try
+        {
+            Products = await _productService.GetAllAsync();
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+}
+```
+
+Compare this to the manual approach — three fields, three full properties with `OnPropertyChanged` calls, and a separate `ICommand` class per command. The source-generated version produces identical IL with zero-allocation change notifications and zero authored boilerplate.
+
+<Callout type="info">
+  CommunityToolkit.Mvvm source generators require `net8.0+` and the
+  `CommunityToolkit.Mvvm` NuGet package. The generated code appears in your
+  IDE's Dependencies tree under Analyzers — inspect it to understand what
+  the generator produces. Never manually implement `INotifyPropertyChanged`
+  in new code; the generator is more consistent and produces faster
+  property-change notifications via `PropertyChangedEventManager`.
+</Callout>
+
+### Shell Navigation over NavigationPage
+
+Shell provides URI-based navigation, deep linking, flyout/tab structure, and DI integration — replacing manual `NavigationPage` stacking:
+
+```xml
+<Shell xmlns="http://schemas.microsoft.com/dotnet/2021/maui">
+  <TabBar>
+    <Tab Title="Products" Icon="products.png">
+      <ShellContent ContentTemplate="{DataTemplate views:ProductsPage}" />
+    </Tab>
+  </TabBar>
+</Shell>
+```
+
+Navigate via URIs from any ViewModel: `await Shell.Current.GoToAsync("//products")`. Shell handles back-stack management, animation, and query parameters. Manual `NavigationPage` stacking requires push/pop and breaks deep linking — only use `NavigationPage` for modal flows where Shell's granularity is excessive.
+
+### CollectionView over ListView
+
+`CollectionView` replaces `ListView` with better performance, flexible layouts (vertical/horizontal grid), and built-in pull-to-refresh:
+
+```xml
+<CollectionView ItemsSource="{Binding Products}"
+                SelectionMode="Single"
+                SelectionChangedCommand="{Binding ProductSelectedCommand}">
+  <CollectionView.ItemsLayout>
+    <LinearItemsLayout Orientation="Vertical" ItemSpacing="8" />
+  </CollectionView.ItemsLayout>
+  <CollectionView.ItemTemplate>
+    <DataTemplate x:DataType="models:Product">
+      <Border Padding="12" StrokeShape="RoundRectangle 8">
+        <VerticalStackLayout>
+          <Label Text="{Binding Name}" FontAttributes="Bold" />
+          <Label Text="{Binding Price, StringFormat='{0:C}'}" />
+        </VerticalStackLayout>
+      </Border>
+    </DataTemplate>
+  </CollectionView.ItemTemplate>
+</CollectionView>
+```
+
+`ListView` had cell recycling bugs, required `ViewCell` wrappers, and lacked grid layout support. `CollectionView` is the recommended control for all new MAUI projects. Use `RefreshView` wrapping `CollectionView` for pull-to-refresh instead of `ListView.IsPullToRefreshEnabled`.
+
+### Compiled Bindings with x:DataType
+
+Set `x:DataType` on every `DataTemplate` to enable compile-time binding validation. Without it, bindings resolve via reflection at runtime — a typo silently produces a blank UI:
+
+```xml
+<!-- Compiled — build error if Name does not exist -->
+<Label Text="{Binding Name}" x:DataType="models:Product" />
+
+<!-- Reflection — silent failure on typo -->
+<Label Text="{Binding Nme}" />
+```
+
+Set `x:DataType` once on a parent layout — nested bindings inherit it. The compiler validates every binding expression against the type's public properties, eliminating an entire class of runtime bugs.
+
+### AsyncCommand for Async Operations
+
+Standard `ICommand.Execute` is synchronous and cannot return a `Task`. Wrapping async code in `Task.Run` creates fire-and-forget bugs. `AsyncCommand` from CommunityToolkit.Mvvm handles async execution and concurrency control:
+
+```csharp
+[RelayCommand(AllowConcurrentExecutions = false)]
+private async Task SaveAsync()
+{
+    IsSaving = true;
+    await _dataService.SaveAsync(Data);
+    IsSaving = false;
+}
+```
+
+The `AllowConcurrentExecutions = false` parameter disables the button while the operation runs, preventing double-submit without manual `IsBusy` flags. The `CancellationToken` overload also supports cooperative cancellation.
+
+### Built-in Dependency Injection
+
+MAUI's `MauiProgram.CreateMauiApp()` registers services, pages, and ViewModels in a single entry point. Always use constructor injection — avoid `Application.Current` or service locator patterns:
+
+```csharp
+builder.Services.AddSingleton<IProductService, ProductService>();
+builder.Services.AddTransient<ProductsViewModel>();
+builder.Services.AddTransient<ProductsPage>();
+```
+
+Register ViewModels and pages as Transient so each navigation gets a fresh instance. Use Singleton for services that hold shared state or database connections.
+### Anti-Pattern Comparison
+
+| Practice | Recommended | Avoid |
+|---|---|---|---|
+| Data binding | Compiled with `x:DataType` | Reflection binding |
+| Navigation | Shell (URI-based) | NavigationPage stacking |
+| List rendering | CollectionView | ListView |
+| Async commands | AsyncCommand | Manual ICommand + Task.Run |
+| DI pattern | Constructor injection | Service locator |
+| Native customization | Handlers | Custom Renderers |
+<Callout type="tip">
+  Enable `<ImplicitUsings>enable</ImplicitUsings>` in your `.csproj` to access
+  MAUI types without explicit `using` statements. With CommunityToolkit.Mvvm
+  source generators, a ViewModel can be under 20 lines of authored code.
+</Callout>

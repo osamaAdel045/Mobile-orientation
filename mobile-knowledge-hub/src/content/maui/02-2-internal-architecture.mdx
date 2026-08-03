@@ -1,0 +1,147 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      <StatGrid>
+<StatItem value="4" label="Runtime Layers" />
+        <StatItem value="Handler" label="Mapping Pattern" />
+        <StatItem value="IView" label="Virtual View Abstraction" />
+        <StatItem value="Mono/CoreCLR" label="Runtime Engine" />
+</StatGrid>
+
+### MAUI Architecture Stack
+
+```
+┌─────────────────────────────────────────────┐
+│           Your MAUI App (.NET)               │
+│     C# business logic + XAML UI definition   │
+├─────────────────────────────────────────────┤
+│                MAUI Framework                 │
+│  Layouts, Controls, Pages, Navigation        │
+├─────────────────────────────────────────────┤
+│              Handler Mapping                  │
+│  IButton → Android: MaterialButton           │
+│            iOS: UIButton                     │
+│            Windows: WinUI Button             │
+├─────────────────────────────────────────────┤
+│            .NET Runtime                       │
+│  Mono (Android/iOS) / CoreCLR (Windows)      │
+├─────────────────────────────────────────────┤
+│           Platform OS APIs                    │
+└─────────────────────────────────────────────┘
+```
+
+### Base Class Library (BCL) Layer
+
+At the foundation sits the .NET Base Class Library — `System.Private.CoreLib`, `System.Collections`, `System.Linq`, `System.Net.Http`, `System.IO`, `System.Text.Json`. This layer is identical across all MAUI targets, providing consistent string manipulation, collection types, file I/O, HTTP networking, and JSON serialization regardless of whether the app runs on Android, iOS, or Windows.
+
+The BCL is compiled into the app payload. On Android this adds ~8 MB to APK size; on iOS the AOT-compiled BCL contributes to the ~25 MB IPA baseline.
+
+### Handler Mapping (Virtual View to Native Control)
+
+Handler mapping replaces the Xamarin.Forms Renderer system. The fundamental unit is the `IView` interface — every visual MAUI element implements `IView`. When a control enters the visual tree, the framework resolves its handler via `IHanderMappings`.
+
+```csharp
+// Simplified handler registration
+public static class HandlerRegistrar
+{
+    public static void RegisterHandlers(IHandlersCollection handlers)
+    {
+        handlers.AddHandler<IButton, ButtonHandler>();
+        handlers.AddHandler<ILabel, LabelHandler>();
+        handlers.AddHandler<IEntry, EntryHandler>();
+    }
+}
+```
+
+Each handler defines a **property mapper** — a `Dictionary<string, Action<IViewHandler, IView>>` that maps virtual property names to mutation delegates:
+
+```csharp
+public class ButtonHandler : ViewHandler<IButton, Android.Widget.Button>
+{
+    public static IPropertyMapper<IButton, ButtonHandler> Mapper =
+        new PropertyMapper<IButton, ButtonHandler>(ViewHandler.ViewMapper)
+        {
+            [nameof(IButton.Text)] = (handler, view) =>
+                handler.PlatformView.Text = view.Text,
+            [nameof(IButton.TextColor)] = (handler, view) =>
+                handler.PlatformView.SetTextColor(view.TextColor.ToPlatform()),
+            [nameof(IButton.Font)] = (handler, view) =>
+                handler.TypedPlatformView.Typeface = view.Font.ToPlatformTypeface(),
+        };
+}
+```
+
+<Callout type="info">
+Property mappers are dictionary lookups — O(1) dispatch per property change. Xamarin.Forms Renderers used virtual method overrides, requiring the runtime to JIT-compile each overridden method. The mapper pattern eliminates per-control JIT overhead and enables runtime property interception without subclassing.
+</Callout>
+
+### MVVM Data Binding Engine
+
+MAUI's binding engine lives in `Microsoft.Maui.Controls.Binding` and processes `{Binding Path}` expressions through these stages:
+
+1. **Parse** — XAML parser reads `{Binding Name}` and creates a `Binding` object with `Path = "Name"`
+2. **Resolve source** — `BindingContext` lookup walks the visual tree parent chain until a non-null `BindingContext` is found
+3. **Get/Set value** — Uses `PropertyDescriptor` reflection (cached per type) or `INotifyPropertyChanged` if the source implements it
+4. **Subscribe** — Attaches a `PropertyChanged` handler to the source for change notification
+5. **Convert** — Applies `IValueConverter` if specified, then sets the target property
+
+```csharp
+public class MainViewModel : INotifyPropertyChanged
+{
+    private string _name;
+    public string Name
+    {
+        get => _name;
+        set { _name = value; OnPropertyChanged(); }
+    }
+
+    public event PropertyChangedEventHandler PropertyChanged;
+    protected void OnPropertyChanged([CallerMemberName] string name = null)
+        => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
+}
+```
+
+### Dependency Service Resolution
+
+MAUI's `DependencyService` (replaced partially by `IPlatformApplication` injection in .NET 8) locates platform implementations via reflection at startup:
+
+```csharp
+// Interface in shared code
+public interface ITextToSpeech { Task SpeakAsync(string text); }
+
+// Android implementation
+[assembly: Dependency(typeof(Platforms.Android.TextToSpeechService))]
+namespace Platforms.Android;
+public class TextToSpeechService : ITextToSpeech { /* Android.Tts */ }
+
+// Resolution
+ITextToSpeech tts = DependencyService.Get<ITextToSpeech>();
+await tts.SpeakAsync("Hello from MAUI");
+```
+
+<Callout type="warning">
+`DependencyService` uses reflection to scan for `[Dependency]` attributes at first access, adding ~50-100ms cold-start latency per service. For performance-critical paths, prefer constructor injection via `IServiceProvider` (the .NET DI container built into MAUI's `MauiAppBuilder`).
+</Callout>
+
+### Layout Cycle
+
+MAUI layouts use a two-pass measurement model inherited from WPF/UWP:
+
+1. **Measure** — `SizeRequest Measure(double widthConstraint, double heightConstraint)` is called top-down. Each layout asks children for their desired size given the available space.
+2. **Arrange** — `void Arrange(Rect bounds)` is called bottom-up. Each child receives its final position and size within the parent.
+
+Custom layouts override both methods:
+
+```csharp
+public class WrapLayout : Layout<View>
+{
+    protected override SizeRequest Measure(double width, double height) { /* ... */ }
+    protected override void ArrangeChildren(Rect bounds) { /* ... */ }
+}
+```
+
+Each `Layout` property change invalidates the layout and triggers a new measure/arrange pass synchronously on the UI thread.
+
+### Framework Insight: Handler vs Renderer Memory
+
+A Xamarin.Forms `Renderer` allocated ~400 bytes per instance. A MAUI `Handler` allocates ~160 bytes — the mapper is static and shared, and the lifecycle is event-free. In a typical form with 50 controls, this saves ~12 KB of heap allocation at startup.

@@ -1,0 +1,93 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Scoring Overview
+
+Ionic balances web development velocity against native performance ceilings. Below is how it scores across five critical dimensions for mobile app decision-making.
+
+<StatGrid columns={5}>
+<StatItem value="5/5" label="Web Dev Friendly" />
+<StatItem value="2/5" label="Performance" />
+<StatItem value="2/5" label="Platform Feel" />
+<StatItem value="5/5" label="Code Sharing" />
+<StatItem value="3/5" label="Native Features" />
+</StatGrid>
+
+### Web Dev Friendly — 5/5
+
+Ionic reuses existing HTML, CSS, and JavaScript skills directly. Any web developer can contribute immediately without learning Dart (Flutter) or the React Native bridging model. The dev toolchain is standard: Chrome DevTools for debugging, npm for packages, and familiar framework patterns (Angular, React, or Vue). Onboarding time for a new web developer on an Ionic project is typically 1–2 days versus 1–2 weeks for Flutter or Native.
+
+### Performance — 2/5
+
+Every UI interaction goes through the WebView rendering pipeline: JavaScript executes, the DOM updates, the WebView compositor paints, and the native compositor displays. This adds 2–3x the overhead of direct native rendering. Complex animations, large lists, and real-time graphics hit this ceiling fastest. Profile-heavy apps should benchmark early on low-end devices.
+
+```typescript
+// Benchmark rendering performance on target devices
+import { Device } from '@capacitor/device'
+
+const device = await Device.getInfo()
+if (device.platform === 'android' && device.osVersion) {
+  const major = parseInt(device.osVersion.split('.')[0], 10)
+  if (major < 12) {
+    // Older Android WebView — reduce animation complexity
+    document.documentElement.classList.add('reduced-motion')
+  }
+}
+```
+
+<Callout type="warning">
+  The 2/5 performance score is an honest ceiling — not a challenge to overcome. If your app requires sustained 60fps animations, real-time video processing, or game-grade rendering, the WebView pipeline will be a bottleneck regardless of optimization effort. Choose Flutter or Native for those use cases.
+</Callout>
+
+### Platform Feel — 2/5
+
+Ionic components mimic native iOS and Android design languages, but users notice the difference: scroll momentum is slightly off, transitions have subtle delays, and platform-specific gestures (iOS swipe-back, Android ripple effects) are approximations rather than real system behavior. For internal enterprise apps this is rarely an issue. For consumer-facing apps, the gap matters and users may perceive the app as less polished.
+
+### Code Sharing — 5/5
+
+A single Ionic codebase targets iOS, Android, and the web as a PWA. Shared business logic, UI components, routing, and state management reduce development and maintenance costs by 40–60% compared to maintaining separate native codebases. The same codebase also serves as the marketing website or admin dashboard — a unique advantage no other mobile framework matches.
+
+```bash
+# One codebase, three deployment targets
+ionic build  --prod              # iOS/Android binary
+ionic build  --prod --platform=pwa   # PWA deploy
+```
+
+### Native Features — 3/5
+
+Capacitor provides access to most common native APIs (camera, geolocation, filesystem, biometrics, push notifications) through a unified JavaScript interface. Deep platform features (ARKit, CoreML, advanced Bluetooth LE, custom hardware integration) require writing custom native plugins.
+
+```typescript
+// Common APIs — works out of the box with Capacitor
+import { Camera } from '@capacitor/camera'
+const photo = await Camera.getPhoto({ quality: 90, resultType: 'uri' })
+
+// Deep APIs — requires custom native plugin
+// import { ArKit } from './native-plugins/arkit' ❌ not available
+```
+
+<DecisionMatrix
+  columns={["Criterion", "Ionic", "Flutter", "React Native", "Native"]}
+  rows={[
+    ["Web Dev Friendly", "5/5", "3/5", "4/5", "1/5"],
+    ["Performance", "2/5", "4/5", "3/5", "5/5"],
+    ["Platform Feel", "2/5", "4/5", "3/5", "5/5"],
+    ["Code Sharing", "5/5", "3/5", "4/5", "1/5"],
+    ["Native Features", "3/5", "4/5", "3/5", "5/5"],
+  ]}
+/>
+
+### When to Choose Ionic
+
+Choose Ionic when your team is primarily web developers with a tight deadline, the app is data-display heavy (dashboards, forms, lists, charts), you need a PWA plus App Store dual-target deployment, or your native API needs are limited to camera, geolocation, storage, and push notifications. Ionic is also the strongest choice for enterprise apps where web skill reuse and fast iteration matter more than pixel-perfect animations.
+
+### When to Look Elsewhere
+
+Look elsewhere when the app requires 60fps custom animations (games, video editors), tight integration with platform-specific UI paradigms (complex gesture systems like interactive maps), minimal memory footprint (IoT dashboards, low-end devices with 1GB RAM), or proprietary hardware APIs (medical devices, ARKit/ARCore, custom peripheral communication over serial or Bluetooth).
+
+### Decision Framework
+
+Ask three questions before choosing Ionic. Can 80% of the UI be built with Ionic's standard components? Is the app's performance target "smooth enough" rather than "pixel-perfect 60fps"? Does the native API surface fit within Capacitor's existing plugin ecosystem? If all three answer yes, Ionic is the pragmatic choice.
+
+### Cost and Team Considerations
+
+Hiring for Ionic is significantly easier than Flutter or Native — the web developer talent pool is 10x larger. Combined with the reduced codebase count (one codebase vs two native), total cost of ownership for an Ionic app is typically 40–60% lower over a two-year period compared to maintaining separate Swift and Kotlin apps with equivalent features.

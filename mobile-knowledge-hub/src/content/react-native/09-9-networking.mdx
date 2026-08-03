@@ -1,0 +1,149 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="Axios" label="HTTP Client" />
+  <StatItem value="React Query" label="Server State" />
+  <StatItem value="5 Layers" label="Architecture" />
+  <StatItem value="Optimistic" label="Update Support" />
+  <StatItem value="Offline" label="Network Mode" />
+</StatGrid>
+
+### Networking Architecture
+
+A layered networking stack separates concerns from HTTP transport up to screen-level data. Each layer has a single responsibility and can be tested in isolation.
+
+```
+Screen Component
+    │
+    ▼
+Custom Hook (useUsers, useCreatePost)
+    │  manages query/mutation lifecycle
+    ▼
+React Query (TanStack Query)
+    │  caching, deduplication, background refetch, optimistic updates
+    ▼
+API Client (Axios instance)
+    │  base URL, interceptors, typed request/response
+    ▼
+Interceptors
+    │  auth token attach → refresh on 401 → retry → logging
+    ▼
+HTTP (Axios / Fetch)
+    │
+    ▼
+Backend
+```
+
+### Axios Instance with Interceptor Chain
+
+```typescript
+// api/client.ts
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { secureStorage } from '../storage';
+import { refreshToken } from './auth';
+
+type QueueItem = { resolve: (t: string) => void; reject: (e: unknown) => void };
+let isRefreshing = false;
+let failedQueue: QueueItem[] = [];
+
+const api = axios.create({ baseURL: 'https://api.example.com', timeout: 15000 });
+
+// Request interceptor — attach auth token
+api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const token = secureStorage.getString('accessToken');
+  if (token) config.headers.Authorization = `Bearer ${token}`;
+  return config;
+});
+
+// Response interceptor — automatic token refresh on 401 with request queueing
+api.interceptors.response.use(
+  (res) => res,
+  async (error: AxiosError) => {
+    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+    if (error.response?.status !== 401 || originalRequest._retry) return Promise.reject(error);
+    if (isRefreshing) {
+      return new Promise<string>((resolve, reject) => failedQueue.push({ resolve, reject }))
+        .then((token) => { originalRequest.headers.Authorization = `Bearer ${token}`; return api(originalRequest); });
+    }
+    originalRequest._retry = true; isRefreshing = true;
+    try {
+      const { accessToken } = await refreshToken();
+      secureStorage.set('accessToken', accessToken);
+      failedQueue.forEach(({ resolve }) => resolve(accessToken));
+      failedQueue = [];
+      originalRequest.headers.Authorization = `Bearer ${accessToken}`;
+      return api(originalRequest);
+    } catch (err) {
+      failedQueue.forEach(({ reject }) => reject(err));
+      failedQueue = [];
+      await secureStorage.delete('accessToken'); // force logout
+      return Promise.reject(err);
+    } finally { isRefreshing = false; }
+  }
+);
+```
+
+### React Query Integration
+
+```tsx
+// Query key factory — centralized cache keys
+export const userKeys = { all: ['users'] as const, list: () => [...userKeys.all, 'list'] as const, detail: (id: string) => [...userKeys.all, 'detail', id] as const };
+
+function useUsers() {
+  return useQuery({ queryKey: userKeys.list(), queryFn: () => api.get<User[]>('/users').then(r => r.data), staleTime: 5 * 60 * 1000 });
+}
+
+// Optimistic update — reflects UI instantly, rolls back on error
+function useUpdateUserName() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => api.patch(`/users/${id}`, { name }),
+    onMutate: async ({ id, name }) => {
+      await qc.cancelQueries({ queryKey: userKeys.detail(id) });
+      const prev = qc.getQueryData(userKeys.detail(id));
+      qc.setQueryData(userKeys.detail(id), (old: User | undefined) => old ? { ...old, name } : old);
+      return { prev };
+    },
+    onError: (err, { id }, ctx) => { qc.setQueryData(userKeys.detail(id), ctx?.prev); },
+    onSettled: () => qc.invalidateQueries({ queryKey: userKeys.all }),
+  });
+}
+```
+
+### Pagination
+
+```tsx
+function useInfinitePosts() {
+  return useInfiniteQuery({ queryKey: ['posts', 'infinite'],
+    queryFn: ({ pageParam = 0 }) => api.get(`/posts?cursor=${pageParam}&limit=20`).then(r => r.data),
+    initialPageParam: 0, getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined });
+}
+```
+
+<Callout title="Offline-First Networking">
+Set `networkMode: 'offlineFirst'` in React Query to serve cached data while the device is offline. Combined with `NetInfo`, you can show a "You're offline" banner while the user continues browsing cached content. Mutations are automatically paused and resumed when connectivity returns.
+</Callout>
+
+### Error Handling
+
+```typescript
+type ApiError = { code: string; message: string; };
+function extractError(err: unknown): string {
+  if (err instanceof AxiosError && err.response?.data) return (err.response.data as ApiError).message;
+  return err instanceof Error ? err.message : 'Network request failed';
+}
+```
+
+### Common Pitfalls
+
+**No query key strategy**: Random or inconsistent query keys break cache invalidation. Use a factory pattern — it gives you autocomplete and ensures mutations invalidate the right queries.
+
+**Over-fetching in lists**: Without `staleTime`, every mount refetches. Set `staleTime` and `refetchOnWindowFocus: false` in mobile.
+
+**No request deduplication**: Without React Query, two components mounting simultaneously fire duplicate requests. React Query deduplicates by `queryKey` automatically.
+
+**Ignoring offline state**: Without `networkMode`, queries fail silently offline. Configure `networkMode: 'offlineFirst'` with `NetInfo`.
+
+### vs Flutter Networking
+
+Flutter uses `dio` (Axios equivalent) with interceptors, `Riverpod` + `ref.watch` for reactive data fetching, and `graphql_flutter` for GraphQL. The layered architecture is nearly identical. Flutter's `freezed` for typed data classes parallels RN's `zod`/`io-ts` for API validation. The key RN advantage: React Query's cache management and optimistic updates require significantly less code than Flutter's `Riverpod` + `AsyncValue`.

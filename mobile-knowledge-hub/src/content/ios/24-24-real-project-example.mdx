@@ -1,0 +1,148 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={3}>
+        <StatItem value="Habit Tracker" label="Reference App" />
+        <StatItem value="SwiftUI + SwiftData" label="Tech Stack" />
+        <StatItem value="10 Apple Frameworks" label="Integration" />
+    </StatGrid>
+
+    ### Real Project Example: Habit Tracker
+
+    A complete iOS app built with SwiftUI + @Observable + SwiftData, demonstrating
+    native iOS integration across the Apple ecosystem.
+
+    #### Tech Stack and Project Structure
+
+    ```
+    HabitTracker/
+    ├── App/       HabitTrackerApp.swift, dependencies
+    ├── Models/    Habit.swift (SwiftData @Model), Streak logic
+    ├── ViewModels/HabitListVM, SettingsVM (@Observable + async)
+    ├── Views/     HabitListView, DetailView, FormView (SwiftUI)
+    ├── Services/  HabitService, SyncService (CloudKit), AuthService
+    ├── Widgets/   StreakWidget (WidgetKit + App Intents)
+    ├── WatchApp/  WatchHabitListView, WCSession manager
+    └── Resources/ Assets.xcassets, Localizable.xcstrings
+    ```
+
+    | Layer | Technology |
+    |-------|-----------|
+    | UI | SwiftUI + Swift Charts |
+    | Architecture | MVVM with @Observable |
+    | Networking | URLSession async/await |
+    | Database | SwiftData + Keychain |
+    | Auth | Sign in with Apple |
+    | Payments | StoreKit 2 |
+    | Widget | WidgetKit + App Intents |
+    | Watch | watchOS via WCSession |
+
+    #### Core SwiftData Model and ViewModel
+
+    ```swift
+    import SwiftData
+
+    @Model
+    final class Habit {
+        var id: UUID; var title: String; var detail: String
+        var createdAt: Date; var completions: [Date]
+
+        init(title: String, detail: String = "") {
+            self.id = UUID(); self.title = title
+            self.detail = detail; self.createdAt = Date()
+            self.completions = []
+        }
+
+        var currentStreak: Int {
+            var streak = 0
+            let cal = Calendar.current
+            var date = cal.startOfDay(for: Date())
+            while completions.contains(where: { cal.isDate($0, inSameDayAs: date) }) {
+                streak += 1
+                date = cal.date(byAdding: .day, value: -1, to: date)!
+            }
+            return streak
+        }
+    }
+
+    @Observable
+    final class HabitListViewModel {
+        private let modelContext: ModelContext
+        private let syncService: SyncService
+        var habits: [Habit] = []; var isLoading = false
+        var error: String?; var searchQuery = ""
+
+        @MainActor
+        func load() async {
+            isLoading = true; defer { isLoading = false }
+            do {
+                let desc = FetchDescriptor<Habit>(
+                    sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+                habits = try modelContext.fetch(desc)
+                try await syncService.pullChanges(); error = nil
+            } catch { self.error = error.localizedDescription }
+        }
+
+        func toggleCompletion(for habit: Habit) {
+            let today = Calendar.current.startOfDay(for: Date())
+            if let idx = habit.completions.firstIndex(where: {
+                Calendar.current.isDate($0, inSameDayAs: today)
+            }) { habit.completions.remove(at: idx) }
+            else { habit.completions.append(today) }
+            try? modelContext.save()
+        }
+    }
+
+    struct HabitListView: View {
+        @Bindable private var model: HabitListViewModel
+        var body: some View {
+            List(model.filteredHabits) { habit in HabitRow(habit: habit) }
+                .searchable(text: $model.searchQuery)
+                .task { await model.load() }
+                .overlay { if model.isLoading { ProgressView() } }
+        }
+    }
+    ```
+
+    <Callout title="One Codebase Targets iPhone, iPad, Mac, Watch, and Vision Pro">
+        SwiftUI deploys to all five Apple platforms from shared view code.
+        NavigationSplitView adapts to screen width, size classes adjust layouts,
+        and the Watch target adds wrist-based tracking. No other framework targets
+        the full Apple ecosystem from a single codebase.
+    </Callout>
+
+    #### What Native iOS Does Uniquely Well
+
+    **WidgetKit** enables interactive Home Screen widgets where users mark habits
+    complete via App Intents without opening the app. **Swift Charts** produces
+    streak visualizations with minimal code. **WCSession** syncs data to the watch
+    for wrist-based tracking. **SwiftData + CloudKit** delivers iCloud sync with
+    zero custom sync code. **Core Haptics** provides distinct feedback patterns.
+    **App Intents** exposes habits to Siri, Shortcuts, and Spotlight search.
+
+    **StoreKit 2** makes tip jars trivially simple — three product IDs, two
+    async calls, and the purchase flow is complete:
+
+    ```swift
+    import StoreKit
+    @Observable final class StoreViewModel {
+        var products: [Product] = []
+        func load() async {
+            products = (try? await Product.products(for: [
+                "com.example.tip.small", "com.example.tip.medium"
+            ])) ?? []
+        }
+        func purchase(_ product: Product) async { _ = try? await product.purchase() }
+    }
+    ```
+
+    #### Honest Pain Points
+
+    **Back-porting.** Building for iOS 16+ while using iOS 17+ features
+    (@Observable, @Bindable) requires conditional compilation and feature flags.
+    **Build times.** Large Swift modules with many Views increase compile time;
+    modularization via SPM helps but adds overhead. **Xcode stability.** SourceKit
+    crashes on large files, previews with SwiftData need workarounds.
+
+    #### Architecture Flow
+
+    Views ──> ViewModels ──> SwiftData + URLSession + Keychain ──> CloudKit Sync

@@ -1,0 +1,139 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Kotlin/JVM" label="Android Target" />
+        <StatItem value="Kotlin/Native" label="iOS Target" />
+        <StatItem value="expect/actual" label="Abstraction Pattern" />
+      </StatGrid>
+
+      ### The Shared Module Architecture
+
+      Every KMP project centers on the **shared module** — a Gradle submodule with
+      multiple source sets. `commonMain` holds cross-platform Kotlin. `androidMain` and
+      `iosMain` provide platform-specific implementations. The compiler selects the correct
+      source set for each target at compile time — no runtime dispatch, no reflection.
+
+      ```kotlin
+      // shared/build.gradle.kts
+      kotlin {
+          androidTarget()                       // JVM compilation
+          listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach {
+              it.binaries.framework {
+                  baseName = "shared"
+                  isStatic = true
+              }
+          }
+          sourceSets {
+              commonMain.dependencies {
+                  implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+                  implementation("io.ktor:ktor-client-core:3.0.0")
+              }
+              androidMain.dependencies {
+                  implementation("io.ktor:ktor-client-okhttp:3.0.0")
+              }
+              iosMain.dependencies {
+                  implementation("io.ktor:ktor-client-darwin:3.0.0")
+              }
+          }
+      }
+      ```
+
+      ### expect / actual — Compile-Time Abstraction
+
+      The `expect` declaration in `commonMain` defines an API contract. Each platform
+      target must provide an `actual` implementation — missing one is a **compile error**,
+      not a runtime crash. This is safer than interface-based abstraction because the
+      compiler enforces coverage across all targets.
+
+      ```kotlin
+      // commonMain — declare the API
+      expect class PlatformContext
+
+      expect fun getDeviceId(context: PlatformContext): String
+
+      // androidMain — Android implementation
+      actual typealias PlatformContext = android.content.Context
+
+      actual fun getDeviceId(context: PlatformContext): String {
+          val wm = context.getSystemService(Context.WIFI_SERVICE) as WifiManager
+          return wm.connectionInfo.macAddress
+      }
+
+      // iosMain — iOS implementation
+      actual class PlatformContext(val nsObject: Any?)
+
+      actual fun getDeviceId(context: PlatformContext): String {
+          return UIDevice.currentDevice.identifierForVendor.UUIDString
+      }
+      ```
+
+      <Callout title="expect/actual Rules">
+        Expect declarations cannot have a body. Actual declarations must use the
+        same JVM signature (same parameter types and return types). In Kotlin 2.0+,
+        expect/actual has been refined to support actual typealiases for simpler
+        platform wrappers. Avoid overusing — prefer interface injection when the
+        platform behavior is swappable at runtime.
+      </Callout>
+
+      ### Kotlin/Native Memory Model
+
+      Kotlin/Native (iOS) uses a **shared tracing garbage collector** since Kotlin
+      1.7.20, replacing the old freeze-based model. Objects are created on the heap
+      and collected when unreachable — similar to Swift's ARC but GC-traceable. There
+      is no stop-the-world pause for small collections; larger collections use
+      incremental tracing.
+
+      ```kotlin
+      // commonMain — runs on both JVM and Native
+      // No freeze() needed — the new memory manager handles shared state
+      class SharedRepository(private val api: KtorClient) {
+          private val cache = mutableMapOf<String, CachedData>()
+
+          suspend fun fetch(key: String): CachedData {
+              cache[key]?.let { return it }
+              val data = api.get<CachedData>("/data/$key")
+              cache[key] = data
+              return data
+          }
+      }
+      ```
+
+      ### Concurrency Model
+
+      KMP uses **coroutines** for concurrency — not threads (on iOS). `dispatchers.Default`
+      maps to the JVM thread pool on Android and to Kotlin/Native's worker pool on iOS.
+      `Dispatchers.Main` maps to the Android main looper and the iOS main run loop.
+      Structured concurrency ensures all coroutines complete before their scope finishes.
+
+      ```kotlin
+      // commonMain — platform-agnostic coroutine usage
+      class UserRepository(private val api: KtorClient, private val db: Database) {
+          suspend fun syncUser(id: String) = withContext(Dispatchers.IO) {
+              val remote = api.get<UserDto>("/users/$id")
+              db.userQueries.upsert(remote.toEntity())
+          }
+      }
+      ```
+
+      ### KMP Insight
+
+      The shared module compiles to fundamentally different binaries per platform —
+      JVM bytecode for Android, ARM64 machine code for iOS. This means the same Kotlin
+      source produces a DEX file on one target and a Mach-O bundle on another. The
+      compiler backend (JVM vs Native) is the abstraction that makes this possible.
+
+      ### Pitfall: Threading Assumptions
+
+      ```kotlin
+      // WRONG — assumes thread primitives exist on all platforms
+      class WrongRepository {
+          private val executor = Executors.newFixedThreadPool(4)
+      }
+
+      // RIGHT — use coroutines everywhere
+      class RightRepository(private val scope: CoroutineScope) {
+          fun execute() {
+              scope.launch(Dispatchers.Default) { /* ... */ }
+          }
+      }
+      ```

@@ -1,0 +1,113 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="2M+" label="npm packages available" />
+  <StatItem value="0.60" label="Auto-linking introduced" />
+  <StatItem value="3" label="Package managers (npm, yarn, pnpm)" />
+</StatGrid>
+
+### Core Concept
+
+React Native inherits the full Node.js package ecosystem via `package.json`. Every RN project — bare or Expo — declares dependencies in the standard format, installed to `node_modules/`. The critical difference from a web project is **native module linking**: packages with native Kotlin/Swift/Objective-C code must be registered with each platform's build system before the app compiles.
+
+Since RN 0.60, this linking is **automatic**. Metro reads `react-native.config.js` from each installed package to discover native modules and registers them with CocoaPods (iOS) and Gradle (Android) at build time. Manual `react-native link` is obsolete.
+
+```json
+{
+  "name": "my-app",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "react-native start",
+    "android": "react-native run-android",
+    "ios": "react-native run-ios",
+    "test": "jest",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "react": "18.3.1",
+    "react-native": "0.76.5"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0",
+    "typescript": "^5.4.0",
+    "jest": "^29.7.0",
+    "@react-native/babel-preset": "0.76.5",
+    "@react-native/metro-config": "0.76.5"
+  }
+}
+```
+
+### How Auto-Linking Works
+
+When Metro builds the JS bundle, it scans each installed package for a `react-native.config.js` (or the legacy `react-native.config` field in `package.json`). That config declares native module paths. On iOS, CocoaPods reads the generated Podfile target and integrates each pod during `pod install`. On Android, Gradle auto-discovers the modules through a generated settings file.
+
+```ruby
+# ios/Podfile — auto-generated pod targets
+require_relative '../node_modules/react-native/scripts/react_native_pods'
+require_relative '../node_modules/@react-native-community/cli-platform-ios/native_modules'
+
+target 'MyApp' do
+  config = use_native_modules!
+  use_react_native!(:path => config["reactNativePath"])
+end
+```
+
+### Monorepo Package Management
+
+React Native projects frequently adopt monorepo structures. Yarn workspaces and Nx both handle hoisting and dependency resolution across packages. However, RN introduces constraints: Metro's resolver must find transitive dependencies in hoisted `node_modules`. The `metro.config.js` needs `watchFolders` and `nodeModulesPaths` configured for monorepo layouts.
+
+```javascript
+// metro.config.js for monorepo
+const {getDefaultConfig, mergeConfig} = require('@react-native/metro-config');
+const path = require('path');
+
+const config = {
+  watchFolders: [path.resolve(__dirname, '../../packages')],
+  resolver: {
+    nodeModulesPaths: [
+      path.resolve(__dirname, 'node_modules'),
+      path.resolve(__dirname, '../../node_modules'),
+    ],
+  },
+};
+
+module.exports = mergeConfig(getDefaultConfig(__dirname), config);
+```
+
+```
+Monorepo Dependency Resolution
+══════════════════════════════
+
+   Root node_modules/      App node_modules/
+   ┌─────────────────┐    ┌──────────────────┐
+   │ react-native    │◄───│ shared-ui        │
+   │ typescript      │    │ analytics-sdk    │
+   │ jest            │    │ └─ node_modules  │
+   │ @rnx-kit        │    │    └─ hoisted    │
+   └─────────────────┘    └──────────────────┘
+          │                       │
+          ▼                       ▼
+    Metro resolver ────────► watchFolders + nodeModulesPaths
+
+   Bundled JS ←───── Metro bundler ←───── import chains
+```
+
+<Callout title="CocoaPods integration">
+  After any change to native dependencies (or after checkout), always run `cd ios && pod install`. Missing this step is the #1 cause of iOS build failures related to native modules. Use `bundle exec pod install` when a Gemfile is present to lock pod versions.
+</Callout>
+
+### Common Pitfalls
+
+**Duplicate React instance**: Monorepo hoisting can produce two copies of React. Configure `resolver.extraNodeModules` in Metro or add a `resolutions` field (yarn) / `overrides` (npm) to pin React across all workspaces. **Podfile out of sync**: Run `pod install --repo-update` after adding new native dependencies. **Peer dependency warnings**: Packages like `react-native-reanimated` and `react-native-gesture-handler` have peer depecies on specific React and RN versions — mismatches cause cryptic runtime crashes. **Babel plugin missing**: Some packages require Babel plugins in `babel.config.js` (e.g., Reanimated's reanimated plugin, Metro's `react-native-reanimated/plugin`).
+
+### RN-Specific Package Categories
+
+Essential package categories every RN developer should know: **Navigation** — `@react-navigation/native` + stack/bottom-tabs/drawer (de facto standard, maintained by Expo); **State Management** — Zustand (lightweight), Redux Toolkit, Jotai, React Query; **Networking** — `react-native-quick-crypto` for crypto, `axios`, `react-native-blob-util` for downloads; **Storage** — `@react-native-async-storage/async-storage` (simple key-value), MMKV (high-performance), `react-native-encrypted-storage` (secure); **Animations** — `react-native-reanimated` (UI thread animations), `react-native-gesture-handler`; **Maps** — `react-native-maps` (Google/Apple Maps); **Camera** — `react-native-vision-camera` (CameraX/AVFoundation).
+
+<Callout title="Expo vs bare workflow">
+  Expo managed workflow includes most popular packages via `expo install`. Bare workflow gives full control but requires managing native project files and Podfile/Gradle manually. EAS Build works with both. Choose Expo for faster iteration, bare for deep native integrations or custom native modules.
+</Callout>
+
+### Comparison to Flutter
+
+Flutter uses `pub.dev` with Dart packages and a `pubspec.yaml` declaration. There is no native linking step — Dart FFI and platform channels are declared in Dart code, and Flutter's Gradle/CocoaPods integration happens behind the build system. RN's npm ecosystem offers 2M+ packages vs pub.dev's ~40K, but RN packages often carry native code complexity that Dart packages avoid. Flutter's `flutter pub get` is conceptually simpler than npm + CocoaPods + Gradle chain. SPM (Swift Package Manager) serves iOS-native libraries but lacks RN's JS-native bridging layer entirely.

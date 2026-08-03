@@ -1,0 +1,132 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid>
+        <StatItem value="Apple" label="Company" />
+        <StatItem value="Swift" label="Language" />
+        <StatItem value="2008" label="SDK Released" />
+        <StatItem value="Proprietary" label="License" />
+      </StatGrid>
+
+      ### The Apple Ecosystem Advantage
+
+      Native iOS development — writing Swift or Objective-C directly against Apple's SDKs — offers
+      something no cross-platform toolchain can match: **day-1 access to every new API**. When
+      Apple announces a new framework at WWDC, native apps can adopt it the same day the beta
+      ships. No bridge layer, no compatibility shim, no waiting for a third-party binding. This
+      includes everything from Metal 3 GPU features to CoreML model deployment to the Apple
+      Neural Engine's ANESupportedOperations.
+
+      SwiftUI (iOS 13+, 2019) brought declarative UI to Apple platforms with a composition model
+      built on the **AttributeGraph** reactive engine. Swift Concurrency (iOS 15+, Swift 5.5)
+      introduced structured async/await with compile-time data race prevention through the
+      **Sendable** protocol and **actor** isolation. The Swift compiler, based on LLVM, compiles
+      through the Swift Intermediate Language (SIL) to produce highly optimized ARM64 binaries.
+
+      ```swift
+      import SwiftUI
+
+      /// The canonical SwiftUI entry point — minimally viable app in 8 lines.
+      @main
+      struct OrientationApp: App {
+          var body: some Scene {
+              WindowGroup {
+                  ContentView()
+              }
+          }
+      }
+
+      struct ContentView: View {
+          @State private var tapCount = 0
+
+          var body: some View {
+              VStack(spacing: 16) {
+                  Text("Hello from native iOS")
+                      .font(.title)
+                  Text("Tapped \(tapCount) times")
+                  Button("Tap me") { tapCount += 1 }
+                      .buttonStyle(.borderedProminent)
+              }
+              .padding()
+          }
+      }
+      ```
+
+      ### When to Choose Native iOS
+
+      Native is the right choice when your primary audience uses Apple hardware and you need
+      the best possible experience on that platform. Key decision factors:
+
+      - **Ecosystem fidelity**: Deep integration with iCloud, Handoff, Universal Links, AirDrop,
+        App Clips, and Widgets — features that require native entitlements.
+      - **Premium UX**: 120 Hz ProMotion animation, spring physics (iOS 17+ `spring()`), and
+        platform-standard navigation gestures (swipe-back, edge swipes, sheet interactions).
+      - **Latest APIs**: The camera capture pipeline (AVFoundation), CoreBluetooth, Nearby
+        Interaction (UWB), and ARKit 6 are available on day zero to native apps only.
+      - **Performance-critical work**: Metal GPU compute, CoreML model evaluation on the
+        Neural Engine, and Accelerate framework vector math bypass all abstraction layers.
+      - **Smallest binary**: A minimal SwiftUI app compiles to roughly 2 MB — no engine runtime
+        to ship. Compare to Flutter's 6-8 MB engine payload or React Native's Hermes + JS bundle.
+
+      ### When NOT to Choose Native
+
+      Native iOS is rarely the right answer when any of these hold true:
+
+      - You need feature parity with Android and cannot afford two independent codebases.
+      - Your team has no Swift/Obj-C expertise and you cannot wait for ramp-up.
+      - The app is content-forward (forms, lists, CRUD) with no platform-specific hardware
+        needs — a cross-platform framework will deliver 85-95% parity at half the maintenance cost.
+      - Your organization's compliance requires a single auditable codebase.
+
+      <Callout title="Why Native iOS Has No Runtime Penalty">
+        Unlike Flutter (Dart VM with generational GC), React Native (JavaScriptCore/Hermes
+        with mark-sweep GC), or Android (ART with concurrent GC), native iOS apps compile
+        **directly to ARM64 machine code** with no virtual machine or garbage collector.
+        Memory management uses Automatic Reference Counting (ARC) — deterministic,
+        compile-time reference counting with zero-cost retain/release elision through SIL
+        optimization. This means no GC pauses, no JIT warmup stalls, and no interpreter
+        overhead. The CPU cycles your app spends are 100% on your application logic.
+      </Callout>
+
+      ### iOS Ecosystem Layered Architecture
+
+      ```
+      ┌────────────────────────────────────────────────────┐
+      │                  Your App (.ipa)                    │
+      │   Swift source → SIL → LLVM → ARM64 Mach-O binary  │
+      ├────────────────────────────────────────────────────┤
+      │           UI Frameworks (Cocoa Touch)               │
+      │   SwiftUI (declarative, 2019+)  UIKit (imperative)  │
+      ├────────────────────────────────────────────────────┤
+      │              Foundation & System                     │
+      │   Foundation, CoreData, CloudKit, StoreKit, CFNetwork│
+      ├────────────────────────────────────────────────────┤
+      │            Media & Graphics                          │
+      │   Metal (GPU), Core Animation, AVFoundation, CoreML │
+      ├────────────────────────────────────────────────────┤
+      │              Darwin / XNU Kernel                     │
+      │   Mach + BSD hybrid, task/thread, IPC, IOKit, NKEs  │
+      └────────────────────────────────────────────────────┘
+      ```
+
+      ### Cross-Platform Comparison
+
+      The architectural difference is stark at the system-call level. A React Native app calling
+      `Animation.timing()` goes through JavaScript → JSON serialization → bridge → native
+      animation driver → Core Animation → Metal. A native SwiftUI animation goes directly
+      from the `withAnimation` block to Core Animation's animation object, bypassing every
+      serialization and bridge hop. This is why native apps maintain consistent frame rates
+      under load — there is no bridge bottleneck to saturate.
+
+      Flutter's Impeller (which replaced Skia on iOS) eliminates the original Flutter's
+      Skia->Metal translation overhead, but the Dart VM's generational GC still runs
+      concurrently on its own threads, competing with your UI thread for CPU and cache.
+      Native iOS has no secondary runtime thread — ARC bookkeeping is inlined into your
+      own code by the SIL optimizer, often elided entirely.
+
+      ### Key Differentiator — Swift Concurrency + Metal GPU + Compact Binary
+
+      Native iOS's true moat is the combination of **Swift Concurrency's compile-time safety**
+      (actors, Sendable, structured tasks), **direct Metal GPU access** for both rendering and
+      compute, and **the smallest binary footprint** in mobile — no engine, no VM, no GC
+      runtime to ship. For apps that need to push the hardware to its limits, there is no
+      substitute.

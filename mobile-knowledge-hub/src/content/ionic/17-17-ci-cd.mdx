@@ -1,0 +1,84 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Build Pipeline" value="3-Stage" description="Web build → Capacitor sync → Native compile" />
+  <StatItem label="iOS CI Runner" value="macOS Required" description="Xcode only runs on macOS; 10x cost vs Linux" />
+  <StatItem label="OTA Update Scope" value="Web Assets Only" description="JS/HTML/CSS changes bypass app store review" />
+  <StatItem label="Fastlane Actions" value="50+ Built-in" description="Code signing, screenshots, metadata, deploy" />
+</StatGrid>
+
+### The Three-Stage Build Pipeline
+
+Ionic CI/CD is fundamentally a three-stage pipeline. Stage one is the web build: `npm run build` produces your framework's bundled output (Angular, React, or Vue). Stage two is Capacitor sync: `npx cap sync` copies those web assets into the `android/` and `ios/` native project directories. Stage three is the native build: compiling with Gradle for Android or Xcode for iOS. Each stage has distinct requirements, failure modes, and caching strategies that your CI configuration must account for independently.
+
+### GitHub Actions Workflow
+
+A standard GitHub Actions workflow for Ionic uses a platform matrix strategy. The macOS runner is mandatory for iOS because Xcode is macOS-only; Android builds can run on `ubuntu-latest` at one-tenth the cost. Code signing secrets — provisioning profiles, distribution certificates, and keystore files — must be configured in the repository settings and never committed.
+
+```yaml
+name: Build and Deploy
+on:
+  push:
+    branches: [main]
+jobs:
+  build:
+    strategy:
+      matrix:
+        platform: [android, ios]
+    runs-on: ${{ matrix.platform == 'ios' && 'macos-latest' || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+      - run: npm ci && npm run build
+      - run: npx cap sync ${{ matrix.platform }}
+      - run: npx cap build ${{ matrix.platform }}
+```
+
+### Fastlane for Store Deployment
+
+Fastlane automates the entire store submission pipeline. It manages certificates via `match`, builds the app, and uploads metadata and binaries. On Android it signs the AAB and uploads to the Play Console; on iOS it handles App Store Connect distribution, TestFlight beta deployment, and phased rollouts. Fastlane lanes are written in Ruby and composed from dozens of built-in actions.
+
+```ruby
+lane :beta do
+  match(type: "development")
+  build_app(scheme: "App")
+  upload_to_testflight(skip_waiting_for_build: true)
+end
+```
+
+### Appflow and Capgo Live Updates
+
+Ionic Appflow provides over-the-air updates that push web asset changes to installed apps without app store review. Apple permits this because only JS/HTML/CSS is replaced — the native binary remains unchanged. Appflow compares the deployed web build hash against the server and downloads deltas. Capgo is the open-source alternative with similar functionality and self-hosted server options. Both only cover web assets; native plugin additions or capability changes require a full store resubmission.
+
+### Pipeline Diagram
+
+```
+npm run build  ──►  npx cap sync  ──►  npx cap build
+     │                    │                    │
+Web assets          Copy to native       Gradle (Android)
+(Vite/Webpack)      android/ & ios/      Xcode (iOS)
+```
+
+<Callout type="warning">
+  OTA updates from Appflow or Capgo only replace web assets. Any Capacitor plugin change, native Swift/Kotlin code modification, or capability entitlement (push notifications, biometrics, camera) requires a full app store resubmission. Plan your releases to batch native changes into fewer, larger binary updates and use OTA for rapid iteration on UI and business logic.
+</Callout>
+
+### Common CI/CD Pitfalls
+
+The most frequent failure is iOS code signing. Provisioning profiles expire, certificates get revoked, and device UDIDs change. Use Fastlane `match` to encrypt and version-control signing identities in a private repository. The second pitfall is runner cost: macOS minutes on GitHub Actions cost 10x more than Linux. Cache `node_modules`, CocoaPods, and Gradle dependencies aggressively — a well-configured cache can cut build time by 60%. The third is version drift: keep `package.json`, `android.versionName`, and iOS `Info.plist` in sync using a tool like `capacitor-set-version`.
+
+### Framework Insight: Bundle Structure
+
+Angular Ionic apps output separate chunk files per lazy-loaded route by default. React apps use `React.lazy` with dynamic `import()` for equivalent code splitting. Both produce hash-named chunk files, meaning your CI artifact storage accumulates many stale chunks. Configure retention policies in your CI dashboard to prune builds older than 30 days. The chunk hash changes on any content change, so commit messages referencing build artifacts should include the full version string.
+
+### Comparison: Appflow vs Capgo vs DIY
+
+<DecisionMatrix
+  items={[
+    { feature: "Hosting Control", appflow: "Ionic-managed", capgo: "Self-hosted or Cloud", diy: "Your S3/CDN" },
+    { feature: "Pricing Model", appflow: "Per-seat subscription", capgo: "Open-source (free)", diy: "Infrastructure cost only" },
+    { feature: "Native Plugin Updates", appflow: "Not supported", capgo: "Not supported", diy: "Not supported" },
+    { feature: "Rollback Support", appflow: "Built-in", capgo: "Built-in", diy: "Manual versioning" },
+    { feature: "Access Control", appflow: "Built-in RBAC", capgo: "API key based", diy: "Custom implementation" },
+  ]}
+/>

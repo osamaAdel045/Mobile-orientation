@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Ktor + SQLDelight + Koin" label="Shared Stack" />
+        <StatItem value="Compose + SwiftUI" label="UI Stack" />
+        <StatItem value="SKIE" label="iOS Bridge" />
+      </StatGrid>
+
+      ### Reference App: KMP E-Commerce (KMPShop)
+
+      **KMPShop** demonstrates all KMP concepts in a production-style project
+      with auth, product catalog, cart management, and offline sync.
+
+      ### Tech Stack
+
+      ```yaml
+      Shared (commonMain):
+        Language:       Kotlin 2.0.21
+        Networking:     Ktor Client 3.0.1 (OkHttp Android, Darwin iOS)
+        Serialization:  kotlinx.serialization 1.7.3
+        Database:       SQLDelight 2.0.2
+        DI:             Koin 4.0.0
+        State:          StateFlow + SharedFlow
+        Testing:        kotlin.test + MockK + Turbine
+
+      Android (androidApp):  Jetpack Compose + Material 3, Navigation Compose
+      iOS (iosApp):          SwiftUI, NavigationStack, SKIE AsyncSequence
+      ```
+
+      ### Project Structure
+
+      ```swift
+      KMPShop/
+      ├── shared/src/
+      │   ├── commonMain/kotlin/com/kmpshop/
+      │   │   ├── di/          # Koin modules
+      │   │   ├── domain/      # Entities, use cases, repository interfaces
+      │   │   ├── data/        # Repository impl, DTOs, data sources
+      │   │   ├── ui/          # ViewModels, sealed UI states
+      │   │   └── util/
+      │   ├── androidMain/
+      │   └── iosMain/
+      ├── androidApp/              # Compose UI
+      ├── iosApp/                  # SwiftUI + Xcode project
+      └── build.gradle.kts
+      ```
+
+      ### Shared Auth Flow
+
+      ```kotlin
+      sealed class AuthState {
+          data object Idle : AuthState()
+          data object Loading : AuthState()
+          data class Authenticated(val user: User, val token: String) : AuthState()
+          data class Error(val message: String) : AuthState()
+      }
+
+      class AuthViewModel(
+          private val authRepo: AuthRepository,
+          private val scope: CoroutineScope
+      ) {
+          private val _state = MutableStateFlow<AuthState>(AuthState.Idle)
+          val state: StateFlow<AuthState> = _state.asStateFlow()
+
+          fun login(email: String, password: String) {
+              _state.value = AuthState.Loading
+              scope.launch {
+                  try {
+                      val user = authRepo.login(email, password)
+                      _state.value = AuthState.Authenticated(user, user.token)
+                  } catch (e: Exception) {
+                      _state.value = AuthState.Error(e.message ?: "Login failed")
+                  }
+              }
+          }
+
+          fun logout() { scope.launch { authRepo.logout(); _state.value = AuthState.Idle } }
+      }
+      ```
+
+      ### Offline-First Repository + Platform UI
+
+      ```kotlin
+      class ProductRepositoryImpl(
+          private val api: HttpClient, private val db: ProductDatabase
+      ) : ProductRepository {
+          override fun observeProducts(): Flow<List<Product>> =
+              db.productQueries.observeAll().asFlow().mapToList(Dispatchers.Default)
+
+          override suspend fun refreshProducts() {
+              val products = api.get<List<ProductDto>>("/products").body()
+              db.transaction {
+                  db.productQueries.deleteAll()
+                  products.forEach { dto -> db.productQueries.upsert(
+                      dto.id, dto.name, dto.price, dto.imageUrl, dto.description
+                  ) }
+              }
+          }
+      }
+      ```
+
+      ```kotlin
+      // androidApp — Compose consumption
+      @Composable
+      fun ProductListScreen(viewModel: ProductViewModel) {
+          val products by viewModel.products.collectAsStateWithLifecycle()
+          LazyColumn { items(products) { ProductCard(product = it) } }
+      }
+      ```
+
+      ```swift
+      // iosApp — SwiftUI with SKIE AsyncSequence
+      struct ProductListView: View {
+          let viewModel: ProductViewModel
+          @State private var products: [Product] = []
+          var body: some View {
+              List(products, id: \.id) { ProductRow(product: $0) }
+                  .task { for await list in viewModel.products.asyncSequence { products = list } }
+                  .refreshable { await viewModel.refreshProducts() }
+          }
+      }
+      ```
+
+      <Callout title="Production Considerations">
+        Real KMP e-commerce apps also need: Analytics (expect/actual per
+        platform), Push notifications (FCM on Android, APNs on iOS), Deep
+        linking (URL parsing shared, registration platform-specific), and
+        Crash reporting (Sentry on both). Each follows the same pattern:
+        shared state and business logic in `commonMain`, platform-native
+        implementation per target.
+      </Callout>
+
+      ### Key Integrations Summary
+
+      | Component | Android | iOS | Shared |
+      |-----------|---------|-----|--------|
+      | Auth | StateFlow collect | SKIE AsyncSequence | AuthViewModel |
+      | Products | LazyColumn | List | ProductRepository |
+      | Cart | Compose state | SwiftUI state | CartManager |
+      | Navigation | NavHost | NavigationStack | State-driven |
+      | Offline | Android SQLite | NativeSQLite | SQLDelight |
+      | DI | Koin Android | Koin iOS | Koin modules |
+
+      ### KMP Insight
+
+      A production KMP app confirms the pattern: `commonMain` holds all business
+      value (auth, catalog, cart, sync), while `androidApp` and `iosApp` are
+      thin UI layers rendering shared state. The shared module could be extracted
+      into a standalone library — KMP is a library integration pattern, not a
+      framework lock-in.

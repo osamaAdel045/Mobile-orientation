@@ -1,0 +1,120 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      <StatGrid>
+<StatItem value="Google" label="Company" />
+        <StatItem value="Dart" label="Language" />
+        <StatItem value="2017" label="Released" />
+        <StatItem value="BSD 3-Clause" label="License" />
+</StatGrid>
+
+      <StatGrid columns={3}>
+        <StatItem value="1M+" label="Published Apps" />
+        <StatItem value="50K+" label="pub.dev Packages" />
+        <StatItem value="6" label="Target Platforms" />
+      </StatGrid>
+
+### Core Philosophy: Owns Every Pixel
+
+      Flutter is fundamentally different from React Native, Ionic, or Xamarin because it **bypasses the platform UI layer entirely**. Instead of wrapping native widgets (UIButton, UILabel) or rendering through a WebView, Flutter ships its own rendering engine — Impeller — which draws every pixel on screen using the GPU directly. Dart code compiles to native ARM64 machine code linked against a C++ engine. There is no JavaScript bridge, no WebView, and no OEM widget wrapping.
+
+      This architecture gives Flutter complete control over the visual output. The same exact pixels render on iOS 15 as on iOS 18, on a Samsung Galaxy A-series as on a Pixel 9 Pro. OEM skin modifications (Samsung One UI, Xiaomi MIUI) cannot affect the rendered output because Flutter draws everything itself through Metal or Vulkan. This is the "own every pixel" philosophy — Flutter is closer to a game engine than a traditional mobile framework.
+
+      ```
+      Flutter:                        React Native:
+      ┌──────────────────┐           ┌──────────────────┐
+      │  Dart Framework   │           │  JavaScript      │
+      │  (Widgets)        │           │  (React + Bridge)│
+      │       ↓           │           │       ↓          │
+      │  Impeller Engine  │           │  Native UI Kits  │
+      │  (C++, GPU)       │           │  (UIKit/Android) │
+      │       ↓           │           │       ↓          │
+      │  GPU (Metal/Vk)   │           │  OEM Widgets     │
+      │  Owns Every Pixel │           │  Platform-Dependent│
+      └──────────────────┘           └──────────────────┘
+      ```
+
+### Origins: Why Google Built Flutter
+
+      Flutter began as a collaboration between Chrome rendering engineers (who had deep expertise in Skia, the 2D graphics library) and the Dart language team. The initial prototype, called "Sky," ran on Android in 2015. The core insight was that mobile UI frameworks had a fundamental bottleneck: the bridge between JavaScript (React Native) or C# (Xamarin) and the native platform UI toolkit. Each platform call required serialization across a language boundary, adding latency that made consistent 60fps rendering difficult for complex UIs.
+
+      Google's engineers realized that owning the entire rendering stack — from the widget API down to the individual pixel — eliminated this bottleneck. Dart was chosen specifically because it supports both **JIT compilation for hot reload** (debug mode) and **AOT compilation for native performance** (release mode). No other mainstream language had this dual-compilation capability. The framework was publicly announced in 2017 with Flutter 1.0, and has since expanded from mobile to web, desktop, and embedded devices.
+
+### When to Choose Flutter
+
+      Choose Flutter when you need **pixel-perfect UI consistency** across platforms — especially when the design requires custom animations, complex transitions, or branded components that would be difficult with platform-native widgets. E-commerce apps with rich product carousels, fintech apps with custom charting, and media apps with video overlays all benefit from Flutter's render-at-every-pixel approach.
+
+      Flutter excels when **development velocity** matters more than deep platform integration. A single Flutter team (4-6 engineers) can ship to iOS and Android simultaneously with shared business logic, networking, data layers, and UI code. The hot reload cycle (under 1 second for most changes) compresses the feedback loop dramatically compared to native build cycles. Flutter also shines for **MVP and startup scenarios** where time-to-market is critical and the app does not require extensive platform-specific APIs.
+
+### When Not to Choose Flutter
+
+      Flutter is not optimal when you need extensive **platform-specific UI** — apps that rely heavily on platform-native navigation patterns or want to use SwiftUI/Compose declarative patterns natively. While Flutter provides Cupertino widgets, they do not perfectly match every iOS behavior or OS update cycle.
+
+      Avoid Flutter for apps with **large existing native codebases** that would require full rewrites. Platform channel interop with native code is possible but adds complexity. If your app requires cutting-edge platform APIs within weeks of release (ARKit 6, Android XR), Flutter has an inherent lag while the community wraps these APIs in Dart packages. Flutter is also not ideal for **widget libraries or SDKs** that must be consumed by native apps — the interop surface area makes distribution difficult.
+
+### Hello Flutter — Widget Tree Example
+
+      ```dart
+      import 'package:flutter/material.dart';
+
+      void main() => runApp(const MyApp());
+
+      class MyApp extends StatelessWidget {
+        const MyApp({super.key});
+
+        @override
+        Widget build(BuildContext context) {
+          return MaterialApp(
+            title: 'Flutter Demo',
+            theme: ThemeData(
+              colorSchemeSeed: Colors.indigo,
+              useMaterial3: true,
+            ),
+            home: const MyHomePage(),
+          );
+        }
+      }
+
+      class MyHomePage extends StatelessWidget {
+        const MyHomePage({super.key});
+
+        @override
+        Widget build(BuildContext context) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('Hello, Flutter')),
+            body: const Center(
+              child: Text(
+                'Hello, World!',
+                style: TextStyle(fontSize: 24),
+              ),
+            ),
+          );
+        }
+      }
+      ```
+
+      Every visual element is a **Widget** — a declarative configuration object. `MaterialApp` provides platform-adaptive navigation and theming. `Scaffold` implements the Material layout. `Center` positions its child. `Text` configures the render. None of these correspond to native platform views; they all compile to Flutter's own rendering primitives.
+
+### Ecosystem & Production Maturity
+
+      Google has bet heavily on Flutter for its own products. Google Pay (100M+ users) is built with Flutter. Google Ads, Google Home, and the Gemini AI assistant app all use Flutter. Outside Google: **BMW** uses Flutter for in-car infotainment, **Alibaba** for e-commerce, **Tencent** for social apps, **eBay** for listings, and **Canonical** for the Ubuntu installer. The pub.dev registry hosts over 50,000 packages.
+
+      <Callout title="Production readiness:">
+        Flutter ships as a native ARM binary linked against the C++ engine — no interpreter, no bytecode, no bridge. This means Flutter apps pass App Store and Play Store review with the same performance expectations as native Swift or Kotlin apps. The Impeller rendering engine eliminates shader compilation jank that plagued earlier Skia-based Flutter versions.
+      </Callout>
+
+### Framework Comparison
+
+      React Native uses a JavaScript-to-native bridge — every UI interaction serializes data across the JS/native boundary, adding latency. Ionic wraps a web app in a WebView, inheriting performance limitations and rendering inconsistencies across browsers. Flutter's approach — AOT-compile to native ARM, render with Impeller through Metal/Vulkan — gives it the closest performance to native Swift/Kotlin while maintaining a single codebase. The trade-off is a larger baseline binary (~6MB) and a Dart ecosystem that is smaller than JavaScript/TypeScript.
+
+      <DecisionMatrix
+        scores={[
+          { label: 'Performance', score: 9.5 },
+          { label: 'UI Consistency', score: 10 },
+          { label: 'Dev Velocity', score: 9 },
+          { label: 'Platform Fidelity', score: 6 },
+          { label: 'Ecosystem Size', score: 8 },
+        ]}
+        pros="Single codebase, native ARM performance, sub-second hot reload, pixel-perfect visual control across all devices, Impeller eliminates shader jank"
+        cons="Dart ecosystem smaller than JS/TS, platform interop via channels adds complexity, baseline app size ~6MB, platform API adoption lags native SDK releases, Cupertino widgets don't match every iOS detail"
+      />

@@ -1,0 +1,131 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid>
+      <StatItem value="Fabric" label="Renderer Name" />
+      <StatItem value="JSI (sync)" label="Renderer Comm" />
+      <StatItem value="Yoga (C)" label="Layout Engine" />
+      <StatItem value="60/120 fps" label="Frame Rate" />
+    </StatGrid>
+
+    ### Complete Rendering Pipeline
+
+    Every frame React Native renders goes through a seven-stage pipeline that spans three threads and involves C++, JavaScript, and platform SDK calls. Understanding this pipeline is essential for diagnosing performance issues.
+
+    ```
+    ┌──────────────── COMPLETE RENDERING PIPELINE ──────────────────┐
+    │                                                                │
+    │  ┌───────────────────────┐                                     │
+    │  │  1. React Component   │  (JS Thread)                        │
+    │  │     Tree created      │  Returns JSX elements               │
+    │  └───────────┬───────────┘                                     │
+    │              │                                                 │
+    │  ┌───────────▼───────────┐                                     │
+    │  │  2. Reconciliation    │  (JS Thread)                        │
+    │  │  (React compares old/ │  Produces a list of side effects    │
+    │  │   new virtual tree)   │  (insert, update, delete, move)     │
+    │  └───────────┬───────────┘                                     │
+    │              │                                                 │
+    │  ┌───────────▼───────────┐                                     │
+    │  │  3. Fabric Renderer   │  (via JSI, sync C++ call)           │
+    │  │  receives mutations   │  Fabric C++ receives effect list    │
+    │  └───────────┬───────────┘                                     │
+    │              │                                                 │
+    │  ┌───────────▼───────────┐    ┌─────────────────┐             │
+    │  │  4. Shadow Tree /     │    │   Yoga Engine    │             │
+    │  │     Yoga Layout       │───→│ (C++, flexbox)   │  (Shadow   │
+    │  │  Create shadow nodes  │    │ Compute position │   Thread)  │
+    │  │  with flex properties │    │  & size for each │             │
+    │  └───────────┬───────────┘    │  shadow node     │             │
+    │              │                └─────────────────┘             │
+    │              │                                                 │
+    │  ┌───────────▼───────────┐                                     │
+    │  │  5. Mount to Native   │  (Main Thread)                      │
+    │  │  Fabric calls platform│  <UIView alloc> / View.inflate      │
+    │  │  SDK to create/update │  Set props, apply transforms        │
+    │  └───────────┬───────────┘                                     │
+    │              │                                                 │
+    │  ┌───────────▼───────────┐                                     │
+    │  │  6. Platform Rendering │  (Main/GPU Thread)                  │
+    │  │  UIKit / Android View │  drawRect, onDraw, CoreAnimation    │
+    │  └───────────┬───────────┘                                     │
+    │              │                                                 │
+    │  ┌───────────▼───────────┐                                     │
+    │  │  7. Screen Display    │  Frame buffer → Display              │
+    │  └───────────────────────┘                                     │
+    └────────────────────────────────────────────────────────────────┘
+    ```
+
+    Steps 1–2 run on the **JS Thread**, step 4 runs on the **Shadow Thread**, steps 5–6 run on the **Main Thread**. Steps 3 (Fabric receiving mutations via JSI) crosses from JS Thread into C++ synchronously — this call can happen from either the JS Thread or Main Thread depending on priority.
+
+    <Callout title="Fabric's Priority-Based Rendering">
+    One of Fabric's killer features is that it can interrupt a low-priority render to service a high-priority one. When a user taps a button, that gesture event arrives on the Main Thread, which signals Fabric through JSI to immediately flush the highest-priority mutation queue. The background data update (low pri) is suspended, the button highlight animation (high pri) is rendered, and the data update resumes afterward. Under the old Bridge architecture, both had equal priority and competed on the same queue.
+    </Callout>
+
+    ### Yoga Layout Engine Deep Dive
+
+    Yoga is Meta's cross-platform Flexbox layout engine, written in C, with bindings for C++, Java, and JavaScript. It implements a subset of the CSS Flexbox specification — enough to cover 99% of mobile layouts, but intentionally simplified for performance.
+
+    How Yoga works: Given a tree of YogaNode objects (each with style properties: `flexDirection`, `justifyContent`, `alignItems`, `padding`, `margin`, `width`, `height`), Yoga computes the `left`, `top`, `width`, and `height` of every node using a three-pass algorithm:
+
+    1. **Direction pass:** Determine writing direction (LTR or RTL)
+    2. **Measure pass:** Calculate intrinsic sizes (text measurement, image dimensions)
+    3. **Layout pass:** Compute position and size for each node using Flexbox rules
+
+    Yoga differs from CSS Flexbox in several ways. There is no `auto` margin collapsing (except `margin: auto` for centering). `min-height: 100%` does not exist — use `flex: 1` instead. Yoga does not support CSS Grid or multi-column layout. Text measurement is delegated to platform APIs (`CTFramesetterSuggestFrameSizeWithConstraints` on iOS, `StaticLayout` on Android), not computed by Yoga itself.
+
+    Yoga runs entirely on the **Shadow Thread** in C++. Because it operates on the Shadow Tree — a separate data structure from both the React virtual DOM and the platform view hierarchy — Yoga can compute layout without blocking either the JS thread (where React reconciles) or the Main thread (where the UI renders). This parallelism is a major performance advantage.
+
+    ```typescript
+    // This Flexbox layout in JSX:
+    const styles = StyleSheet.create({
+      card: { flexDirection: 'row', padding: 16 },
+      avatar: { width: 48, height: 48, borderRadius: 24 },
+      body: { flex: 1, marginLeft: 12 },
+      name: { fontWeight: '600', fontSize: 16 },
+      bio: { fontSize: 14, color: '#666', marginTop: 4 },
+    });
+
+    // Yoga processes this as a tree of YogaNodes in C++:
+    // YogaNode(card) [flexDirection=Row, padding=16]
+    //   ├── YogaNode(avatar) [width=48, height=48, marginRight=12]
+    //   └── YogaNode(body) [flex=1]
+    //         ├── YogaNode(name) [fontWeight=600, fontSize=16]
+    //         └── YogaNode(bio) [fontSize=14, color=#666, marginTop=4]
+    ```
+
+    ### The Shadow Tree
+
+    The Shadow Tree is a key concept unique to React Native (not present in React DOM). It is a separate, lightweight tree that mirrors the React element tree but contains only layout-critical information (width, height, position, flex properties, padding, margin). The Shadow Tree lives in C++ memory on the Shadow Thread.
+
+    Why does the Shadow Tree exist? Two reasons. First, **layout parallelism**: Yoga can compute layout on the Shadow Thread while React reconciles on the JS Thread and the platform renders on the Main Thread. Second, **layout caching**: if a React re-render does not change any layout-affecting props, Fabric can skip Yoga entirely and reuse the cached Shadow Tree measurements.
+
+    Fabric reads the Shadow Tree after each Yoga layout pass and produces a list of "mutation instructions" (create view, update frame, delete view) that are sent to the Main Thread. This is the critical handoff: the Shadow Tree is the bridge between React's declarative tree and the platform's imperative view hierarchy.
+
+    ### Platform Thread Interaction
+
+    ```
+    JS Thread       Shadow Thread      Main Thread      GPU
+    │               │                  │               │
+    ├─ Reconcile ──→│                  │               │
+    │               ├─ Yoga layout ───→│               │
+    │               │                  ├─ createView ─→│
+    │               │                  │  updateFrame  │
+    │               │                  ├─ drawFrame ──→│
+    ├─ Reconcile ──→│ (cache hit,      │               │  ← 16ms later
+    │  (no layout   │  skip Yoga)      │               │     (60fps)
+    │   change)     │                  │               │
+    ├─ Reconcile ──→│                  │               │
+    │               ├─ Yoga layout ───→│               │
+    │  (priority    │  (interrupted!)  │               │
+    │   tap event)  │   ↳ tap render   ║               │
+    │               │   ↳ resume later ║               │
+    └───────────────┴──────────────────┴───────────────┴────────
+    ```
+
+    ### Comparison: Fabric vs Flutter Impeller vs WebView (Ionic)
+
+    Fabric (React Native) renders by mapping React elements to platform-native UI widgets. Each `<View>` becomes a real `UIView` or `android.view.View`. This gives RN free accessibility, free font rendering, free text selection, and free platform behavior (keyboard, scroll physics). The cost is that every widget is a platform object with memory overhead (~200 bytes per view).
+
+    Flutter's Impeller (new rendering engine, replaces Skia) renders by painting every pixel directly to the GPU. Flutter controls every aspect of rendering but gets none of the platform's built-in behavior for free. Accessibility requires `Semantics` widgets. Text rendering uses Flutter's own harfbuzz + libtxt stack. The benefit is pixel-level control and 120 fps animations. The cost is larger binaries (~15 MB vs RN's ~8 MB), more memory for complex layouts, and platform behavior differences.
+
+    Ionic (WebView-based) renders by loading a SPA in a platform WebView (WkWebView on iOS, Android WebView). It gets HTML/CSS rendering (maximum flexibility) but no platform-native UI components. Apps feel web-like rather than native. Performance is WebView-bound, not platform-bound. Ionic is the easiest to deploy (your web app is already a mobile app) but typically delivers the worst user experience of the three.

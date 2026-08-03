@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      ### Local Database on iOS
+
+      iOS offers a spectrum of persistence: SwiftData for modern SwiftUI apps, Core Data for
+      mature codebases, GRDB for raw SQLite access, and Keychain for secure secrets.
+
+      <StatGrid columns={4}>
+        <StatItem value="SwiftData" label="Modern (iOS 17+)" />
+        <StatItem value="Core Data" label="Mature (iOS 3+)" />
+        <StatItem value="GRDB" label="SQLite Power" />
+        <StatItem value="Keychain" label="Secure Secrets" />
+      </StatGrid>
+
+      ### SwiftData (iOS 17+)
+
+      SwiftData replaces `.xcdatamodeld` with the `@Model` macro. `@Query` provides reactive
+      fetching. iCloud sync is automatic through CloudKit.
+
+      ```swift
+      import SwiftData
+
+      @Model
+      final class Recipe {
+          @Attribute(.unique) var id: UUID
+          var name: String
+          var instructions: String
+          var createdAt: Date
+          @Relationship(deleteRule: .cascade) var ingredients: [Ingredient]
+
+          init(name: String, instructions: String) {
+              self.id = UUID()
+              self.name = name
+              self.instructions = instructions
+              self.createdAt = Date()
+              self.ingredients = []
+          }
+      }
+
+      @Model
+      final class Ingredient {
+          var name: String
+          var quantity: Double
+          var unit: String
+      }
+      ```
+
+      `ModelContainer` holds the schema; `ModelContext` handles CRUD. `#Index` and `#Unique`
+      macros enable compound indexes and multi-property uniqueness.
+
+      ```swift
+      struct RecipeListView: View {
+          @Query(sort: \Recipe.createdAt, order: .reverse) private var recipes: [Recipe]
+          var body: some View {
+              List { ForEach(recipes) { recipe in Text(recipe.name) } }
+          }
+      }
+      ```
+
+      ### Core Data and GRDB
+
+      Core Data uses `NSPersistentContainer`, `NSManagedObject`, and `.xcdatamodeld`. Required
+      for iOS 16 and earlier. `NSFetchedResultsController` drives UIKit with automatic diffing.
+      Lightweight migrations handle additive changes; complex ones need `NSEntityMigrationPolicy`.
+
+      GRDB provides type-safe SQLite with Swift Concurrency. `DatabasePool` supports concurrent
+      reads with serialized writes. Migrations are declarative closures checked at launch.
+
+      ```swift
+      struct Player: Codable, FetchableRecord, PersistableRecord {
+          var id: Int64?; var name: String; var score: Int
+      }
+
+      func fetchTop(db: DatabaseWriter) async throws -> [Player] {
+          try await db.read { db in
+              try Player.order(Column("score").desc).limit(10).fetchAll(db)
+          }
+      }
+      ```
+
+      ### Keychain Services
+
+      Stores secrets with hardware-backed encryption. Use `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`
+      for auth tokens — inaccessible after device restart until the user unlocks.
+
+      ```text
+      UserDefaults -> Keychain -> SwiftData/CoreData -> GRDB
+      ```
+
+      ```swift
+      enum KeychainManager {
+          static func save(key: String, value: String) throws {
+              let data = Data(value.utf8)
+              let query: [String: Any] = [
+                  kSecClass as String: kSecClassGenericPassword,
+                  kSecAttrAccount as String: key,
+                  kSecValueData as String: data,
+                  kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+              ]
+              SecItemDelete(query as CFDictionary)
+              guard SecItemAdd(query as CFDictionary, nil) == errSecSuccess else {
+                  throw KeychainError.saveFailed
+              }
+          }
+
+          static func read(key: String) throws -> String {
+              let query: [String: Any] = [
+                  kSecClass as String: kSecClassGenericPassword,
+                  kSecAttrAccount as String: key,
+                  kSecReturnData as String: true,
+                  kSecMatchLimit as String: kSecMatchLimitOne
+              ]
+              var result: AnyObject?
+              guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+                    let data = result as? Data,
+                    let value = String(data: data, encoding: .utf8)
+              else { throw KeychainError.readFailed }
+              return value
+          }
+
+          enum KeychainError: Error { case saveFailed, readFailed }
+      }
+      ```
+
+      <Callout title="SwiftData vs Core Data Decision">
+        Choose SwiftData for iOS 17+ targets with compile-time schema safety and zero XML
+        modeling. Choose Core Data when targeting iOS 16 or earlier, or when needing
+        NSFetchedResultsController for UIKit. Both share CloudKit sync.
+      </Callout>
+
+      ### Common Pitfalls
+
+      **SwiftData thread confinement**: `ModelContext` is not thread-safe. Use `ModelActor` for
+      background operations. **Core Data merge conflicts**: Default `.error` merge policy throws
+      on conflict — use `.mergeByPropertyObjectTrump` for production. **Keychain on simulator**:
+      Lost on simulator reset — test on device. **UserDefaults for secrets**: Stored as plain
+      text plist — never use for tokens.
+
+      ### iOS-Specific Insight
+
+      SwiftData generates the SQLite schema at compile time from `@Model` macros, while Core
+      Data builds schemas at runtime from `.xcdatamodeld`. This means SwiftData catches schema
+      mismatches during compilation rather than crashing on first launch.
+
+      ### Cross-Platform Comparison
+
+      Android Room uses `@Entity`, `@Dao`, `@Query` annotations — conceptually identical to
+      SwiftData but annotation processing-based. Flutter's Drift wraps SQLite with Dart
+      annotations. GRDB is comparable to Android's `SQLiteOpenHelper` but with type-safe
+      query builders and Swift Concurrency support.

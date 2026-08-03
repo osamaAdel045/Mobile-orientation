@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    Android's security model is built on kernel-level isolation (SELinux), permissions
+    gated by user consent, and hardware-backed cryptography via the Keystore.
+
+    <StatGrid>
+        <StatItem value="4" label="SELinux enforcement domains per app" />
+        <StatItem value="100+" label="Runtime permissions in Android 15" />
+        <StatItem value="AES-256" label="EncryptedSharedPreferences key algorithm" />
+        <StatItem value="TEE/SE" label="Keystore key isolation boundary" />
+    </StatGrid>
+
+    ### Security Model — Sandbox and SELinux
+
+    Every app runs under a unique Linux UID in a process-level sandbox. SELinux enforces
+    MAC policies. Runtime permissions are prompted at use:
+
+    ```kotlin
+    class CameraFragment : Fragment() {
+        private val launcher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()) { if (it) openCamera() else showRationale() }
+        fun requestCamera() {
+            when {
+                ContextCompat.checkSelfPermission(requireContext(),
+                    Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED ->
+                    openCamera()
+                shouldShowRequestPermissionRationale(Manifest.permission.CAMERA) ->
+                    showRationale()
+                else -> launcher.launch(Manifest.permission.CAMERA)
+            }
+        }
+    }
+    ```
+
+    ### EncryptedSharedPreferences
+
+    AES-256-GCM backed by the Keystore. Master key never leaves the TEE:
+
+    ```kotlin
+    class SecurePrefs(context: Context) {
+        private val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build()
+        private val prefs = EncryptedSharedPreferences.create(
+            context, "secure_prefs", masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)
+        fun saveToken(token: String) { prefs.edit().putString("auth_token", token).apply() }
+        fun getToken(): String? = prefs.getString("auth_token", null)
+    }
+    ```
+
+    <Callout title="Never store raw secrets in plain SharedPreferences">
+
+        DataStore and plain SharedPreferences write unencrypted files readable on
+        rooted devices or via ADB backup. Always encrypt tokens and PII.
+
+    </Callout>
+
+    ### Android Keystore
+
+    Keys stored in TEE or SE — app gets a handle, never key material:
+
+    ```kotlin
+    class CryptoManager {
+        private val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        fun generateKey(alias: String) {
+            val generator = KeyGenerator.getInstance(
+                KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+            generator.init(KeyGenParameterSpec.Builder(alias,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256).setUserAuthenticationRequired(true).build())
+            generator.generateKey()
+        }
+    ```
+
+    ### SSL Pinning via Network Security Config
+
+    OS-level pinning — no OkHttp interceptor needed:
+
+    ```xml
+    <network-security-config>
+        <domain-config cleartextTrafficPermitted="false">
+            <domain includeSubdomains="true">api.example.com</domain>
+            <pin-set expiration="2026-12-31">
+                <pin digest="SHA-256">base64EncodedPublicKey1==</pin>
+                <pin digest="SHA-256">base64EncodedPublicKey2==</pin>
+            </pin-set>
+        </domain-config>
+    </network-security-config>
+    ```
+
+    Reference via `android:networkSecurityConfig` in the manifest.
+
+    ### R8 / ProGuard Obfuscation
+
+    R8 performs dead-code elimination, renaming, and inlining:
+
+    ```pro
+    -keepattributes Signature, *Annotation*
+    -keepclassmembers class com.example.app.data.** { <fields>; }
+    -assumenosideeffects class timber.log.Timber { public static void d(...); }
+    ```
+
+    ### Play Integrity API
+
+    Issues a signed token for device genuineness. Verify on your backend:
+
+    ```kotlin
+    class IntegrityVerifier(private val context: Context) {
+        private val integrity by lazy { IntegrityManagerFactory.create(context) }
+        suspend fun verify(): IntegrityTokenResponse {
+            return integrity.requestIntegrityToken(
+                IntegrityTokenRequest.builder()
+                    .setCloudProjectNumber(123456789).build())
+        }
+    }
+    ```
+
+    ### Biometric Authentication
+
+    System-managed dialog for fingerprint, face, or iris:
+
+    ```kotlin
+    class BiometricAuth(private val activity: FragmentActivity) {
+        private val executor = ContextCompat.getMainExecutor(activity)
+        fun authenticate(onSuccess: (BiometricPrompt.AuthenticationResult) -> Unit,
+                          onError: (String) -> Unit) {
+            val prompt = BiometricPrompt(activity, executor,
+                object : BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationSucceeded(result) = onSuccess(result)
+                    override fun onAuthenticationError(code, err) = onError(err.toString())
+                })
+            prompt.authenticate(BiometricPrompt.PromptInfo.Builder()
+                    .setTitle("Authenticate to continue")
+                    .setSubtitle("Confirm your identity")
+                    .setAllowedAuthenticators(
+                        BiometricManager.Authenticators.BIOMETRIC_STRONG
+                            or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+                    .build())
+        }
+    }
+    ```
+
+    <Callout title="CryptoObject binds biometric result to Keystore keys">
+
+        Pass a `BiometricPrompt.CryptoObject` wrapping the Keystore key. The TEE
+        releases the key only when biometrics succeed.
+    </Callout>

@@ -1,0 +1,128 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={3}>
+      <StatItem value="16ms" label="60fps Budget" />
+      <StatItem value="8ms" label="120fps Budget" />
+      <StatItem value="60Hz" label="Default VSYNC" />
+    </StatGrid>
+
+    ### Jetpack Compose Rendering Pipeline
+
+    Compose rendering proceeds through three phases: **Composition**, **Layout**, and **Drawing**. Each phase operates on the Slot Table and the resulting Layout Node tree. Unlike the View system's two-pass measure approach, Compose uses a single-pass intrinsic measurement system where constraints flow down and sizes flow up in one traversal.
+
+    ```
+    ┌──────────────┐
+    │  Composition  │  State changes → recomposition → slot table updated
+    │     Phase     │  Only affected @Composable slots re-execute
+    └──────┬───────┘
+           ↓
+    ┌──────────────┐
+    │    Layout     │  Measure (constraints flow down, sizes flow up)
+    │     Phase     │  Place (positions assigned top-down)
+    └──────┬───────┘
+           ↓
+    ┌──────────────┐
+    │    Drawing    │  Canvas commands recorded per LayoutNode
+    │     Phase     │  Relayed to Skia / GPU for rasterization
+    └──────────────┘
+    ```
+
+    When a state object changes, Compose marks the affected composable as invalid. On the next frame, **recomposition** re-executes only those functions. The resulting slot updates feed into the layout phase, which recalculates size and position. Only nodes with changed layout or appearance re-enter the drawing phase — unchanged nodes are skipped via a boolean flag comparison.
+
+    ```kotlin
+    // Phase isolation — changing color never triggers remeasure
+    @Composable
+    private fun AnimatedCounter(count: Int) {
+        val color by animateFloatAsState(
+            targetValue = if (count > 0) 1f else 0f,
+            animationSpec = tween(300)
+        )
+        Text(
+            text = "Count: $count",
+            color = Color.White.copy(alpha = color),
+            fontSize = 24.sp
+        )
+    }
+    ```
+
+    <Callout title="Phase Skipping Optimization">
+      Compose's phase isolation means changing a `color` parameter never triggers remeasure — only the drawing phase runs. This is a critical performance advantage over the View system where `invalidate()` redraws but `requestLayout()` cascades the full measure/layout/draw cycle. Profile your layouts with the Layout Inspector's phase timing overlay.
+    </Callout>
+
+    ### Skia GPU Rendering and Canvas
+
+    Both Compose and the View system ultimately render through Skia. Compose issues drawing commands via `Canvas` in the drawing phase. These are recorded into display lists and submitted to Skia, which batches them into GPU draw calls via OpenGL or Vulkan.
+
+    ```kotlin
+    // Custom Canvas drawing inside a Compose modifier
+    fun Modifier.circularProgressIndicator(progress: Float): Modifier = this.then(
+        Modifier.drawBehind {
+            val strokeWidth = size.minDimension * 0.1f
+            drawArc(color = Color.Gray, startAngle = 0f, sweepAngle = 360f,
+                useCenter = false, style = Stroke(width = strokeWidth, cap = StrokeCap.Round))
+            drawArc(color = Color.Blue, startAngle = -90f,
+                sweepAngle = progress * 360f, useCenter = false,
+                style = Stroke(width = strokeWidth, cap = StrokeCap.Round))
+        }
+    )
+    ```
+
+    ### View System: Measure, Layout, Draw
+
+    The legacy View system performs three traversals. **Measure** passes `MeasureSpec` (a packed Int containing mode and size) top-down; children return measured dimensions. **Layout** positions children. **Draw** performs a depth-first traversal calling `onDraw(canvas)`.
+
+    ```kotlin
+    // Measure/layout/draw contract in a custom ViewGroup
+    class EqualWeightLayout(context: Context, attrs: AttributeSet? = null) :
+        ViewGroup(context, attrs) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            val childWidth = MeasureSpec.getSize(widthMeasureSpec) / childCount.coerceAtLeast(1)
+            val childSpec = MeasureSpec.makeMeasureSpec(childWidth, MeasureSpec.EXACTLY)
+            measureChildren(childSpec, heightMeasureSpec)
+            setMeasuredDimension(widthMeasureSpec, heightMeasureSpec)
+        }
+        override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+            val childWidth = (r - l) / childCount.coerceAtLeast(1)
+            for (i in 0 until childCount) {
+                getChildAt(i).layout(i * childWidth, 0, (i + 1) * childWidth, b - t)
+            }
+        }
+    }
+    ```
+
+    ### RenderThread and Hardware Acceleration
+
+    Android 5.0 introduced the **RenderThread**, a dedicated thread for GPU command processing. When a View or Compose node issues draw commands, the main thread records them as a display list and hands the list to RenderThread. RenderThread uploads textures, batches GPU commands, and submits to the GPU — all while the main thread processes the next frame. This pipelining doubles throughput. Hardware acceleration means all drawing targets the GPU via Skia's Vulkan/OpenGL backend.
+
+    ### VSYNC and Choreographer
+
+    The **Choreographer** synchronizes with the display's vertical blanking interval (VSYNC), firing `doFrame()` callbacks 60 or 120 times per second. Every input event, animation tick, and layout invalidation requests a `doFrame()`. Total work must complete within the frame budget.
+
+    | Refresh Rate | Frame Budget | Notes |
+    |---|---|---|
+    | 60 Hz | 16.67ms | Standard displays |
+    | 90 Hz | 11.11ms | Mid-range high refresh |
+    | 120 Hz | 8.33ms | Flagship high refresh |
+
+    ```kotlin
+    // Measuring frame timing at the Choreographer level
+    class FrameTimingListener : Choreographer.FrameCallback {
+        private var lastFrameNanos = 0L
+        override fun doFrame(frameTimeNanos: Long) {
+            if (lastFrameNanos != 0L) {
+                val elapsed = (frameTimeNanos - lastFrameNanos) / 1_000_000f
+                if (elapsed > 17f) Log.w("FrameTiming", "Jank: ${"%.1f".format(elapsed)}ms")
+            }
+            lastFrameNanos = frameTimeNanos
+            Choreographer.getInstance().postFrameCallback(this)
+        }
+    }
+    ```
+
+    <Callout title="Jank Detection">
+      Any frame exceeding the budget causes visible jank. Use Android Studio's GPU Profiler and the Frame Rendering Data overlay to detect missed frames. A frame gap exceeding 1.5x the budget (25ms at 60fps) is perceptible stutter.
+    </Callout>
+
+    ### Comparison to Flutter Impeller and React Native Yoga
+
+    Flutter's Impeller engine pre-compiles shaders at build time to eliminate first-frame jank, using a render graph that maps directly to Metal/Vulkan primitives. React Native uses Yoga, a Flexbox layout engine on the JavaScript thread, returning layout results across the bridge to native — adding a full frame of latency. Neither approach matches Compose's in-process Slot Table model where layout results are consumed immediately without serialization or thread hops.

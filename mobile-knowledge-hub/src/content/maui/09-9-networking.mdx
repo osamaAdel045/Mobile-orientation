@@ -1,0 +1,130 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Primary API" value="HttpClient / Refit" />
+  <StatItem label="Resilience" value="Polly v8" />
+  <StatItem label="Serialization" value="System.Text.Json" />
+  <StatItem label="Pooling" value="IHttpClientFactory" />
+</StatGrid>
+
+### HttpClient — Built-in HTTP Client
+
+.NET includes `HttpClient` in the `System.Net.Http` namespace. It supports async I/O, HTTP/2, cancellation tokens, and connection pooling. Always prefer a single static or factory-managed instance — creating a new `HttpClient` per request exhausts socket ports.
+
+```csharp
+using var client = new HttpClient
+{
+    BaseAddress = new Uri("https://api.example.com"),
+    Timeout = TimeSpan.FromSeconds(10)
+};
+var response = await client.GetAsync("/weather");
+var json = await response.Content.ReadAsStringAsync();
+```
+
+<Callout type="warning">
+  Never wrap `HttpClient` in a `using` statement inside a per-request scope. Each
+  disposal leaves the underlying socket in TIME_WAIT for 240s, quickly depleting
+  ephemeral ports on mobile. Always use `IHttpClientFactory` to pool and recycle
+  handlers safely.
+</Callout>
+
+### IHttpClientFactory — Connection Pooling
+
+Register `IHttpClientFactory` in `MauiProgram.cs` to manage handler lifetimes. Each named client gets a separate pool with its own configuration.
+
+```csharp
+builder.Services.AddHttpClient("WeatherAPI", client =>
+{
+    client.BaseAddress = new Uri("https://api.example.com");
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+})
+.AddTransientHttpErrorPolicy(policy =>
+    policy.WaitAndRetryAsync(3, retryAttempt =>
+        TimeSpan.FromMilliseconds(Math.Pow(2, retryAttempt) * 100)));
+```
+
+### Refit — Type-Safe REST Client
+
+Refit generates `HttpClient` implementations from C# interfaces at compile time, mirroring Retrofit's approach on Android.
+
+```csharp
+public interface IWeatherApi
+{
+    [Get("/weather/{city}")]
+    Task&lt;WeatherResponse&gt; GetWeatherAsync(string city, CancellationToken ct);
+
+    [Post("/weather/report")]
+    Task&lt;WeatherResponse&gt; PostReportAsync([Body] WeatherReport report);
+}
+
+// Registration
+builder.Services.AddRefitClient&lt;IWeatherApi&gt;()
+    .ConfigureHttpClient(c => c.BaseAddress = new Uri("https://api.example.com"));
+```
+
+<Callout type="info">
+  Refit uses `System.Text.Json` by default (or Newtonsoft.Json via a plugin).
+  Nullable reference types are supported — mark your response DTOs with `?`
+  for optional fields to avoid deserialization exceptions.
+</Callout>
+
+### Polly — Resilience Pipelines
+
+Polly v8 introduced the `ResiliencePipeline` abstraction. Use the `AddPolicyHandler` extension with `IHttpClientFactory` for retry, circuit breaker, and timeout strategies in a single pipeline.
+
+```csharp
+var pipeline = new ResiliencePipelineBuilder&lt;HttpResponseMessage&gt;()
+    .AddRetry(new RetryStrategyOptions&lt;HttpResponseMessage&gt;
+    {
+        MaxRetryAttempts = 3,
+        Delay = TimeSpan.FromMilliseconds(200),
+        BackoffType = DelayBackoffType.Exponential
+    })
+    .AddCircuitBreaker(new CircuitBreakerStrategyOptions&lt;HttpResponseMessage&gt;
+    {
+        FailureRatio = 0.2,
+        MinimumThroughput = 10,
+        SamplingDuration = TimeSpan.FromSeconds(10)
+    })
+    .Build();
+```
+
+### Repository Pattern with Offline Caching
+
+Wrap `HttpClient` calls in a repository that checks a local SQLite cache before hitting the network. This pattern keeps the UI responsive when the device is offline.
+
+```csharp
+public class WeatherRepository
+{
+    private readonly IWeatherApi _api;
+    private readonly SQLiteAsyncConnection _db;
+
+    public async Task&lt;WeatherResponse&gt; GetWeatherAsync(string city)
+    {
+        var cached = await _db.Table&lt;WeatherCache&gt;()
+            .FirstOrDefaultAsync(w => w.City == city);
+
+        if (cached?.IsFresh() == true)
+            return JsonSerializer.Deserialize&lt;WeatherResponse&gt;(cached.Data);
+
+        var live = await _api.GetWeatherAsync(city, CancellationToken.None);
+        await _db.InsertOrReplaceAsync(WeatherCache.FromResponse(city, live));
+        return live;
+    }
+}
+```
+
+### Comparison — Platform Networking Stacks
+
+| Feature | .NET MAUI | Flutter | React Native |
+|---|---|---|---|
+| HTTP client | HttpClient (built-in) | `http` / `dio` packages | `fetch` / `axios` |
+| Typed REST | Refit (code-gen) | Retrofit via `chopper` | `openapi-typescript` |
+| Resilience | Polly | `dart_frog` interop | custom wrappers |
+| Offline cache | SQLite + Repository | `hive` / `drift` | `redux-persist` |
+
+<Callout type="tip">
+  For GraphQL, use **Strawberry Shake** — the .NET MAUI code-gen client that
+  generates typed operations from `.graphql` documents, similar to Apollo on
+  other platforms.
+</Callout>

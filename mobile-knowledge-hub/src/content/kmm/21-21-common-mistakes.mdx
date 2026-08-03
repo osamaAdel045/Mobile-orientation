@@ -1,0 +1,114 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="UI in Shared" label="#1 Mistake" />
+        <StatItem value="Over-using expect" label="#2 Mistake" />
+        <StatItem value="iOS Not Tested" label="#3 Mistake" />
+      </StatGrid>
+
+      ### Mistake 1: Putting UI Code in Shared Module
+
+      The most common KMP mistake — Compose imports in `commonMain`. The shared
+      module produces state, not UI.
+
+      ```kotlin
+      // WRONG — Compose in shared module
+      @Composable
+      fun SharedLoginScreen(onLogin: () -> Unit) { /* Compose import in commonMain */ }
+
+      // RIGHT — shared module produces state only
+      data class LoginState(val email: String = "", val isLoading: Boolean = false)
+      class LoginViewModel(private val repo: AuthRepository) {
+          private val _state = MutableStateFlow(LoginState())
+          val state: StateFlow<LoginState> = _state.asStateFlow()
+      }
+      // Compose UI lives in androidApp, SwiftUI in iosApp
+      ```
+
+      ### Mistake 2: Over-Using expect/actual
+
+      Use expect/actual only for platform-OS intrinsics. Prefer interface + DI
+      for behavior that varies by configuration.
+
+      ```kotlin
+      // WRONG — use interface + DI instead
+      expect class Logger { fun log(message: String) }
+
+      // RIGHT — interface with platform implementations injected via Koin
+      interface Logger { fun log(message: String) }
+      ```
+
+      <Callout title="When to Use expect/actual">
+        Use expect/actual only when the implementation MUST differ per platform
+        due to an OS-level requirement (file system, secure storage, biometric
+        auth, process lifecycle). Do NOT use for library implementation choices
+        (JSON parsing, logging, caching) — those should be interfaces with DI.
+        expect/actual is checked at compile time; overusing it reduces
+        flexibility and multiplies source sets.
+      </Callout>
+
+      ### Mistake 3: Not Testing on Both Platforms
+
+      Tests passing on JVM may fail on Kotlin/Native due to dispatcher behavior,
+      Unicode handling, and memory model differences.
+
+      ```kotlin
+      // Flaky — fragile timing dependency behaves differently on iOS
+      @Test fun `empty collect`() = runTest {
+          val flow = MutableSharedFlow<Int>()
+          val results = mutableListOf<Int>()
+          val job = launch { flow.collect { results.add(it) } }
+          delay(10) // May be too short on iOS
+          flow.tryEmit(1)
+          delay(10)
+          assertEquals(1, results.size) // Flaky
+          job.cancel()
+
+          // FIX — use Turbine
+          flow.test { flow.emit(1); assertEquals(1, awaitItem()); cancelAndConsumeRemainingEvents() }
+      }
+      ```
+
+      ### Mistake 4: Platform Coroutine Dispatcher Confusion
+
+      ```kotlin
+      // WRONG — Dispatchers.IO behavior differs on Native
+      class WrongVM(private val repo: UserRepository) {
+          fun load() { CoroutineScope(Dispatchers.IO).launch { repo.fetch() } }
+      }
+
+      // RIGHT — platform provides appropriate scope
+      class RightVM(private val repo: UserRepository, private val scope: CoroutineScope) {
+          fun load() { scope.launch(Dispatchers.Default) { withContext(Dispatchers.IO) { repo.fetch() } } }
+      }
+      ```
+
+      ### Mistake 5: SKIE Configuration Errors
+
+      ```kotlin
+      // WRONG — missing SKIE plugin and configuration
+      plugins { id("org.jetbrains.kotlin.multiplatform") /* forgot co.touchlab.skie */ }
+      iosArm64().binaries.framework { baseName = "Shared" } // No SKIE config
+
+      // RIGHT — SKIE properly configured
+      plugins { id("org.jetbrains.kotlin.multiplatform"); id("co.touchlab.skie") }
+      iosArm64().binaries.framework { baseName = "Shared"; isStatic = true }
+      skie { features { /* StateFlow → AsyncSequence, sealed → enum, suspend → async */ } }
+      ```
+
+      ### Mistake 6: Gradle Version Drift
+
+      ```yaml
+      Symptoms: NoClassDefFoundError (iOS), IncompatibleClassChangeError (Android)
+      Prevention:
+        - Single version catalog (libs.versions.toml)
+        - kotlin("bom") for stdlib alignment
+        - ./gradlew :shared:dependencies to inspect transitive deps
+      ```
+
+      ### KMP Insight
+
+      Most KMP mistakes stem from treating it like Flutter or React Native —
+      frameworks that own the full stack. KMP is a shared library pattern in
+      a monorepo. When in doubt, ask: "would this design make sense if the
+      shared module were a third-party library consumed by our apps?"

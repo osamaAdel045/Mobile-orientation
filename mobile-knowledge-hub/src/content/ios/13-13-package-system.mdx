@@ -1,0 +1,142 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+      <StatItem value="SPM" label="Modern (2018)" />
+      <StatItem value="CocoaPods" label="Legacy (2011)" />
+      <StatItem value="XCFramework" label="Binary Dist." />
+      <StatItem value="SPM Plugins" label="Build Ext." />
+    </StatGrid>
+
+    ### Swift Package Manager
+
+    SPM uses a `Package.swift` manifest to declare targets, dependencies, and products. It resolves
+    dependencies via Git URLs and semantic versioning, producing an `xcworkspace`-free graph.
+    Resolution is deterministic thanks to `Package.resolved` (the lockfile equivalent).
+
+    ```swift
+    // swift-tools-version: 5.9
+    import PackageDescription
+
+    let package = Package(
+        name: "NetworkingKit",
+        platforms: [.iOS(.v16), .macOS(.v13)],
+        products: [
+            .library(name: "NetworkingKit", targets: ["NetworkingKit"]),
+            .library(name: "NetworkingKitMock", targets: ["NetworkingKitMock"]),
+        ],
+        dependencies: [
+            .package(url: "https://github.com/Alamofire/Alamofire", from: "5.8.0"),
+            .package(url: "https://github.com/apple/swift-log", exact: "1.5.3"),
+            .package(path: "../InternalAnalytics"),
+        ],
+        targets: [
+            .target(
+                name: "NetworkingKit",
+                dependencies: [
+                    .product(name: "Alamofire", package: "Alamofire"),
+                    .product(name: "Logging", package: "swift-log"),
+                ],
+                swiftSettings: [
+                    .enableUpcomingFeature("BareSlashRegexLiterals"),
+                    .unsafeFlags(["-Xfrontend", "-enable-actor-data-race-checks"]),
+                ]
+            ),
+            .target(
+                name: "NetworkingKitMock",
+                dependencies: ["NetworkingKit"],
+                resources: [.process("Fixtures")]
+            ),
+            .testTarget(
+                name: "NetworkingKitTests",
+                dependencies: ["NetworkingKitMock"]
+            ),
+        ]
+    )
+    ```
+
+    #### Dependency Resolution
+
+    SPM uses three version constraints: **Exact** (`.exact: "2.1.0"`), **Up-to-next-minor**
+    (`.package(url:, from:)` — allows minor/patch bumps), and **Branch** (`.branch: "main"`,
+    floating). Swift 5.5 added the **Package Registry Service** (SE-0292), enabling
+    centralized metadata-based resolution without cloning every dependency's Git repo.
+
+    ```ascii
+    ┌──────────────────────────────────────────────────────┐
+    │                   Package.swift                       │
+    │  ┌──────────────┐  ┌──────────────┐  ┌────────────┐ │
+    │  │   Products    │  │  Dependencies │  │  Targets    │ │
+    │  │ - Library     │  │ - Git URLs   │  │ - .target   │ │
+    │  │ - Executable  │  │ - Registry   │  │ - .testTarget│ │
+    │  │ - Plugin      │  │ - Path(dev)  │  │ - .binaryTarget│
+    │  └──────────────┘  └──────────────┘  └────────────┘ │
+    │                              ▼                        │
+    │                    ┌──────────────────┐               │
+    │                    │ Package.resolved │               │
+    │                    │ (Lockfile)       │               │
+    │                    └──────────────────┘               │
+    └──────────────────────────────────────────────────────┘
+    ```
+
+    <Callout title="Prefer SPM Over CocoaPods">
+      SPM is Apple-native, requires no Ruby runtime, and avoids Xcode workspace merge conflicts.
+      CocoaPods generates an `.xcworkspace` that pollutes git diffs. For new projects, SPM is
+      Apple's recommended choice. CocoaPods still appears in legacy Obj-C codebases where
+      podspecs bundle prebuilt binaries SPM cannot yet replace.
+    </Callout>
+
+    ### SPM Plugins (Swift 5.6+)
+
+    **Build Tool Plugins** run during compilation — code generation (Sourcery, SwiftGen),
+    linting (SwiftLint). **Command Plugins** run explicitly via `swift package plugin` —
+    swift-format, DocC generation, test-report aggregation.
+
+    ```swift
+    // swift-tools-version: 5.9
+    import PackageDescription
+
+    let package = Package(
+        name: "MyApp",
+        dependencies: [
+            .package(url: "https://github.com/realm/SwiftLint", from: "0.54.0"),
+        ],
+        targets: [
+            .target(
+                name: "MyApp",
+                plugins: [.plugin(name: "SwiftLintPlugin", package: "SwiftLint")]
+            ),
+        ]
+    )
+    ```
+
+    ### CocoaPods (Legacy)
+
+    Uses a Ruby DSL `Podfile`. Pods land in `Pods/` and are linked via `xcworkspace`. Still
+    prevalent in Obj-C projects and those consuming private podspecs from specs repos.
+
+    ```ruby
+    platform :ios, '16.0'
+    use_frameworks! :linkage => :static
+
+    target 'MyApp' do
+      pod 'Alamofire', '~> 5.8'
+      pod 'Firebase/Crashlytics', '10.18'
+      target 'MyAppTests' do
+        inherit! :search_paths
+      end
+    end
+    ```
+
+    ### XCFramework
+
+    Apple's binary distribution format bundling multiple platform slices in one `.xcframework`.
+    Essential for closed-source libraries. Create via `xcodebuild -create-xcframework` with
+    separate `-framework` flags for device and simulator builds. Integrate into SPM via
+    `.binaryTarget(name:path:)`.
+
+    ### Cross-Platform Comparison
+
+    SPM's Git-URL-based model has no central public registry like npmjs.org or pub.dev. The
+    Package Registry spec exists but Apple's own registry is scoped to first-party packages.
+    Resolution is inherently network-bound to Git hosts, whereas npm and pub.dev resolve
+    metadata via fast JSON registry APIs.

@@ -1,0 +1,114 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Official Plugins" value="50+ maintained by Ionic" />
+  <StatItem label="Cordova Compatible" value="1000+ plugins available" />
+  <StatItem label="Custom Plugin" value="TS + Kotlin + Swift" />
+  <StatItem label="PWA Fallback" value="Automatic per-plugin check" />
+</StatGrid>
+
+### Plugin Architecture
+
+Capacitor plugins bridge JavaScript to native SDKs through a three-layer architecture. The TypeScript interface defines the public API, the native layer implements it per platform, and the bridge serializes calls as JSON over the WebView message queue:
+
+```kotlin
+// Kotlin (Android)
+@CapacitorPlugin(name = "Camera")
+class CameraPlugin : Plugin() {
+  @PluginMethod
+  fun getPhoto(call: PluginCall) {
+    val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+    startActivityForResult(call, intent, "captureResult")
+  }
+}
+```
+
+```swift
+// Swift (iOS)
+@objc(CameraPlugin)
+class CameraPlugin: CAPPlugin {
+  @objc func getPhoto(_ call: CAPPluginCall) {
+    let picker = UIImagePickerController()
+    picker.sourceType = .camera
+    // ... native capture flow
+    call.resolve(["uri": imageUri.absoluteString])
+  }
+}
+```
+
+Plugins are **lazy-loaded** — the native code is only loaded when JavaScript first imports the plugin. This keeps cold-start time unaffected by plugins the user hasn't interacted with. Capacitor's auto-linking via `npx cap sync` detects installed npm packages and wires the native code automatically.
+
+### Custom Plugin Development
+
+Creating a custom Capacitor plugin requires defining the TypeScript interface, then implementing it in Kotlin and Swift. The CLI scaffolds these files automatically:
+
+```bash
+npx cap plugin:create my-plugin
+# Creates: my-plugin/src/{index.ts,definitions.ts}
+#          my-plugin/android/.../MyPluginPlugin.kt
+#          my-plugin/ios/.../MyPluginPlugin.swift
+```
+
+```typescript
+// definitions.ts — TypeScript API contract
+export interface EchoOptions { value: string; }
+export interface MyPluginPlugin {
+  echo(options: EchoOptions): Promise<{ value: string }>;
+}
+```
+
+The native `@PluginMethod` decorator maps each function to a callable method from JavaScript. Capacitor handles argument serialization and call routing. Plugin methods can call `call.resolve()` on success, `call.reject()` with an error message, or use `call.resolve(result)` with a dictionary of return values.
+
+### Cordova Plugin Compatibility
+
+Capacitor maintains a compatibility layer for Cordova plugins — `cordova-plugin-*` packages work with minimal modification. This gives Ionic access to Cordova's 1000+ plugin ecosystem:
+
+```bash
+npm install cordova-plugin-inappbrowser
+npx cap sync
+```
+
+<Callout type="warning">
+  Not all Cordova plugins work perfectly under Capacitor. Plugins relying on `cordova.exec()` synchronous returns, deprecated Android APIs, or Cordova-specific lifecycle hooks may need patching. Test each plugin thoroughly against your target platform versions before relying on it in production.
+</Callout>
+
+### PWA Fallback
+
+Capacitor plugins implement platform checks so the same code degrades gracefully when running as a PWA in a browser. The idiomatic guard is `Capacitor.isPluginAvailable()`:
+
+```typescript
+import { Capacitor } from '@capacitor/core';
+
+async function takePhoto() {
+  if (!Capacitor.isPluginAvailable('Camera')) {
+    // PWA fallback — use web platform APIs
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.click();
+    return;
+  }
+  return Camera.getPhoto({ resultType: CameraResultType.Uri });
+}
+```
+
+Official Capacitor plugins document their PWA support level. Some provide web-based implementations that match the native API; others throw when called from a browser context. Always test the PWA path independently with Chrome DevTools device emulation.
+
+```
+┌──────────────┬────────────────┬────────────────────┬──────────────┐
+│ Aspect       │ Capacitor      │ Cordova            │ PWA          │
+├──────────────┼────────────────┼────────────────────┼──────────────┤
+│ Plugin API   │ TS + Kotlin    │ JS + plugin.xml    │ Web API      │
+│              │ + Swift        │                    │              │
+│ Native       │ JSON over      │ cordova.exec()     │ N/A          │
+│ bridge       │ message queue  │ (needs polyfill)   │              │
+│ Loading      │ Lazy on first  │ Eager at           │ Per-plugin   │
+│              │ import         │ app startup        │ check        │
+│ Auto-linking │ npx cap sync   │ Manual config.xml  │ N/A          │
+│              │ (automated)    │                    │              │
+└──────────────┴────────────────┴────────────────────┴──────────────┘
+```
+
+### Pitfalls
+
+Capacitor plugin calls throw on platforms where the plugin isn't installed — always guard with `isPluginAvailable` or wrap in try/catch. The auto-linking in `npx cap sync` only detects plugins listed in `package.json`; manually-installed native SDKs need configuration in the native project files. Cordova plugins that manipulate the DOM directly may conflict with the WebView's lifecycle in ways unique to Capacitor's render loop.

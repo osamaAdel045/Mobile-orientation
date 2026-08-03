@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      ### The State Management Spectrum
+
+      Flutter offers approaches from local widget-level to global app-level state. The right choice depends on scope, complexity, and team size.
+
+      ```
+      Ephemeral (local) ←──────────────────────────→ Global (shared)
+
+      setState      ValueNotifier     Provider          BLoC
+        ↓              ↓                ↓                 ↓
+      form field    single value   InheritedWidget   event-stream
+      animation     reactive       wrapper for       architecture
+      controller    observable     simple DI         complex logic
+
+      ChangeNotifier  GetX          MobX             Riverpod
+          ↓             ↓             ↓                 ↓
+      observable    reactive      observable        compile-time
+      object +      state with    objects with      safe DI +
+      notifyListeners minimal      auto-track       state mgmt
+      ```
+
+### ValueNotifier & ChangeNotifier
+
+      Flutter's built-in reactive primitives require no package dependency. `ValueNotifier<T>` is the simplest reactive container — a single value that notifies listeners on change. `counter.value++` triggers rebuilding of all listening widgets.
+
+      ```dart
+      final counter = ValueNotifier<int>(0);
+      class CounterWidget extends StatelessWidget {
+        const CounterWidget({super.key});
+        @override
+        Widget build(BuildContext context) {
+          return ValueListenableBuilder<int>(
+            valueListenable: counter,
+            builder: (context, value, child) => Text('Count: $value'),
+          );
+        }
+      }
+      ```
+
+      `ChangeNotifier` extends to multiple properties — call `notifyListeners()` after mutation. Wrap in an `InheritedWidget` for tree-wide sharing, which is exactly what Provider does under the hood.
+
+### BLoC Pattern: Complete Production Example
+
+      BLoC separates presentation from business logic using Dart streams. UI dispatches events, BLoC processes them, emits new states. BLoCs are pure Dart — testable without Flutter widgets.
+
+      ```dart
+      sealed class LoginEvent {}
+      class LoginUsernameChanged extends LoginEvent {
+        final String username;
+        LoginUsernameChanged(this.username);
+      }
+      class LoginSubmitted extends LoginEvent {}
+
+      class LoginState {
+        final String username, password;
+        final bool isLoading;
+        final String? errorMessage;
+        const LoginState({this.username = '', this.password = '',
+          this.isLoading = false, this.errorMessage});
+        LoginState copyWith({String? username, String? password,
+          bool? isLoading, String? errorMessage}) => LoginState(
+          username: username ?? this.username, password: password ?? this.password,
+          isLoading: isLoading ?? this.isLoading, errorMessage: errorMessage ?? this.errorMessage);
+      }
+
+      class LoginBloc extends Bloc<LoginEvent, LoginState> {
+        final AuthRepository _authRepository;
+        LoginBloc(this._authRepository) : super(const LoginState()) {
+          on<LoginUsernameChanged>((event, emit) =>
+            emit(state.copyWith(username: event.username)));
+          on<LoginSubmitted>(_onSubmitted);
+        }
+        Future<void> _onSubmitted(_, Emitter<LoginState> emit) async {
+          emit(state.copyWith(isLoading: true, errorMessage: null));
+          try {
+            await _authRepository.login(state.username, state.password);
+            emit(state.copyWith(isLoading: false));
+          } on AuthenticationException catch (e) {
+            emit(state.copyWith(isLoading: false, errorMessage: e.message));
+          }
+        }
+      }
+      ```
+
+      Three rules: events are the only input, state is the only output, zero Flutter in business logic. Inject a mock repository, dispatch events, assert state transitions.
+
+### Riverpod: Provider Types Deep Dive
+
+      Riverpod providers are compile-time-safe top-level declarations with unique identity — no `ProviderNotFoundException` at runtime. No `BuildContext` needed to read state.
+
+      ```dart
+      final dioProvider = Provider<Dio>((ref) =>
+        Dio(BaseOptions(baseUrl: 'https://api.example.com')));
+      final counterProvider = StateProvider<int>((ref) => 0);
+      final authProvider = StateNotifierProvider<AuthNotifier, AuthState>(
+        (ref) => AuthNotifier(ref.watch(dioProvider)));
+      final userProfileProvider = FutureProvider<User>((ref) async {
+        final response = await ref.watch(dioProvider).get('/user/profile');
+        return User.fromJson(response.data);
+      });  // .when(data: ..., loading: ..., error: ...)
+      final locationProvider = StreamProvider<LatLng>((ref) =>
+        LocationService().locationStream);
+      final searchProvider = FutureProvider.autoDispose<List<Result>>((ref) {
+        return SearchService().search(ref.watch(searchQueryProvider));
+      });  // Cancels the Future when user leaves the screen
+      ```
+
+### Decision Matrix: When to Use What
+
+      ```
+      Approach        Lines   Team  Async   Testability  Boilerplate
+      ─────────       ─────   ────  ─────   ───────────  ───────────
+      setState        <1K      1    Manual  Built-in     None
+      ValueNotifier   <5K     1-2   Manual  Easy         Minimal
+      ChangeNotifier  <10K    1-3   Manual  Easy         Low
+      Provider        <20K    1-5   With pkg Moderate    Low
+      BLoC            Any    3-20+ Built-in Excellent    High
+      Riverpod        Any    1-15  Built-in Excellent    Moderate
+      ```
+
+      **Decision flow:** Local to one widget → `setState`. 1-3 widgets on one page → `ValueNotifier`. Page-wide with 3+ consumers → `ChangeNotifier`/`Provider`. Crosses feature boundaries or involves async → `Riverpod`. Large team, complex logic → `BLoC`.
+
+### Anti-Patterns
+
+      - **Mutable state in Widgets:** Widgets are immutable. State belongs in containers, never in `StatelessWidget` fields or statics.
+      - **Business logic in widgets:** Widgets are pure presentation — receive data and render. Extract branching logic.
+      - **Over-watching Riverpod:** Coarse providers cause unnecessary rebuilds. Split into fine-grained providers per data field.
+      - **Not disposing controllers:** `StreamSubscription`, `AnimationController`, `TextEditingController` must be disposed.
+      <Callout title="Production state rule:">
+        In a well-structured Flutter app, zero widgets extend `StatefulWidget`. All state lives in providers or BLoCs; widgets are `StatelessWidget` or `ConsumerWidget`/`BlocBuilder`. This makes the widget tree entirely declarative — widgets never own state, they only render it.
+      </Callout>
+      ### Cross-Framework Comparison
+
+      **React Native:** `useState` maps to `setState`. Redux actions/reducers map to BLoC events/state. Zustand maps to Riverpod. React's edge is mature hook ecosystem — no Flutter equivalent to `useEffect` with dependency arrays.
+
+      **SwiftUI:** `@State` maps to `setState`. `@Observable` maps to `ChangeNotifier`. SwiftUI's property-level observation tracks individual reads; it does not notify on unchanged properties. Flutter's `ChangeNotifier` always notifies all listeners — manually split state. Riverpod achieves comparable granularity with more explicit declarations.
+
+      <DecisionMatrix
+        scores={[
+          { label: 'Local State Simplicity', score: 9 },
+          { label: 'Global State Safety', score: 8 },
+          { label: 'Async State Handling', score: 8 },
+          { label: 'Testability', score: 9 },
+          { label: 'Learning Curve (simple→complex)', score: 7 },
+        ]}
+        pros="Full spectrum from setState to BLoC, first-class async via AsyncValue, compile-time safe providers (no runtime exceptions), BLoC pure Dart testable without Flutter, autoDispose prevents memory leaks"
+        cons="Too many choices confuse team standardization, BLoC boilerplate verbose for simple UIs, Riverpod provider taxonomy has steep learning curve, no built-in persistent state (add drift/hive/secure_storage)"
+      />

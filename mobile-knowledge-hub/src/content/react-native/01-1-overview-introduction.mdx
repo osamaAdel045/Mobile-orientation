@@ -1,0 +1,98 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid>
+      <StatItem value="Meta (Facebook)" label="Company" />
+      <StatItem value="JS / TypeScript" label="Language" />
+      <StatItem value="2015" label="Released" />
+      <StatItem value="MIT" label="License" />
+      <StatItem value="63k+" label="GitHub Stars" />
+      <StatItem value="7.5M+" label="Weekly npm Downloads" />
+    </StatGrid>
+
+    ### Core Philosophy: "Learn Once, Write Anywhere"
+
+    React Native is not a "write once, run anywhere" framework — it is a **learn once, write anywhere** framework. The distinction is critical. RN does not compile JavaScript to native widgets the way Flutter paints each pixel; instead, it maps your React component tree to **real platform-native UI components**: a `<View>` becomes `android.view.View` on Android and `UIView` on iOS, a `<Text>` becomes `TextView` and `UITextView`. The abstraction is React's declarative component model — not a cross-platform widget toolkit.
+
+    This means your knowledge of React (components, props, state, effects, re-rendering) transfers wholesale to mobile. But the visual output is native, not a webview or a custom paint surface. Each platform SDK is called directly through the Fabric renderer and Yoga layout engine, producing apps that feel indistinguishable from Swift/Kotlin counterparts.
+
+    <Callout title="Production Readiness">
+    React Native powers production apps at Meta (Facebook, Instagram, Marketplace), Microsoft (Office, Xbox), Shopify (Shop, Point of Sale), Discord, Coinbase, Pinterest, and Uber Eats. The New Architecture (JSI + Fabric + Turbo Modules) has been the default since 0.76, and Meta dogfoods the framework across its own apps — iOS and Android simultaneously. RN is not experimental or fading: it is actively maintained by a core team at Meta with contributions from Callstack, Shopify, Microsoft, and the community.
+    </Callout>
+
+    ### Why Meta Built React Native
+
+    In 2013, Meta faced a scaling problem. The Facebook iOS app was a webview-based wrapper called "Facebook for iOS" — slow, janky, and couldn't keep up with the platform's expectations. Meta had thousands of React web engineers but comparatively few mobile engineers. At an internal Hackathon, a team led by Jordan Walke prototyped what became React Native: a way to use React's declarative model to drive native iOS UI components.
+
+    The core insight was that React's virtual DOM reconciliation does not need a DOM. The diff algorithm could produce a set of mutations that any platform-specific renderer could apply — iOS views, Android views, even VR or terminal UIs. The Hackathon prototype became the public framework in March 2015, announced at React.js Conf. By 2016, Meta had shifted Facebook's Ads Manager to RN, and by 2019, the main Facebook app's Marketplace tab was RN-driven. Instagram followed, embedding RN screens alongside native screens.
+
+    ### The Old Architecture Problem
+
+    Before 0.76, React Native used a **Bridge** architecture that was fundamentally async:
+
+    ```
+    ┌─────────────────────────────────────────────────┐
+    │                  Old Architecture                  │
+    │                                                   │
+    │  ┌──────────┐         Bridge        ┌──────────┐ │
+    │  │   JS      │ ←── JSON serial ──→  │  Native   │ │
+    │  │  Thread   │     (async, binned)   │  Thread   │ │
+    │  │ (JSC/JIT) │ ←── JSON deserial ──→ │ (UI/Main) │ │
+    │  └──────────┘                        └──────────┘ │
+    │       │                               │           │
+    │  React reconciler                 Platform views  │
+    │  sends mutations                   apply updates  │
+    │                                                   │
+    │  Bottleneck: Every JS←→native call passes         │
+    │  through JSON.stringify + JSON.parse on a         │
+    │  message queue. No synchronous calls allowed.     │
+    └─────────────────────────────────────────────────┘
+    ```
+
+    The Bridge serialized every React state update into JSON messages, batched them, and sent them across to the native side asynchronously. This caused three problems: **startup latency** (the entire JS bundle had to be parsed and executed before a single native view appeared), **no synchronous APIs** (you could never ask "what is this view's height?" from JS synchronously — you needed callbacks), and **native module overhead** (every native module was loaded at startup, even if never used).
+
+    ### The New Architecture Transformation
+
+    Version 0.76 made the New Architecture the default. It replaces the Bridge with three pillars:
+
+    **JSI (JavaScript Interface):** Instead of serializing to JSON, JSI exposes C++ host objects directly to JavaScript. A JavaScript function can hold a direct C++ reference and call it synchronously — no message queue, no serialization. This is what makes synchronous methods like `NativeMethods.getBoundingClientRect()` possible.
+
+    **Fabric Renderer:** Fabric is React Native's concurrent renderer, analogous to React 18's reconciler (Fiber) for the web. It can prioritize updates: a user tapping a button gets rendered before a background data update finishes. Fabric communicates with the native side via JSI (sync) and provides the Shadow Tree — a mirrored layout tree computed on a background thread.
+
+    **Turbo Modules:** Native modules (camera, sensors, storage) are no longer registered at app startup. Turbo Modules are lazy-loaded on first import, and each module's TypeScript interface is code-generated from a spec file, ensuring type safety across the JS/native boundary.
+
+    ### When to Choose React Native
+
+    RN is a strong choice when: you have a React web team that needs to ship mobile (the talent leverage argument), you are building an MVP or v2 of a consumer app, your app prioritizes content display and business logic over animation-heavy interactions, you need native look-and-feel without webview compromises, or you are adding a mobile channel to an existing React web product and want to share types and logic.
+
+    RN is a weaker choice when: your app is a 3D game or VR experience, you need pixel-perfect custom animations at 120 fps (Flutter or native is better), your team has deep Swift/Kotlin expertise and no React experience, or you need the absolute smallest binary size (platform-native wins by ~5-10 MB).
+
+    ### Hello World
+
+    ```tsx
+    import React from 'react';
+    import { View, Text, StyleSheet } from 'react-native';
+
+    const App: React.FC = () => (
+      <View style={styles.container}>
+        <Text style={styles.title}>Hello, React Native</Text>
+        <Text style={styles.subtitle}>Running on {Platform.OS}</Text>
+      </View>
+    );
+
+    const styles = StyleSheet.create({
+      container: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: '#f5f5f5',
+      },
+      title: { fontSize: 24, fontWeight: '600', color: '#1a1a1a' },
+      subtitle: { fontSize: 16, color: '#666', marginTop: 8 },
+    });
+
+    export default App;
+    ```
+
+    Compare this to a React DOM equivalent — the component structure is identical; only the primitives (`View`/`Text`/`StyleSheet`) replace `div`/`span`/CSS. That is the "learn once" promise in action.
+
+    The same mental model — components, props, state, hooks, reconciliation — works unchanged. Platform-specific primitives (`Pressable`, `Modal`, `FlatList`) replace web equivalents (`button`, `dialog`, `div>map`), but the patterns are the same.

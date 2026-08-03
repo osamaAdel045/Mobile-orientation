@@ -1,0 +1,103 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      <StatGrid>
+<StatItem value="None" label="Native Compilation" />
+        <StatItem value="JavaScriptCore" label="iOS Engine" />
+        <StatItem value="V8 (JIT + TurboFan)" label="Android Engine" />
+        <StatItem value="file://" label="Asset Protocol" />
+        <StatItem value="Bundler (Vite/Webpack)" label="Build Tool" />
+</StatGrid>
+      
+### Build Process Flow
+
+      ```
+TypeScript / JSX / SCSS
+    ↓ Framework build (Angular CLI / Vite / Webpack)
+Optimized JS Bundle + CSS + HTML
+    ↓ Embedded in app binary as assets
+WebView loads assets from local file:// or http://localhost
+    ↓
+JS parsed & executed by WebView's JS engine
+    iOS: JavaScriptCore (NO JIT — interpreter-only in WKWebView)
+    Android: V8 (Chromium WebView, JIT + TurboFan compiler)
+```
+      
+### No Native Compilation
+
+This is the fundamental architectural difference between Ionic and every other mobile framework. **Your code is never compiled to native ARM instructions.** It remains JavaScript executed entirely by the WebView's JavaScript engine. Every event handler, every state update, every data transformation, every DOM manipulation — all of it runs through the JS engine, not the CPU's native instruction set.
+
+The practical consequences are significant:
+
+- **Build times are measured in seconds** — no LLVM compilation, no linking, no ARM64 code generation. The build step is pure JavaScript bundling: tree-shaking, minification, and code-splitting.
+- **CI/CD stays simple** — no Xcode or Android SDK build agents required for app code itself. Only the Capacitor native shell needs platform tooling, and that rarely changes.
+- **No native CPU throughput** — a tight loop processing 10,000 array items takes 50-200ms in JIT-less JavaScript versus 5-10ms in native Swift or Kotlin. CPU-bound work must be offloaded to native plugins on iOS.
+
+```bash
+# Ionic build cycle — no native compilation needed for app code
+npm run build
+# Output: www/ directory with static assets
+
+# Copy assets into the native project shells
+npx cap copy
+
+# Open native IDEs for the thin native wrapper
+npx cap open ios     # Opens Xcode with static assets bundled
+npx cap open android # Opens Android Studio with static assets bundled
+```
+
+### iOS: The JIT Restriction
+
+This is the most important performance constraint in Ionic development. **WKWebView in third-party apps does NOT have JIT compilation.** Apple reserves the JIT entitlement exclusively for Safari.app. JavaScriptCore runs in interpreter-only mode, meaning it parses and executes each JavaScript instruction without the dynamic optimization that makes V8 fast on Android.
+
+```typescript
+// This loop runs 3-5x slower on iOS than Android
+function processLargeDataset(items: number[]): number[] {
+  const results: number[] = []
+  for (let i = 0; i < items.length; i++) {
+    results.push(heavyComputation(items[i]))
+  }
+  return results
+}
+
+// iOS: ~150ms for 10,000 items (interpreter-only)
+// Android: ~35ms for 10,000 items (V8 with JIT + TurboFan)
+// Native Swift: ~8ms for 10,000 items (compiled ARM64)
+```
+
+<Callout variant="warning">
+  **The iOS JIT gap is not theoretical.** In interpreter-only mode, JavaScriptCore does not inline functions, does not generate optimized machine code for hot paths, and cannot specialize polymorphic function calls. A function called 10,000 times in a loop runs the same interpretive overhead on the 10,000th call as it did on the first. The only workaround: offload CPU-intensive work to native Capacitor plugins where the code runs as compiled Swift or Kotlin with full JIT or AOT optimization.
+</Callout>
+
+### Android: The Full V8 Advantage
+
+Android's WebView is based on Chromium and includes the full V8 pipeline: a fast interpreter (Ignition), a baseline JIT compiler, and the TurboFan optimizing compiler. V8 identifies hot functions during execution, compiles them to optimized machine code, and can deoptimize and recompile when type assumptions change. The Android WebView updates independently from the OS via Google Play Services, so most devices run a recent V8 version with modern optimizations.
+
+### Bundle Optimization Strategies
+
+Without native compilation, the JavaScript bundle size directly impacts startup time. Every kilobyte is parsed and executed on the main thread — and on iOS, parsing is 3-5x slower.
+
+```typescript
+// Lazy-load heavy modules to reduce initial parse cost
+import { lazy, Suspense } from 'react'
+
+const HeavyDashboard = lazy(() => import('./pages/Dashboard'))
+
+function App() {
+  return (
+    <ion-app>
+      <ion-router-outlet>
+        <Suspense fallback={<ion-spinner />}>
+          <HeavyDashboard />
+        </Suspense>
+      </ion-router-outlet>
+    </ion-app>
+  )
+}
+```
+
+Key strategies for Ionic: lazy-load every route (Angular loadChildren or React lazy + Suspense), tree-shake unused Ionic components by importing only what you use, replace large utility libraries like Moment.js with native Web APIs (Intl.DateTimeFormat), and use differential loading to ship modern ES2017+ syntax to modern WebViews while serving ES5 polyfills only to older ones.
+
+### Pitfall: The file:// Origin
+
+Ionic loads assets from the file:// protocol, which restricts several Web APIs that assume an https:// origin. Service Workers are unavailable on file://. WebRTC features may not work correctly. Cookies behave differently because there is no domain. localStorage and IndexedDB work but their data is not backed up by iCloud or Google Backup by default. Capacitor provides native implementations that wrap many of these gaps — but if your code depends on a web API requiring a secure origin, verify it on device early in development.

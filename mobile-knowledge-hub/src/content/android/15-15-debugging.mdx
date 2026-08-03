@@ -1,0 +1,145 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    Android debugging spans real-time profiling in Android Studio, structured log analysis
+    via Logcat, declarative StrictMode enforcement, and third-party crash reporters.
+
+    <StatGrid>
+        <StatItem value="4" label="Profiler panes: CPU, Memory, Network, Energy" />
+        <StatItem value="8" label="Logcat buffer levels (Verbose through Assert)" />
+        <StatItem value="7.0+" label="Perfetto API level requirement" />
+        <StatItem value="100MB" label="Typical HPROF heap dump size (release app)" />
+    </StatGrid>
+
+    ### Android Studio Profiler
+
+    The unified profiler records CPU, memory, network, and energy traces. **CPU Profiler**
+    captures method traces as flame charts — zoom into a dropped frame to see which method
+    consumed the budget. The **Memory Profiler** surfaces allocations grouped by type;
+    filter heap dumps by `Activity` name after `onDestroy` to find leaks:
+
+    ```kotlin
+    fun dumpHeap(path: String) {
+        Debug.dumpHprofData(path)
+    }
+    ```
+
+    **Network Profiler** shows each HTTP request's timeline. Combine with OkHttp's logging
+    interceptor to correlate slow requests with backend latency:
+
+    ```kotlin
+    val client = OkHttpClient.Builder()
+        .addInterceptor(HttpLoggingInterceptor { message ->
+            Log.d("NETWORK", message)
+        }.apply {
+            level = HttpLoggingInterceptor.Level.BASIC
+        })
+        .build()
+    ```
+
+    ### Logcat — Structured Logging
+
+    Logcat buffers five tiers: `V`, `D`, `I`, `W`, `E`. Timber wraps the Android logger
+    with tag-inference and compile-time stripping:
+
+    ```kotlin
+    class CheckoutViewModel : ViewModel() {
+        fun processPayment(token: String) {
+            Timber.d("Processing payment for token=%s", token.takeLast(4))
+        }
+    }
+    ```
+
+    ```bash
+    # Logcat essentials
+    adb logcat --pid=$(adb shell pidof -s com.example.app)
+    adb logcat -v color -s "CheckoutViewModel" "*:E"
+    adb logcat -d -f /sdcard/crash.log && adb pull /sdcard/crash.log
+    ```
+
+    <Callout title="Never log Personally Identifiable Information">
+
+        Logcat is world-readable on production devices. Android 14+ enforces `READ_LOGS`
+        permission, but many OEMs still expose it. Strip debug logs with ProGuard and
+        audit every `Log.e` call for PII before release builds.
+
+    </Callout>
+
+    ### Compose Layout Inspector
+
+    Shows the composable tree with recomposition counts, skipping decisions, and layout
+    bounds. The recomposition heatmap paints green (composed once), yellow (2-5),
+    orange (6-20), and red (21+ recompositions):
+
+    ```kotlin
+    composeCompiler {
+        reportsDestination = layout.buildDirectory.dir("compose-reports")
+        metricsDestination = layout.buildDirectory.dir("compose-metrics")
+    }
+    ```
+
+    ### Systrace / Perfetto
+
+    Perfetto records system-wide traces: CPU scheduling, binder IPC, GPU composition, and
+    disk I/O. Attach custom trace spans visible in the Perfetto UI:
+
+    ```kotlin
+    class ImageLoader {
+        suspend fun load(url: String): Bitmap {
+            Trace.beginSection("ImageLoader.load")
+            try {
+                return decode(httpClient.download(url))
+            } finally {
+                Trace.endSection()
+            }
+        }
+    }
+    ```
+
+    ```bash
+    adb shell perfetto -o /data/misc/perfetto-traces/trace.perfetto -t 10s \
+        sched freq idle am wm gfx view binder_driver
+    ```
+
+    ### Crash Reporting with Firebase Crashlytics
+
+    Captures uncaught exceptions, ANRs, and NDK crashes with breadcrumbs:
+
+    ```kotlin
+    FirebaseCrashlytics.getInstance().apply {
+        setCustomKey("checkout_flow", "payment_selection")
+        log("User tapped 'Pay Now' button")
+    }
+    ```
+
+    ### StrictMode
+
+    Detects disk I/O and network calls on the main thread at development time:
+
+    ```kotlin
+    class DebugApp : Application() {
+        override fun onCreate() {
+            super.onCreate()
+            if (BuildConfig.DEBUG) {
+                StrictMode.setThreadPolicy(
+                    StrictMode.ThreadPolicy.Builder()
+                        .detectDiskReads()
+                        .detectDiskWrites()
+                        .detectNetwork()
+                        .penaltyLog()
+                        .penaltyDialog()
+                        .build()
+                )
+                StrictMode.setVmPolicy(
+                    StrictMode.VmPolicy.Builder()
+                        .detectActivityLeaks()
+                        .detectLeakedClosableObjects()
+                        .penaltyLog()
+                        .build()
+                )
+            }
+        }
+    }
+    ```
+
+    Every StrictMode violation generates a log line with a stack trace. CI can grep for
+    violations and fail the build to enforce main-thread discipline.

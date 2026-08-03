@@ -1,0 +1,119 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Android Debug Tool" value="Chrome DevTools" />
+  <StatItem label="iOS Debug Tool" value="Safari Web Inspector" />
+  <StatItem label="Live Reload Protocol" value="WebSocket + File Watch" />
+  <StatItem label="Crash Report Format" value="PLCrashReporter / Tombstone" />
+</StatGrid>
+
+### Chrome DevTools for Android
+
+When debugging on Android, the app's WebView is accessible through `chrome://inspect`. Connect the device via USB with USB debugging enabled in Developer Options, and Chrome discovers all debuggable WebView instances automatically.
+
+```
+chrome://inspect
+  └─ USB Devices
+       └─ com.example.app
+            └─ file:///android_asset/public/index.html
+                ├─ Elements (DOM Inspector)
+                ├─ Console (Runtime errors, logging)
+                ├─ Sources (JS breakpoints, step-through)
+                ├─ Network (XHR, fetch, asset timing)
+                ├─ Performance (FPS, frame timeline)
+                ├─ Memory (heap snapshots, allocations)
+                └─ Application (localStorage, IndexedDB, cookies)
+```
+
+```bash
+# Enable USB debugging on the device
+adb devices                     # Verify device is listed
+adb reverse tcp:3000 tcp:3000   # Forward local dev server to device
+```
+
+The **Performance** panel is indispensable for identifying frame drops and layout thrashing. Record a session while scrolling through your app, then inspect the flame chart for long tasks exceeding 16ms.
+
+<Callout type="tip" title="Console Inspection on Device">
+  `console.log` output from your app appears in both Chrome DevTools and the native device log. On iOS, use `log stream --predicate 'eventMessage contains "console"'` in Terminal to capture console output without Safari. For Android, `adb logcat -s chromium:I` filters WebView logs.
+</Callout>
+
+### Safari Web Inspector for iOS
+
+iOS debugging requires Safari on macOS. Enable **Web Inspector** in Safari's Develop menu, then connect your iOS device via USB. The app appears under **Develop > [Device Name] > [App Name]**.
+
+```typescript
+// Enable WKWebView inspection in iOS
+// This is automatic for debug builds in Capacitor
+// For release builds, add to Info.plist:
+//
+// <key>WKJavaScriptExceptionLoggingEnabled</key>
+// <true/>
+```
+
+Safari Web Inspector provides equivalent panels to Chrome DevTools (Elements, Console, Sources, Network, Timelines, Storage) with slight UI differences. The **Timeline** tab replaces Chrome's Performance panel, showing a real-time recording of JS execution, layout, and rendering.
+
+### Capacitor Live Reload
+
+Capacitor's live reload (via `npx cap run` with `--livereload`) injects a WebSocket client into the WebView. When source files change, the dev server signals the app to reload the current page, preserving Capacitor plugin state.
+
+```bash
+# Start live reload for iOS
+npx cap run ios --livereload --external
+
+# Start live reload for Android
+npx cap run android --livereload --external
+
+# With custom dev server URL
+npx cap run ios --livereload-url=http://192.168.1.100:5173
+```
+
+The `--external` flag binds the dev server to `0.0.0.0`, making it accessible from devices on the same network. This allows debugging on a physical device while keeping the hot-reload cycle without re-deploying the native app.
+
+### Crash Reporting Integration
+
+Capacitor apps can integrate native crash reporters (Sentry, Firebase Crashlytics) through community plugins or direct native SDK integration.
+
+```typescript
+// Sentry integration
+import * as Sentry from '@sentry/capacitor'
+
+Sentry.init({
+  dsn: 'https://examplePublicKey@o0.ingest.sentry.io/0',
+  tracesSampleRate: 1.0,
+})
+
+// Capture a handled error
+try {
+  await riskyOperation()
+} catch (err) {
+  Sentry.captureException(err)
+}
+```
+
+```bash
+# Sentry uploads source maps automatically
+npx sentry-capacitor-upload
+  --bundle ./dist
+  --source-map ./dist
+```
+
+Native crashes (Swift/Java exceptions) are captured by Sentry's native SDK shim, while JavaScript errors are intercepted via `window.onerror` and `window.onunhandledrejection`.
+
+### Debugging Plugin Calls
+
+Capacitor plugins communicate via `CAPPluginCall` (iOS) or `PluginCall` (Android). Enable verbose plugin logging to trace bridge calls:
+
+```typescript
+import { Capacitor } from '@capacitor/core'
+
+Capacitor.setLogging(true)
+// Now every bridge call is logged to the native console
+//   → "To native (CapacitorCamera): getPhoto"
+//   ← "From native (CapacitorCamera): returnUri"
+```
+
+### Common Debugging Pitfalls
+
+- **Missing CORS headers** when loading remote assets in the WebView on device. Use Capacitor's HTTP plugin instead of `fetch` for network requests to native origins.
+- **Release builds hide console errors** -- the WebView console is suppressed in production. Attach Safari/Chrome DevTools to a release build only if the build includes `WKJavaScriptExceptionLoggingEnabled` or `android:debuggable="true"`.
+- **Hot module replacement fails on device** -- ensure the dev server is accessible over WiFi and the device can reach the host IP. Firewall rules may block port 5173.

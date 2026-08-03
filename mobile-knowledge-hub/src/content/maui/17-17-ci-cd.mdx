@@ -1,0 +1,135 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem value="iOS/Android/Win" label="Platform Targets" />
+  <StatItem value="macOS" label="iOS Build Runner" />
+  <StatItem value="Fastlane match" label="Code Signing" />
+  <StatItem value="Multi-stage" label="Deployment Model" />
+</StatGrid>
+
+### GitHub Actions for .NET MAUI
+
+GitHub Actions provides the most flexible CI/CD for MAUI projects. A typical workflow builds all three platforms using a build matrix, signs the iOS IPA with Fastlane, and publishes artifacts for distribution.
+
+```yaml
+name: MAUI Build
+on: [push, pull_request]
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        platform: [ios, android, windows]
+    runs-on: ${{ matrix.platform == 'ios' && 'macos-latest'
+                 || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Restore
+        run: dotnet restore
+      - name: Build ${{ matrix.platform }}
+        run: |
+          dotnet build -f net8.0-${{ matrix.platform }} \
+            -c Release \
+            -p:ApplicationId=com.example.app
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: maui-${{ matrix.platform }}
+          path: bin/Release/net8.0-${{ matrix.platform }}/
+```
+
+<Callout type="warning">
+  iOS builds require a macOS runner — GitHub's `macos-latest` or a self-hosted
+  Mac mini. The Apple Distribution certificate and provisioning profile must be
+  present on the runner's keychain. Use Fastlane `match` to sync signing
+  identities from an encrypted Git repo instead of manual certificate management.
+</Callout>
+
+### Azure Pipelines — First-Class MAUI Support
+
+Azure Pipelines offers dedicated MAUI build tasks through the `DotNetCoreCLI` task and the Microsoft-hosted macOS agent pool. It supports multi-stage release pipelines with manual approval gates. The advantage is built-in environment-based approval gates — ideal for enterprise compliance before store submission. Azure DevOps also integrates directly with App Center for test distribution using the `AppCenterDistribute@3` task.
+
+### iOS Code Signing — Fastlane match
+
+iOS code signing is the most error-prone step in MAUI CI/CD. Fastlane `match` stores certificates and provisioning profiles in a private Git repo, encrypted with a single passphrase, and installs them on any CI runner.
+
+```bash
+# Install fastlane on the CI runner
+gem install fastlane
+
+# Initialize match (one-time)
+fastlane match appstore \
+  --git-url git@github.com:company/certs.git \
+  --app-identifier com.example.app
+
+# Build with match-signed identity
+dotnet build -f net8.0-ios -c Release \
+  -p:CodesignKey="Apple Distribution" \
+  -p:CodesignProvision="match AppStore com.example.app"
+```
+
+### Android Signing
+
+Android signing uses a keystore file and `jarsigner` / `apksigner`. Store the keystore as a base64-encoded GitHub secret and decode it during CI.
+
+```yaml
+- name: Decode Keystore
+  run: echo "${{ secrets.ANDROID_KEYSTORE }}" | base64 -d > keystore.jks
+
+- name: Sign Android
+  run: |
+    dotnet build -f net8.0-android -c Release \
+      -p:AndroidKeyStore=true \
+      -p:AndroidSigningKeyStore=keystore.jks \
+      -p:AndroidSigningKeyAlias=${{ secrets.KEY_ALIAS }} \
+      -p:AndroidSigningKeyPass=${{ secrets.KEY_PASS }} \
+      -p:AndroidSigningStorePass=${{ secrets.STORE_PASS }}
+```
+
+### App Distribution Flow
+
+| Stage | Tool | Output |
+|---|---|---|
+| CI Build | GitHub Actions / Azure Pipelines | IPA, APK/AAB, MSIX |
+| Code Signing | Fastlane match / Keystore | Signed binaries |
+| Test Distribution | App Center / Firebase App Distribution | Internal tester build |
+| Store Upload | Fastlane supply (Google Play) / pilot (TestFlight) | Store submission |
+| Production | App Store Connect / Google Play Console | Live release |
+
+### Versioning Strategy
+
+Automate version numbering from git tags combined with CI build numbers to keep builds traceable.
+
+```yaml
+- name: Set Version
+  run: |
+    VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")
+    BUILD=${{ github.run_number }}
+    echo "VERSION=$VERSION" >> $GITHUB_ENV
+    echo "BUILD=$BUILD" >> $GITHUB_ENV
+
+- name: Build with Version
+  run: |
+    dotnet build -c Release \
+      -p:ApplicationDisplayVersion=$VERSION \
+      -p:ApplicationVersion=$BUILD
+```
+
+<Callout type="tip">
+  Use a `Directory.Build.props` file at the repo root to centralize common
+  MSBuild properties — `ApplicationId`, `ApplicationDisplayVersion`,
+  `ApplicationVersion`. CI then only needs to override `ApplicationVersion`
+  (the build number) while the rest lives in version control.
+</Callout>
+
+### Comparison — CI/CD Platforms
+
+| Feature | GitHub Actions | Azure Pipelines | App Center |
+|---|---|---|---|
+| MAUI support | Manual YAML | First-class tasks | Deprecated MAUI |
+| macOS runners | 5 concurrent (free) | 10 concurrent (free) | Managed |
+| Store deploy | 3rd-party action | Built-in release | Built-in (deprecated) |
+| Monthly limit | 2000 min free | 1800 min free | Free tier |

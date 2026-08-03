@@ -1,0 +1,113 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="expect/actual" label="Abstraction Mechanism" />
+        <StatItem value="Direct Call" label="No Bridge Overhead" />
+        <StatItem value="SKIE" label="Swift Enhancement" />
+      </StatGrid>
+
+      ### The Core Abstraction — expect/actual
+
+      KMP resolves platform differences **at compile time** through expect/actual.
+      The Kotlin compiler selects the correct implementation for each target —
+      producing a direct function call with zero serialization or marshalling
+      overhead. This is fundamentally different from Flutter's async Platform
+      Channels or React Native's JS Bridge.
+
+      ```kotlin
+      // commonMain — declare the abstraction
+      expect class BiometricAuth() {
+          fun authenticate(reason: String): Boolean
+          fun isBiometricAvailable(): Boolean
+      }
+
+      // androidMain — Android Keystore BiometricPrompt
+      actual class BiometricAuth(private val context: Context) {
+          actual fun isBiometricAvailable(): Boolean =
+              BiometricManager.from(context).canAuthenticate(
+                  BiometricManager.Authenticators.BIOMETRIC_WEAK
+              ) == BiometricManager.BIOMETRIC_SUCCESS
+
+          actual fun authenticate(reason: String): Boolean {
+              // Launches BiometricPrompt with FragmentActivity
+          }
+      }
+
+      // iosMain — iOS LocalAuthentication
+      actual class BiometricAuth {
+          private val context = LAContext()
+          actual fun isBiometricAvailable(): Boolean =
+              context.canEvaluatePolicy(
+                  LAPolicy.deviceOwnerAuthenticationWithBiometrics, null
+              )
+          actual fun authenticate(reason: String): Boolean {
+              // Uses LAContext.evaluatePolicy
+          }
+      }
+      ```
+
+      ### Android Interop — Direct Java/Kotlin
+
+      On Android, shared code runs as JVM bytecode with **100% Java interop**.
+      A `commonMain` expect maps to `actual typealias android.content.Context`
+      because it literally compiles to Java bytecode calling the Android SDK.
+
+      ### iOS Interop — Objective-C through cinterop
+
+      Kotlin/Native calls Apple APIs through pre-defined bindings generated from
+      Objective-C headers. Apple SDK frameworks are available via `platform.*`
+      imports. The Kotlin/Native compiler reads Obj-C headers and generates
+      Kotlin bindings at compile time.
+
+      ```kotlin
+      // iosMain — calling Apple APIs directly
+      import platform.Foundation.NSUUID
+      import platform.UIKit.UIDevice
+
+      actual class NotificationHelper {
+          actual fun postNotification(title: String, body: String) {
+              val content = UNMutableNotificationContent()
+              content.setValue(title, forKey = "title")
+              content.setValue(body, forKey = "body")
+          }
+      }
+      ```
+
+      <Callout title="Swift-Only API Limitation">
+        Kotlin/Native interop targets Objective-C. Swift-only APIs (no `@objc`
+        attribute) are inaccessible from Kotlin. For Swift-only libraries, write
+        an Obj-C bridging wrapper or use expect/actual where the Swift side
+        owns the implementation. SKIE improves the Kotlin-to-Swift direction
+        but does not solve Swift-only type consumption.
+      </Callout>
+
+      ### SKIE — Swift-Kotlin Interface Enhancement
+
+      SKIE (Touchlab) post-processes Kotlin/Native compiler output to generate
+      Swift-idiomatic APIs. `StateFlow` becomes `Swift AsyncSequence`, sealed
+      classes become Swift enums, suspending functions become `async`.
+
+      ```swift
+      // Without SKIE — callback-based, foreign API
+      viewModel.state.collect(collector: /* FlowCollector */) { value in }
+
+      // With SKIE — natural Swift AsyncSequence
+      for await state in viewModel.state.asyncSequence { }
+      ```
+
+      ### Comparison to Platform Channels
+
+      | Aspect | KMP (expect/actual) | Flutter Channels | RN Native Modules |
+      |--------|---------------------|------------------|-------------------|
+      | Resolution | Compile time | Runtime | Runtime |
+      | Serialization | None | JSON/MethodCodec | JSON/C++ JSI |
+      | Type Safety | Compiler-enforced | String-based | Partial |
+      | Overhead | Zero | Async hop | Async hop |
+
+      ### KMP Insight
+
+      expect/actual is not an interop layer — it is the compilation target
+      selection mechanism. Your Kotlin compiles to platform binaries directly,
+      with no framework process, no bridge thread, and no serialization step
+      between shared logic and platform API. This is as close to native
+      development as code sharing gets.

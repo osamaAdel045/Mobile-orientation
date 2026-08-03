@@ -1,0 +1,104 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="JVM Backend" label="Android Compiler" />
+        <StatItem value="LLVM Backend" label="iOS Compiler" />
+        <StatItem value="IR" label="Common Phase" />
+      </StatGrid>
+
+      ### Android Target — Kotlin/JVM Pipeline
+
+      KMP's Android compilation is identical to standard Android Kotlin: the Kotlin
+      compiler produces JVM bytecode, the Android D8/R8 toolchain converts it to DEX
+      (Dalvik Executable), and ART (Android Runtime) executes it. There is no
+      additional layer — KMP shared code on Android is indistinguishable from any
+      other Kotlin library.
+
+      ```yaml
+      Kotlin Source → Kotlin Compiler (JVM backend) → JVM Bytecode (.class)
+        → Android's D8/R8 → DEX → ART (Android Runtime) → Device
+      ```
+
+      ### iOS Target — Kotlin/Native Pipeline
+
+      The iOS path is fundamentally different. Kotlin/Native compiles shared Kotlin
+      directly to ARM64 machine code via LLVM, bypassing any JVM or interpreter.
+      The output is a **framework** (static or dynamic) packaged as `.xcframework`,
+      which Xcode links into the iOS app bundle.
+
+      ```yaml
+      Kotlin Source → Kotlin Compiler → Kotlin IR (Intermediate Representation)
+        → Kotlin/Native Backend → LLVM IR → LLVM Optimization Passes
+        → ARM64 Machine Code → .xcframework → Xcode Link → IPA
+      ```
+
+      ```kotlin
+      // build.gradle.kts — iOS framework configuration
+      kotlin {
+          listOf(iosX64(), iosArm64(), iosSimulatorArm64()).forEach { target ->
+              target.binaries.framework {
+                  baseName = "SharedModule"
+                  isStatic = true
+                  export("org.jetbrains.kotlinx:kotlinx-coroutines-core") {
+                      // Exported types become visible to Swift consumers
+                  }
+              }
+          }
+      }
+      ```
+
+      <Callout title="Framework Export and Visibility">
+        Marking a dependency as `export` in framework configuration re-exports its
+        public types to Swift consumers. Without export, Swift sees your Kotlin
+        types but cannot reference the underlying library types in function signatures.
+        Use sparingly — exported libraries increase framework size and compile time.
+      </Callout>
+
+      ### SKIE — Swift-Friendly Code Generation
+
+      **SKIE** (Touchlab) post-processes the Kotlin/Native compiler output to generate
+      Swift-idiomatic wrappers. Without SKIE, Kotlin `StateFlow` appears as a
+      Kotlin-specific type in Swift. With SKIE, it becomes a `Swift AsyncSequence`.
+      Kotlin sealed classes become Swift enums. Suspending functions become `async`
+      functions.
+
+      ```kotlin
+      // commonMain — Kotlin definitions
+      sealed class NetworkResult<out T> {
+          data class Success<T>(val data: T) : NetworkResult<T>()
+          data class Error(val message: String, val code: Int) : NetworkResult<Nothing>()
+          data object Loading : NetworkResult<Nothing>()
+      }
+
+      suspend fun fetchUser(id: String): NetworkResult<User>
+      ```
+
+      ```swift
+      // Swift — with SKIE, this becomes natural Swift
+      // Sealed class → Swift enum, suspend → async throws
+      let result = try await api.fetchUser(id: "123")
+      switch result {
+      case .success(let user):  print("Got \(user.name)")
+      case .error(let msg, _):  print("Failed: \(msg)")
+      case .loading:           print("Loading...")
+      }
+      ```
+
+      ### Comparison to Dart AOT and Swift
+
+      | Phase | KMP (iOS) | Flutter (Dart) | Native (Swift) |
+      |-------|-----------|----------------|----------------|
+      | Frontend | Kotlin compiler | Dart analyzer | Swift compiler |
+      | IR | Kotlin IR | Dart Kernel AST | Swift SIL |
+      | Backend | Kotlin/Native | Dart AOT | LLVM (swiftc) |
+      | Codegen | LLVM IR → ARM64 | ELF/Mach-O | LLVM IR → ARM64 |
+      | Runtime | Tracing GC | Sliding GC | ARC |
+      | Bridge | Objective-C interop | Dart VM embedding | Direct (native) |
+
+      ### KMP Insight
+
+      KMP on iOS uses the same LLVM back-end that powers Swift and Clang. This means
+      Kotlin/Native binaries benefit from Apple's continuous LLVM improvements —
+      but at a delay, since JetBrains must integrate each LLVM release into the
+      Kotlin/Native toolchain. The binary format is a standard Apple framework that
+      Xcode treats exactly like any other dependency.

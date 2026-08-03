@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Quick Stats
+
+<StatGrid>
+  <StatItem label="Pattern" value="MVVM (native binding)" />
+  <StatItem label="DI Container" value="Microsoft.Extensions.DependencyInjection" />
+  <StatItem label="MVVM Toolkit" value="CommunityToolkit.Mvvm" />
+  <StatItem label="Navigation" value="Shell (URI-based routing)" />
+  <StatItem label="Architecture" value="Clean Architecture layers" />
+</StatGrid>
+
+### Core Concept
+
+MAUI's architecture stack combines **MVVM** for the UI layer, **dependency injection** for service composition, **Shell** for navigation, and optionally **Clean Architecture** for large-scale apps. The platform's DI container is built-in via `Microsoft.Extensions.DependencyInjection`, eliminating the need for third-party containers unless advanced features like interception or decorators are required.
+
+### MVVM Deep Dive with CommunityToolkit.Mvvm
+
+The ViewModel is the heart of MVVM. It exposes state as observable properties and actions as commands, while the View binds declaratively through `{Binding}`:
+
+```csharp
+public partial class ProductListViewModel : ObservableObject
+{
+  private readonly IProductService _productService;
+
+  [ObservableProperty]
+  private bool _isLoading;
+
+  [ObservableProperty]
+  private ObservableCollection<Product> _products = new();
+
+  [RelayCommand]
+  private async Task LoadProductsAsync()
+  {
+    IsLoading = true;
+    try
+    {
+      var items = await _productService.GetProductsAsync();
+      Products.Clear();
+      foreach (var item in items) Products.Add(item);
+    }
+    finally
+    {
+      IsLoading = false;
+    }
+  }
+}
+```
+
+The View binds through its `BindingContext`. `ObservableCollection<T>` ensures collection mutations update the UI automatically without manual `PropertyChanged` calls.
+
+### Dependency Injection Registration
+
+All services and ViewModels are registered in `MauiProgram.cs` at the composition root:
+
+```csharp
+builder.Services.AddSingleton<IConnectivity>(Connectivity.Current);
+builder.Services.AddSingleton<IProductService, ProductService>();
+builder.Services.AddTransient<ProductListViewModel>();
+builder.Services.AddTransient<ProductListPage>();
+```
+
+- **Singleton** -- one instance for the app lifetime (HTTP client, telemetry, settings).
+- **Transient** -- new instance per injection (ViewModels, pages).
+- **Scoped** -- logically available but not truly scoped in MAUI; treat as equivalent to Transient.
+
+ViewModels receive dependencies via constructor injection:
+
+```csharp
+public partial class ProductListViewModel : ObservableObject
+{
+  public ProductListViewModel(IProductService productService)
+  {
+    _productService = productService;
+  }
+}
+```
+
+### Shell Navigation Architecture
+
+Shell decouples navigation from page types using URI routes:
+
+```csharp
+await Shell.Current.GoToAsync("product/details", new Dictionary<string, object>
+{
+  { "ProductId", product.Id }
+});
+```
+
+Routes are registered in `AppShell.xaml.cs`:
+
+```csharp
+Routing.RegisterRoute("product/details", typeof(ProductDetailPage));
+```
+
+The receiving ViewModel implements `IQueryAttributable` or uses `[QueryProperty]`:
+
+```csharp
+[QueryProperty(nameof(ProductId), "ProductId")]
+public partial class ProductDetailViewModel : ObservableObject
+{
+  [ObservableProperty]
+  private string _productId;
+}
+```
+
+<Callout type="tip">
+  Prefer `IQueryAttributable` over `[QueryProperty]` for complex navigation because it receives the entire query dictionary at once, enabling bulk deserialization, validation, and null-checking in a single code path.
+</Callout>
+
+### Clean Architecture in MAUI
+
+For larger applications, layer the solution into four projects with strict dependency direction:
+
+```
+Solution.sln
+├── Domain/                  Entities, value objects, repository interfaces
+│   └── Entities/            Zero external dependencies
+├── Application/             Use cases, DTOs, mappings
+│   └── UseCases/            Depends only on Domain
+├── Infrastructure/          API clients, EF Core, platform services
+│   └── Data/                Depends on Application abstractions
+└── Presentation/            MAUI project (Views, ViewModels, Shell)
+    ├── Pages/               Depends on Application and Infrastructure
+    ├── ViewModels/          via injected abstractions
+    └── MauiProgram.cs       Composition root
+```
+The dependency inversion principle ensures the Presentation layer references only abstractions from Application and Domain. Concrete implementations live in Infrastructure, wired at the composition root in `MauiProgram.cs`.
+
+### Pitfalls
+
+- **Service locator anti-pattern**. Accessing `App.Services.GetService<T>()` throughout the app instead of constructor injection makes testing impossible and hides dependencies. All dependencies should flow through the constructor.
+- **Massive ViewModels**. A ViewModel that handles loading, saving, validation, and navigation violates SRP. Split into focused use-case services or separate ViewModels per screen region.
+- **Forgetting `partial` on ViewModels**. Source generators require `partial class`. The error is cryptic -- verify this first when generated properties or commands don't compile.
+
+### Framework Insight
+
+MAUI's built-in DI container is `Microsoft.Extensions.DependencyInjection`, the same container used by ASP.NET Core. It supports constructor injection, `IServiceCollection` extension methods, and `IServiceProvider` resolution. Because MAUI controls the container through `MauiAppBuilder`, third-party containers like Autofac require adapter packages and a custom `IServiceProviderFactory` implementation.
+
+### Comparison: MVVM + Clean Architecture vs Monolithic
+
+<DecisionMatrix
+  columns={["MVVM + Clean Architecture", "Monolithic MAUI App"]}
+  rows={[
+    { property: "Testability", "MVVM + Clean Architecture": "ViewModel + Use Case unit tests with mock repos", "Monolithic MAUI App": "Tight coupling to platform APIs hinders tests" },
+    { property: "Separation", "MVVM + Clean Architecture": "Strict boundary with dependency inversion", "Monolithic MAUI App": "Mixed concerns in Pages/ code-behind" },
+    { property: "Team scale", "MVVM + Clean Architecture": "Multiple teams own separate layers", "Monolithic MAUI App": "Best for solo or small-team projects" },
+    { property: "Onboarding", "MVVM + Clean Architecture": "Steep learning curve (pattern + DI)", "Monolithic MAUI App": "Low -- open a page and write directly" }
+  ]}
+/>

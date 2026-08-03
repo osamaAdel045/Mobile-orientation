@@ -1,0 +1,130 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Ktor Client" label="HTTP Client" />
+        <StatItem value="kotlinx.serialization" label="JSON" />
+        <StatItem value="Repository Pattern" label="Architecture" />
+      </StatGrid>
+
+      ### Ktor Client — Multiplatform HTTP
+
+      JetBrains' **Ktor Client** is the standard HTTP client for KMP — a
+      coroutine-native, multiplatform engine. The client core lives in `commonMain`;
+      platform engines provide the transport layer. On Android, Ktor uses OkHttp.
+      On iOS, it uses the Darwin URL session (`NSURLSession`).
+
+      ```kotlin
+      // commonMain — Ktor client setup
+      val httpClient = HttpClient {
+          install(ContentNegotiation) {
+              json(Json { ignoreUnknownKeys = true })
+          }
+          install(Logging) { level = LogLevel.BODY }
+          install(HttpTimeout) {
+              requestTimeoutMillis = 15_000
+              connectTimeoutMillis = 5_000
+          }
+          defaultRequest {
+              url("https://api.example.com")
+              contentType(ContentType.Application.Json)
+          }
+      }
+      ```
+
+      Platform engines are injected per source set — the shared module never
+      imports platform-specific networking APIs.
+
+      ```kotlin
+      // androidMain — OkHttp engine
+      actual fun createPlatformClient(): HttpClient {
+          return HttpClient(OkHttp) {
+              engine { config { retryOnConnectionFailure(true) } }
+          }
+      }
+
+      // iosMain — Darwin engine
+      actual fun createPlatformClient(): HttpClient {
+          return HttpClient(Darwin) {
+              engine { configureRequest { setAllowsCellularAccess(true) } }
+          }
+      }
+      ```
+
+      ### kotlinx.serialization — Compile-Time Safe JSON
+
+      The serialization compiler plugin generates serializers at compile time —
+      no runtime reflection. This is critical because Kotlin/Native has no
+      runtime reflection (Gson and Moshi fail on iOS).
+
+      ```kotlin
+      @Serializable
+      data class UserDto(
+          @SerialName("user_id") val userId: String,
+          val name: String,
+          @SerialName("email_address") val email: String
+      )
+
+      @Serializable
+      data class ApiResponse<T>(val data: T, val message: String? = null)
+      ```
+
+      ### Repository Pattern with Error Handling
+
+      ```kotlin
+      sealed class Result<out T> {
+          data class Success<T>(val data: T) : Result<T>()
+          data class Error(val e: Throwable, val msg: String? = null) : Result<Nothing>()
+      }
+
+      class UserRepository(private val client: HttpClient) {
+          suspend fun getUser(id: String): Result<User> = try {
+              val dto: UserDto = client.get("/users/$id").body()
+              Result.Success(dto.toDomain())
+          } catch (e: ClientRequestException) {
+              Result.Error(e, "Not found")
+          } catch (e: Exception) {
+              Result.Error(e, "Network error")
+          }
+      }
+      ```
+
+      <Callout title="Ktor Engine Selection">
+        Each target needs its engine dependency: `ktor-client-okhttp` in
+        `androidMain`, `ktor-client-darwin` in `iosMain`. Missing the platform
+        engine produces `No request engine found` at runtime. Kotlin 2.0+ can
+        enforce this with expect/actual engine declarations.
+      </Callout>
+
+      ### Pitfall: Blocking Calls in Shared Module
+
+      ```kotlin
+      // WRONG — runBlocking freezes on iOS
+      class WrongRepo(private val client: HttpClient) {
+          fun getUser(id: String): User = runBlocking {
+              client.get("/users/$id").body()
+          }
+      }
+
+      // RIGHT — suspend function everywhere
+      class RightRepo(private val client: HttpClient) {
+          suspend fun getUser(id: String): User = client.get("/users/$id").body()
+      }
+      ```
+
+      ### Comparison to Dio/Retrofit
+
+      | Aspect | Ktor | Retrofit | Dio |
+      |--------|------|----------|-----|
+      | Platforms | All KMP | JVM only | Dart (Flutter) |
+      | Async | Coroutines | Coroutines/Rx | Dart Futures |
+      | Serialization | kotlinx.serialization | Moshi/Gson | Manual |
+      | Interceptors | Plugin chain | OkHttp interceptors | Interceptors |
+      | Engine | Per-platform | N/A | N/A |
+
+      ### KMP Insight
+
+      KMP's networking stack is fully multiplatform because Ktor and
+      kotlinx.serialization were designed for KMP from day one — not ported
+      later. The same `HttpClient` configuration works on Android, iOS, Desktop,
+      and Server, with platform-specific engines handled transparently beneath
+      the coroutine-based API.

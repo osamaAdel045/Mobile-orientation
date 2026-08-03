@@ -1,0 +1,118 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    ### Native Android vs Cross-Platform Frameworks
+
+    Each cross-platform solution makes different tradeoffs. This analysis compares native Android against each major alternative with concrete metrics, not generalities.
+
+    <StatGrid columns={3}>
+        <StatItem value="3B+" label="Android active devices" />
+        <StatItem value="60fps" label="Compose rendering baseline" />
+        <StatItem value="2-3x" label="Native vs Ionic performance" />
+        <StatItem value="3-12mo" label="Framework API lag behind Android" />
+    </StatGrid>
+
+    ### Android vs Flutter
+
+    Flutter renders its own pixels via Skia/Impeller, bypassing platform UI components entirely. This gives consistent visuals across platforms but creates integration friction.
+
+    | Dimension | Native Android | Flutter |
+    |---|---|---|
+    | App size (minimal) | ~4 MB (Compose) | ~12 MB (baseline) |
+    | Startup time (cold) | ~400ms | ~800ms |
+    | API access | Day 1 | 3-6 month lag |
+    | Accessibility | Free (platform semantics) | Manual implementation |
+    | 60fps frames | 98th percentile | 92nd percentile |
+
+    ```kotlin
+    {
+    // Native: Platform BottomSheet with Material 3
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun ShareSheet() {
+        ModalBottomSheet(onDismissRequest = { /* dismiss */ }) {
+            // Integrates with system back gesture, window insets, accessibility
+        }
+    }
+    }
+    ```
+
+    Flutter requires third-party packages or manual bridging for equivalent system integration. The Material 3 implementation in Flutter lags behind Android's by approximately one major release cycle. For apps targeting Android exclusively, Flutter's rendering layer is pure overhead.
+
+    ### Android vs React Native
+
+    React Native bridges JavaScript to native views via the JSON-serialized bridge. The new architecture (Fabric, TurboModules) improves this but introduces complexity.
+
+    ```text
+    ┌──────────────────────────────────────────────────┐
+    │         React Native Communication Overhead       │
+    ├──────────────────────────────────────────────────┤
+    │  JS Thread → Serialize → Bridge → Native Thread  │
+    │     ↑                                  ↓          │
+    │     └────── Shadow Tree ← Deserialize ←─────────┘│
+    │                                                    │
+    │  Latency per hop: ~1-5ms (debug), ~0.5ms (prod)  │
+    │  Total round-trip: ~2-10ms per interaction        │
+    └──────────────────────────────────────────────────┘
+    ```
+
+    **Key differences**: React Native shares approximately 60-80% of business logic code between platforms. However, complex gestures (drag-and-drop, multi-touch), heavy animations (Lottie, Reanimated), and platform-integrated features (Bluetooth, NFC) require native modules that offset the sharing benefit. Native Android avoids the bridge overhead entirely, maintains consistent scroll physics, and inherits platform accessibility behaviors without additional work.
+
+    ### Android vs iOS Native
+
+    Despite different ecosystems, the skill transfer between Android and iOS native development is higher than any native-to-cross-platform comparison. Both use design-pattern similarities (MVVM, Coordinator/Navigation), structured concurrency (coroutines / async-await), and first-party UI frameworks (Compose / SwiftUI).
+
+    | Aspect | Android | iOS |
+    |---|---|---|
+    | UI Framework | Jetpack Compose | SwiftUI |
+    | Language | Kotlin | Swift |
+    | DI | Hilt | Manual / Needle |
+    | Local DB | Room | CoreData / SwiftData |
+    | Async | Coroutines + Flow | async/await + AsyncSequence |
+    | App size | 4-15 MB | 5-20 MB |
+    | Review time | Hours | 1-3 days |
+    | Device fragmentation | High (12k+ models) | Low (few models) |
+
+    <Callout title="Native iOS and Android Are More Similar Than Different">
+        The architecture patterns, concurrency models, and UI frameworks have converged significantly. A developer proficient in Compose can learn SwiftUI in 2-4 weeks and vice versa. The real cost of dual-native development is not skill gap but duplicated business logic — which is where KMP provides value. Do NOT choose a cross-platform framework primarily to "avoid learning two UIs" — the UI framework is the smallest part of the learning curve.
+    </Callout>
+
+    ### Android vs Kotlin Multiplatform Mobile (KMP)
+
+    KMP is not a competitor to native Android — it is a complement that shares business logic while keeping platform-native UIs. This is a critical distinction.
+
+    ```kotlin
+    {
+    // Shared KMP module: business logic only
+    class GetUserUseCase(
+        private val userRepository: UserRepository // Platform-specific impl
+    ) {
+        suspend operator fun invoke(id: String): Result<User> {
+            // Shared validation, caching logic, error mapping
+            return userRepository.getUser(id)
+                .mapCatching { it.toDomain() }
+                .recoverCatching { throw UserNotFoundException(id) }
+        }
+    }
+    }
+    ```
+
+    KMP shares approximately 40-60% of code across platforms (domain layer, data layer interfaces, networking models) while keeping UI fully native. This reduces dual-platform maintenance cost by roughly 30-40% compared to two fully separate native codebases, without sacrificing platform access, performance, or UX fidelity. It is the preferred architecture for organizations that need both platforms natively but want to reduce duplicated effort.
+
+    ### Android vs Ionic/Capacitor
+
+    WebView-based frameworks (Ionic, Capacitor) wrap a web application in a native shell. This provides maximum code sharing but at significant cost to user experience.
+
+    | Metric | Native Android | Ionic/Capacitor |
+    |---|---|---|
+    | Startup to interactive | ~400ms | ~1500-3000ms |
+    | Scroll performance | 120fps | ~45-55fps |
+    | Platform access | Full | Plugin-dependent |
+    | Offline capability | Room + WorkManager | Limited to browser cache |
+    | Battery impact | Optimized | Higher (JS engine overhead) |
+    | Memory usage | ~80-120 MB | ~150-250 MB |
+
+    WebView-based approaches are viable for enterprise internal tools or simple content-reader apps where performance is not a differentiator. For consumer-facing apps, the startup time alone — typically 2-3 seconds versus native's sub-second — creates measurable user abandonment. Google's Core Web Vitals research shows that every 100ms of startup delay reduces conversion by approximately 1-2%.
+
+    ### Decision Summary
+
+    Choose native Android when platform access, performance, and UX excellence are priorities. Pair it with KMP for shared logic if also targeting iOS. Use Flutter or React Native only when engineering capacity cannot sustain two native teams and the app does not depend on platform-specific features. Avoid WebView-based frameworks for consumer-facing products.

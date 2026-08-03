@@ -1,0 +1,145 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    ### Quick Stats on Local Storage
+
+    <StatGrid columns={3}>
+      <StatItem value="7M+" label="Daily Room DAO invocations per top app" />
+      <StatItem value="150KB" label="APK savings vs raw SQLite with migrations" />
+      <StatItem value="100%" label="SQL syntax verification at compile time" />
+    </StatGrid>
+
+    ### Room: Entity, DAO, and Database
+
+    Room is Google's official SQLite abstraction layer with compile-time SQL verification, automatic migration generation, and Kotlin Flow integration for reactive queries.
+
+    ```kotlin
+    @Entity(tableName = "orders", indices = [Index(value = ["status"])])
+    data class OrderEntity(
+        @PrimaryKey val id: String,
+        @ColumnInfo(name = "customer_name") val customerName: String,
+        @ColumnInfo(name = "total_cents") val totalCents: Long,
+        @ColumnInfo(name = "status") val status: String,
+        @ColumnInfo(name = "created_at") val createdAt: Long,
+        @ColumnInfo(name = "synced_at") val syncedAt: Long? = null
+    )
+
+    @Dao
+    interface OrderDao {
+        @Query("SELECT * FROM orders WHERE status = :status ORDER BY created_at DESC LIMIT :limit OFFSET :offset")
+        fun getOrdersByStatus(status: String, limit: Int = 20, offset: Int = 0): Flow<List<OrderEntity>>
+
+        @Query("SELECT * FROM orders WHERE id = :id")
+        suspend fun getOrderById(id: String): OrderEntity?
+
+        @Insert(onConflict = OnConflictStrategy.REPLACE)
+        suspend fun upsertOrder(order: OrderEntity)
+
+        @Insert(onConflict = OnConflictStrategy.REPLACE)
+        suspend fun upsertOrders(orders: List<OrderEntity>)
+
+        @Transaction
+        suspend fun replaceAll(orders: List<OrderEntity>) { deleteAll(); upsertOrders(orders) }
+
+        @Query("DELETE FROM orders")
+        suspend fun deleteAll()
+    }
+
+    @Database(entities = [OrderEntity::class, CustomerEntity::class], version = 3, exportSchema = true)
+    abstract class AppDatabase : RoomDatabase() {
+        abstract fun orderDao(): OrderDao()
+        abstract fun customerDao(): CustomerDao()
+
+        companion object {
+            @Volatile private var INSTANCE: AppDatabase? = null
+            fun getInstance(context: Context): AppDatabase = INSTANCE ?: synchronized(this) {
+                INSTANCE ?: Room.databaseBuilder(context.applicationContext, AppDatabase::class.java, "app.db")
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                    .build().also { INSTANCE = it }
+            }
+        }
+    }
+    ```
+
+    <Callout title="Export Schema for Migration Testing">
+      Setting `exportSchema = true` generates a JSON schema file during every build. Commit these
+      files to version control — they drive automated migration tests with
+      `RoomDatabase.MigrationTestHelper`, catching data loss before release.
+    </Callout>
+
+    ### Room Migrations
+
+    Room requires explicit migration strategies when the schema changes. Auto-migrations (Room 2.4+) handle simple cases.
+
+    ```kotlin
+    val MIGRATION_1_2 = object : Migration(1, 2) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE orders ADD COLUMN discount_cents INTEGER NOT NULL DEFAULT 0")
+        }
+    }
+
+    val MIGRATION_2_3 = object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("CREATE TABLE orders_new (id TEXT PRIMARY KEY, customer_name TEXT NOT NULL, " +
+                "total_cents INTEGER NOT NULL, currency TEXT NOT NULL DEFAULT 'USD', " +
+                "status TEXT NOT NULL, created_at INTEGER NOT NULL, synced_at INTEGER)")
+            db.execSQL("INSERT INTO orders_new SELECT id, customer_name, total_cents, " +
+                "'USD', status, created_at, synced_at FROM orders")
+            db.execSQL("DROP TABLE orders")
+            db.execSQL("ALTER TABLE orders_new RENAME TO orders")
+        }
+    }
+    ```
+
+    ### DataStore: Preferences vs Proto
+
+    DataStore replaces SharedPreferences with an asynchronous, consistent key-value store.
+
+    ```kotlin
+    class UserPreferences(private val context: Context) {
+        private val Context.dataStore by preferencesDataStore(name = "user_preferences")
+
+        val settings: Flow<UserSettings> = context.dataStore.data.map { prefs ->
+            UserSettings(
+                themeMode = prefs[stringPreferencesKey("theme_mode")] ?: "system",
+                language = prefs[stringPreferencesKey("language")] ?: "en",
+                notificationsEnabled = prefs[booleanPreferencesKey("notifications_enabled")] ?: true
+            )
+        }
+        suspend fun updateTheme(mode: String) {
+            context.dataStore.edit { prefs -> prefs[stringPreferencesKey("theme_mode")] = mode }
+        }
+    }
+    // Proto DataStore uses a .proto schema for typed, schema-enforced storage
+    ```
+
+    ### SQLCipher Encryption
+
+    SQLCipher encrypts the entire database file page-by-page with AES-256 via `supportSQLiteOpenHelperFactory`.
+
+    ```kotlin
+    // implementation("net.zetetic:android-database-sqlcipher:4.5.6")
+    // implementation("androidx.sqlite:sqlite-ktx:2.4.0")
+
+    val factory = SupportFactory(encryptionKeyManager.getKey())
+    val encryptedDb = Room.databaseBuilder(context, AppDatabase::class.java, "encrypted_app.db")
+        .openHelperFactory(factory).build()
+    ```
+
+    ### Common Pitfalls
+
+    - **Main-thread queries**: Room throws `IllegalStateException` by default for DB access on the main thread. Use `suspend` DAO methods.
+    - **N+1 queries with @Relation**: `@Relation` triggers an additional query per parent row. Use `@Transaction` with `@Query` joining tables instead.
+    - **Missing migration**: Renaming a column requires a full migration. Room has no automatic column rename detection.
+
+    ### Comparison to Drift and CoreData
+
+    <DecisionMatrix
+      scores={[
+        { label: "SQL verification", score: 5 },
+        { label: "Migration tooling", score: 4 },
+        { label: "Cross-platform support", score: 1 },
+        { label: "Learning curve", score: 3 },
+      ]}
+      pros="Room verifies SQL at compile time with no runtime surprises. Auto-migration generates SQL for simple schema changes. Room's Flow integration enables reactive UI updates with zero manual wiring."
+      cons="Android-only — no iOS/KMP support. Drift compiles to Dart and native SQLite, sharing DB code across platforms. CoreData provides faulting and uniquing that Room lacks."
+    />

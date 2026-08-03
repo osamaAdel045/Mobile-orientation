@@ -1,0 +1,130 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Unit Test Runner" value="Jest / Vitest" />
+  <StatItem label="Component Test Lib" value="Testing Library" />
+  <StatItem label="E2E Framework" value="Cypress / Playwright" />
+  <StatItem label="Native E2E" value="Appium / Detox" />
+</StatGrid>
+
+### Unit and Integration Testing with Jest or Vitest
+
+Ionic apps are standard web applications to unit test frameworks. Jest (Angular/Vue) and Vitest (Vite-native, popular with React) provide the test runner, assertion library, and mocking infrastructure. Capacitor plugins must be mocked to avoid runtime errors since the native bridge is unavailable in a Node.js test environment.
+
+```typescript
+// Vitest config for an Ionic + React project
+import { defineConfig } from 'vitest/config'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
+  },
+})
+```
+
+```typescript
+// Mocking a Capacitor plugin in tests
+vi.mock('@capacitor/camera', () => ({
+  Camera: {
+    getPhoto: vi.fn().mockResolvedValue({
+      webPath: 'data:image/png;base64,test',
+      format: 'png',
+    }),
+  },
+}))
+```
+
+<Callout type="warning" title="Capacitor Bridge Requires Mocking">
+  The `@capacitor/core` `Plugins` object throws if you call a plugin without the native bridge present. Always mock plugins in unit tests. Create a reusable `__mocks__/@capacitor.ts` file shared across the project to centralize plugin mocks and reduce boilerplate.
+</Callout>
+
+### Component Testing per Framework
+
+Each framework has its own testing approach, all using Testing Library for DOM queries. The pattern is consistent across Angular (`@testing-library/angular` + `TestBed`), React (`@testing-library/react`), and Vue (`@testing-library/vue` + `@vue/test-utils`).
+
+```typescript
+// React — React Testing Library
+import { render, screen, fireEvent } from '@testing-library/react'
+import PhotoPage from './PhotoPage'
+
+test('triggers camera on capture', async () => {
+  render(<PhotoPage />)
+  await fireEvent.click(screen.getByText('Capture'))
+  expect(await screen.findByText('Photo saved')).toBeInTheDocument()
+})
+```
+
+The Angular equivalent uses `TestBed.configureTestingModule` to wire up dependencies, while Vue uses `mount()` from `@vue/test-utils`. All three rely on Testing Library's `screen` queries (`getByRole`, `findByText`, `queryByTestId`) which remain framework-agnostic.
+
+### End-to-End Testing with Playwright or Cypress
+
+E2E tests run the full application in a browser-like environment, interacting with the WebView as a user would. Both frameworks support mobile viewports and touch events.
+
+```typescript
+// Playwright E2E test for Ionic app
+import { test, expect } from '@playwright/test'
+
+test('full photo capture flow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/photos')
+  await page.click('ion-button:has-text("Capture")')
+  await expect(page.locator('ion-img')).toBeVisible({ timeout: 5000 })
+})
+```
+
+Cypress follows the same pattern using `cy.get('ion-button').click()` with its chainable assertion syntax. Key difference: Playwright runs outside the browser (Node.js process), while Cypress runs inside the browser alongside the app.
+
+### Native E2E Testing with Appium
+
+For tests on real devices or emulators with the full native runtime, Appium provides WebDriver-compatible automation. Critical step: switch from the native context to `WEBVIEW_1` to interact with the Ionic DOM.
+
+```typescript
+import { remote } from 'webdriverio'
+
+const driver = await remote({
+  capabilities: {
+    platformName: 'iOS',
+    'appium:deviceName': 'iPhone 16',
+    'appium:app': '/path/to/MyApp.app',
+  },
+})
+
+await driver.switchContext('WEBVIEW_1')
+const captureBtn = await driver.$('~Capture')
+await captureBtn.click()
+```
+
+### Testing Plugins with Capacitor's Test Harness
+
+Capacitor's `@capacitor/test-harness` simulates the plugin call lifecycle without a device, ideal for unit-testing custom plugin implementations.
+
+```typescript
+import { TestHarness } from '@capacitor/test-harness'
+import { MyCustomPlugin } from '../plugin'
+
+const harness = new TestHarness()
+
+it('returns data from echo call', async () => {
+  const result = await harness.runPluginMethod(
+    MyCustomPlugin,
+    'echo',
+    { value: 'hello' },
+  )
+  expect(result.value).toBe('hello')
+})
+```
+
+### Decision Matrix for Test Strategy
+
+<DecisionMatrix>
+  | Test Layer | Speed | Confidence | Setup Cost | When to Use |
+  |-----------|-------|------------|------------|-------------|
+  | Unit (Jest/Vitest) | ~10ms/test | Low | Low | Business logic, mocks |
+  | Component (Testing Lib) | ~100ms/test | Medium | Low | UI interaction, state |
+  | E2E (Cypress/Playwright) | ~5s/test | High | Medium | Critical user flows |
+  | Native E2E (Appium) | ~30s/test | Highest | High | Plugin + platform behavior |
+</DecisionMatrix>

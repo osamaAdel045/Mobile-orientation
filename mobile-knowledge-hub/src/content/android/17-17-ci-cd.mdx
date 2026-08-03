@@ -1,0 +1,140 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    A production Android CI/CD pipeline runs lint, unit tests, and build signing before
+    distributing to testers or the Play Store. GitHub Actions is the most common
+    orchestrator, with Firebase App Distribution and Play Console for staged rollouts.
+
+    <StatGrid>
+        <StatItem value="75-90%" label="Gradle build cache hit rate (CI)" />
+        <StatItem value="3+" label="Play Console tracks: internal, alpha, beta, prod" />
+        <StatItem value="1-5%" label="Typical staged rollout increment per day" />
+        <StatItem value="50%" label="User opt-in rate for in-app updates" />
+    </StatGrid>
+
+    ### GitHub Actions Android Workflow
+
+    Runs lint, unit tests, uploads APK, and publishes to Play Store:
+
+    ```yaml
+    name: Android CI
+    on:
+      push: { branches: [main, develop] }
+      pull_request: { branches: [main] }
+    jobs:
+      build:
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+          - uses: actions/checkout@v4
+          - uses: actions/setup-java@v4
+            with: { distribution: temurin, java-version: 17 }
+          - name: Gradle Build + Lint
+            uses: gradle/actions/setup-gradle@v3
+            with: { arguments: lintDebug assembleDebug testDebug }
+          - name: Upload APK
+            uses: actions/upload-artifact@v4
+            with: { name: app-debug, path: app/build/outputs/apk/debug/app-debug.apk }
+    ```
+
+    <Callout title="Gradle Build Cache is the biggest CI speedup">
+
+        Remote build cache lets CI workers reuse outputs. A cold build takes 25+ minutes;
+        a cache-hit finishes in 4-6 minutes:
+
+        ```kotlin
+        buildCache {
+            remote(HttpBuildCache) {
+                url = uri("https://cache.internal.example.com/cache/")
+                isPush = System.getenv("CI") == "true"
+            }
+        }
+        ```
+
+    </Callout>
+
+    ### Firebase App Distribution
+
+    Distributes APK/AAB to tester groups without Play Console:
+
+    ```bash
+    ./gradlew assembleRelease appDistributionUploadRelease \
+        -PappDistributionArtifactType=AAB \
+        -PappDistributionGroups=qa-team,product-managers
+    ```
+
+    ```kotlin
+    firebaseAppDistribution {
+        releaseNotes = file("CHANGELOG.md").readText()
+        groups = listOf("qa-team", "product-managers")
+    }
+    ```
+
+    ### Fastlane Supply — Play Store
+
+    Fastlane automates Play Store releases:
+
+    ```bash
+    lane :deploy_to_playstore do
+      gradle(task: 'bundleRelease')
+      supply(track: 'internal',
+             aab: 'app/build/outputs/bundle/release/app-release.aab',
+             release_status: 'completed',
+             json_key: ENV['PLAY_CONSOLE_JSON_KEY'])
+    end
+    ```
+
+    ### Tracks and Staged Rollouts
+
+    Four distribution tracks: Internal Testing (100 testers) -> Closed Alpha (invite-only)
+    -> Open Beta (public opt-in) -> Production (all users). Staged rollouts release to a
+    percentage of users; monitor crash/ANR rates before increasing:
+
+    ```ruby
+    lane :staged_rollout do |options|
+      supply(track: 'production', rollout: options[:percentage] || 5,
+             aab: 'app/build/outputs/bundle/release/app-release.aab')
+    end
+    ```
+
+    ### In-App Updates API
+
+    Prompts users inside the app to install a pending update:
+
+    ```kotlin
+    class UpdateManager(private val context: Context) {
+        private val appUpdateManager = AppUpdateManagerFactory.create(context)
+        fun checkForUpdate() {
+            appUpdateManager.appUpdateInfo.addOnSuccessListener { info ->
+                if (info.updateAvailability() == UpdateAvailability.UPDATE_AVAILABLE &&
+                    info.isUpdateTypeAllowed(AppUpdateType.IMMEDIATE)) {
+                    appUpdateManager.startUpdateFlowForResult(
+                        info, AppUpdateType.IMMEDIATE,
+                        context as Activity, REQUEST_CODE_UPDATE)
+                }
+            }
+        }
+    }
+    ```
+
+    `IMMEDIATE` blocks until installed; `FLEXIBLE` downloads in the background.
+
+    ### Automated Screenshots
+
+    Fastlane `screengrab` captures screenshots from instrumented tests:
+
+    ```kotlin
+    @Test
+    fun captureScreenshots() {
+        Screengrab.screenshot("checkout_screen")
+    }
+    ```
+
+    <DecisionMatrix
+        scores={[
+            { label: "GitHub Actions + Fastlane", score: 9 },
+            { label: "GitLab CI + custom scripts", score: 6 },
+            { label: "CircleCI + Firebase Pipeline", score: 7 },
+        ]}
+        pros="GitHub Actions has first-class Gradle caching and a large marketplace. Fastlane supply is the gold standard for Play Store automation."
+        cons="GitHub Actions macOS runners are expensive. GitLab CI lacks native Gradle caching."
+    />

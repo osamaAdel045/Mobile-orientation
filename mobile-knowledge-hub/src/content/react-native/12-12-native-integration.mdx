@@ -1,0 +1,147 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="JSI" label="Sync C++ Bridge" />
+  <StatItem value="Turbo Modules" label="Lazy Loading" />
+  <StatItem value="Fabric" label="New Renderer" />
+  <StatItem value="Codegen" label="Type Safety" />
+  <StatItem value="New Arch" label="RN 0.73+" />
+</StatGrid>
+
+### JSI — The Foundation
+
+JSI (JavaScript Interface) replaces the legacy async Bridge. Instead of serializing JSON messages across a queue, JSI lets JavaScript hold a **direct C++ host object reference** and call methods synchronously. This is the architectural breakthrough that enables Turbo Modules and Fabric.
+
+```
+Legacy Bridge:         JS ──(JSON serialize)──▶ Queue ──(JSON parse)──▶ Native
+JSI:                   JS ──(C++ pointer)────▶ Native (sync, zero-copy)
+```
+
+```cpp
+// C++ — JSI host object (simplified)
+class JSIStorage : public facebook::jsi::HostObject {
+  jsi::Value get(jsi::Runtime& rt, const jsi::PropNameID& name) override {
+    if (name.utf8(rt) == "getItem") {
+      return jsi::Function::createFromHostFunction(rt, name, 1, [](jsi::Runtime& rt, const jsi::Value&, const jsi::Value* args, size_t count) {
+        std::string key = args[0].asString(rt).utf8(rt);
+        auto value = [[NSUserDefaults standardUserDefaults] stringForKey:@(key.c_str())];
+        return value ? jsi::String::createFromUtf8(rt, value.utf8String) : jsi::Value::null();
+      });
+    }
+    return jsi::Value::undefined();
+  }
+};
+// JS calls: NativeStorage.getItem("key") → synchronous C++ call
+```
+
+### Turbo Modules — On-Demand Native Modules
+
+Turbo Modules are native modules loaded **lazily** — only when JS first imports them. The old Bridge loaded all modules at startup, wasting time on unused modules. Each Turbo Module is defined by a TypeScript spec file that Codegen compiles into C++, Java (JNI), and Objective-C interfaces.
+
+```typescript
+// Specs/TurboStorage.ts — the single source of truth
+import type { TurboModule } from 'react-native/Libraries/TurboModule/RCTExport';
+import { TurboModuleRegistry } from 'react-native';
+
+export interface Spec extends TurboModule {
+  readonly getItem: (key: string) => string | null;
+  readonly setItem: (key: string, value: string) => void;
+  readonly removeItem: (key: string) => void;
+  readonly getSecureItem: (key: string) => Promise<string | null>; // async
+}
+
+export default TurboModuleRegistry.getEnforcing<Spec>('TurboStorage');
+```
+
+```objectivec
+// TurboStorage.mm — iOS implementation (auto-generated interface via Codegen)
+#import "TurboStorageSpec.h"
+@interface TurboStorage () <NativeTurboStorageSpec>
+@end
+@implementation TurboStorage
+RCT_EXPORT_MODULE()
+- (NSString *)getItem:(NSString *)key {
+  return [NSUserDefaults.standardUserDefaults stringForKey:key]; // synchronous!
+}
+- (void)getSecureItem:(NSString *)key resolve:(RCTPromiseResolveBlock)resolve reject:(RCTPromiseRejectBlock)reject {
+  // async — returns Promise to JS
+  [Keychain load:key completion:^(NSString *value) { resolve(value); }];
+}
+@end
+```
+
+```typescript
+// App.tsx — usage, loads module on first import
+import TurboStorage from './NativeTurboStorage';
+const token = TurboStorage.getItem('token'); // synchronous! No bridge overhead.
+```
+
+### Fabric Renderer
+
+Fabric reimagines the render pipeline. Instead of the old serialized `UIManager` commands, Fabric creates **direct C++ references to native views** (UIView on iOS, View on Android). React's Shadow Tree runs on a C++ thread (Yoga layout), and view operations are applied synchronously when possible.
+
+```
+Old Render Pipeline:
+  JS ──▶ Shadow Tree ──(JSON)──▶ Native UI Manager ──▶ Native Views
+                                                                 
+Fabric Render Pipeline:
+  JS ──▶ C++ Shadow Tree ──(direct refs)──▶ Native Views
+         (Yoga layout on seperate thread)
+```
+
+**Key Fabric concepts:**
+- **Shadow Tree**: C++ tree mirroring React's component tree. Yoga runs Flexbox layout on this C++ thread without touching the main thread.
+- **Mounting Layer**: Computes minimal view mutations (create, update, delete) between shadow tree snapshots, batched and applied on the main thread.
+- **Event Handling**: Touch events flow from platform to C++ to JS synchronously for high-priority events, ensuring 60fps scroll.
+
+### Codegen Pipeline
+
+```
+TypeScript Spec (Specs/*.ts)
+    │
+    ▼
+React Native Codegen (Parser)
+    │  traverses TS AST, extracts interface definitions
+    ▼
+Intermediate Representation (Schema IR)
+    │
+    ├──▶ Generator: C++ (JSI host object templates)
+    ├──▶ Generator: Objective-C (iOS protocol declarations)
+    ├──▶ Generator: Java (Android JNI interfaces)
+    └──▶ Generator: C++ (Android JNI glue code)
+    │
+    ▼
+Generated Files → Compiled with App (compile-time type safety)
+```
+
+<Callout title="New Architecture Adoption">
+As of RN 0.76, the New Architecture is enabled by default for new projects. Migration steps: 1) Enable Hermes, 2) Set `newArchEnabled: true` in `gradle.properties`, 3) Update Podfile with `:hermes_enabled => true`, 4) Add `RCT_NEW_ARCH_ENABLED=1` to C++ flags. Most community libraries (react-native-screens, react-native-reanimated, react-native-gesture-handler) now support Fabric.
+</Callout>
+
+### Native Module vs Turbo Module Comparison
+
+| Aspect | Legacy Native Module | Turbo Module |
+|--------|:-------------------:|:------------:|
+| Invocation | Async (bridge queue) | Sync (JSI direct) |
+| Loading | All at startup | On-demand |
+| Thread | Predefined queue | Developer chooses |
+| Type Safety | Runtime checks | Codegen-compiled |
+| C++ | Indirect via JNI/ObjC | Direct JSI host objects |
+| Bundle Size | Full native code | Tree-shakable spec |
+| Migration path | Existing apps | New Arch required |
+
+### Bridging Existing Native SDKs
+
+When a native SDK has no community package, write a Turbo Module: write a TypeScript spec, run Codegen, implement the native interface wrapping the SDK (e.g., `AVFoundation` on iOS, `CameraX` on Android), then import from JS. For platform-specific behavior, branch inside the module or export separate iOS/Android specs.
+
+### Common Pitfalls
+
+**Threading in Turbo Modules**: Unlike legacy modules (which default to a GCD queue), Turbo Modules execute on the calling thread. Blocking the JS thread with synchronous disk I/O will freeze the UI. Use sync only for fast operations (MMKV reads, keychain checks).
+
+**Not handling nullability**: Codegen generates strict types. A nullable return needs `NSString * _Nullable` in ObjC and `@Nullable` in Java. Mismatches crash at runtime.
+
+**Skipping Codegen**: Manually writing JSI bindings is error-prone. Always define a spec file and let Codegen generate the glue — it handles JNI reference management, type marshalling, and memory safety.
+
+### vs Flutter and KMP
+
+Flutter's **Platform Channels** (MethodChannel, BasicMessageChannel, EventChannel) send async messages (JSON/ binary) between Dart and native — architecturally similar to the old RN Bridge. Flutter's **Pigeon** generates type-safe channel code, analogous to RN's Codegen. Kotlin Multiplatform (KMP) uses `expect`/`actual` declarations, letting each platform implement shared interfaces — conceptually closest to Turbo Module specs with platform implementations. The key difference: JSI and Turbo Modules enable **synchronous** calls from JS to native, which Flutter's MethodChannel cannot do. KMP offers true code sharing across platforms, while RN's New Architecture shares only the interface contract via Codegen.

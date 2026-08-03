@@ -1,0 +1,149 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Platform-Specific" label="Default Strategy" />
+        <StatItem value="Voyager" label="Compose MP Library" />
+        <StatItem value="Decompose" label="Multiplatform Library" />
+      </StatGrid>
+
+      ### Navigation Is Platform-Specific by Design
+
+      KMP does not provide shared navigation — and this is intentional. Navigation
+      semantics differ between platforms. Android uses a back stack with fragment
+      history. iOS uses a navigation stack with gesture-driven pop. By keeping
+      navigation native, KMP preserves platform-authentic transition animations,
+      back gestures, and deep linking behavior.
+
+      ```kotlin
+      // Android — Jetpack Navigation Compose
+      @Composable
+      fun AppNavigation() {
+          val navController = rememberNavController()
+          NavHost(navController, startDestination = "login") {
+              composable("login") {
+                  LoginScreen(
+                      onLoginSuccess = {
+                          navController.navigate("dashboard") {
+                              popUpTo("login") { inclusive = true }
+                          }
+                      }
+                  )
+              }
+              composable("dashboard") {
+                  DashboardScreen()
+              }
+          }
+      }
+      ```
+
+      ```swift
+      // iOS — SwiftUI NavigationStack
+      struct AppNavigation: View {
+          @State private var path = NavigationPath()
+
+          var body: some View {
+              NavigationStack(path: $path) {
+                  LoginScreen { user in
+                      path.append(NavTarget.dashboard(user))
+                  }
+                  .navigationDestination(for: NavTarget.self) { target in
+                      switch target {
+                      case .dashboard(let user):
+                          DashboardScreen(user: user)
+                      case .settings:
+                          SettingsScreen()
+                      }
+                  }
+              }
+          }
+      }
+      ```
+
+      <Callout title="Shared Navigation State">
+        While navigation itself is platform-specific, the **state that drives
+        navigation** (auth status, onboarding completion, feature flags) lives
+        in the shared module. A shared `AuthViewModel` emits `AuthState` via
+        `StateFlow`. Each platform observes it and navigates accordingly — Android
+        uses `navController.navigate()` while iOS uses `NavigationStack path`.
+        The business logic for "should we show login or dashboard?" is shared;
+        the actual navigation call is not.
+      </Callout>
+
+      ```kotlin
+      // commonMain — shared navigation state
+      sealed class NavigationCommand {
+          data object GoToLogin : NavigationCommand()
+          data class GoToDashboard(val user: User) : NavigationCommand()
+          data object GoToSettings : NavigationCommand()
+      }
+
+      class AppNavigationViewModel(private val authRepo: AuthRepository) {
+          private val _commands = MutableSharedFlow<NavigationCommand>()
+          val commands: SharedFlow<NavigationCommand> = _commands.asSharedFlow()
+
+          fun onAuthStateChange(state: AuthState) {
+              when (state) {
+                  is AuthState.Unauthenticated ->
+                      _commands.tryEmit(NavigationCommand.GoToLogin)
+                  is AuthState.Authenticated ->
+                      _commands.tryEmit(NavigationCommand.GoToDashboard(state.user))
+              }
+          }
+      }
+      ```
+
+      ### Compose Multiplatform Navigation Libraries
+
+      When using Compose Multiplatform, **Voyager** and **Decompose** provide shared
+      navigation logic. Voyager offers a Compose-first navigation API with screen
+      classes and transitions. Decompose provides component-based navigation with
+      back-press handling and lifecycle management.
+
+      ```kotlin
+      // Voyager — shared navigation for Compose MP
+      class MainScreen : Screen {
+          @Composable
+          override fun Content() {
+              val navigator = LocalNavigator.currentOrThrow
+              Button(onClick = { navigator.push(DetailScreen(id = "123")) }) {
+                  Text("Open Detail")
+              }
+          }
+      }
+      ```
+
+      ### Deep Linking
+
+      Deep linking is handled per platform. The shared module can expose URL-mapping
+      logic as pure functions that parse deep link URLs into navigation commands,
+      but the actual URI registration and handling is platform-specific.
+
+      ```kotlin
+      // commonMain — shared deep link parser
+      fun parseDeepLink(uri: String): NavigationCommand? {
+          return when {
+              uri.startsWith("myapp://user/") -> {
+                  val id = uri.removePrefix("myapp://user/")
+                  NavigationCommand.GoToProfile(id)
+              }
+              uri.startsWith("myapp://settings") -> NavigationCommand.GoToSettings
+              else -> null
+          }
+      }
+      ```
+
+      ### Comparison to GoRouter (Flutter)
+
+      | Aspect | KMP (Native Navigation) | KMP (Voyager/Decompose) | Flutter (GoRouter) |
+      |--------|-------------------------|------------------------|-------------------|
+      | Transitions | Native per platform | Configurable | Custom |
+      | Back Gesture | Native (iOS swipe) | Manual | Manual |
+      | Deep Links | Per platform | + shared parser | Shell routes |
+      | Type Safety | Per platform | Screen generics | Typed routes |
+      | Lifecycle | Native | Manual | Widget-based |
+
+      ### KMP Insight
+
+      KMP treats navigation as a **platform concern**, not a shared one. The shared
+      module answers "where should we go?" while each platform answers "how do we
+      get there?" This mirrors the core KMP philosophy — share intent, render natively.

@@ -1,0 +1,120 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="kotlin.test" label="Shared Test API" />
+        <StatItem value="commonTest" label="Source Set" />
+        <StatItem value="All Targets" label="Test Execution" />
+      </StatGrid>
+
+      ### Shared Tests in commonTest
+
+      Tests in `commonTest` compile and run on every platform target — one test
+      suite validates business logic on JVM (sub-second feedback) and on iOS
+      (real compiler fidelity). The `kotlin.test` framework provides `@Test`,
+      `assertEquals`, `assertTrue` across all targets.
+
+      ```kotlin
+      // commonTest — runs on both JVM and iOS
+      class LoginViewModelTest {
+          private val fakeRepo = FakeAuthRepository()
+          private val viewModel = LoginViewModel(fakeRepo, TestScope())
+
+          @Test
+          fun `login updates state to authenticated`() = runTest {
+              viewModel.login("test@example.com", "password123")
+              val state = viewModel.state.value
+              assertTrue(state is AuthState.Authenticated)
+              assertEquals("test@example.com", (state as AuthState.Authenticated).user.email)
+          }
+
+          @Test
+          fun `login with invalid creds returns error`() = runTest {
+              fakeRepo.shouldFail = true
+              viewModel.login("bad@example.com", "wrong")
+              assertTrue(viewModel.state.value is AuthState.Error)
+          }
+      }
+      ```
+
+      ### Coroutine Testing
+
+      `kotlinx-coroutines-test` provides `runTest`, `TestScope`, and
+      `TestDispatcher` for testing coroutine code across platforms.
+
+      ```kotlin
+      class UserRepositoryTest {
+          @Test
+          fun `fetchUser stores result in database`() = runTest {
+              val repo = UserRepositoryImpl(FakeKtorClient(), FakeDatabase())
+              val user = repo.getUser("123")
+              assertNotNull(user)
+              assertEquals("John", user.name)
+          }
+      }
+      ```
+
+      <Callout title="runTest on iOS">
+        `runTest` works on Kotlin/Native but defaults to 10s timeout. Use
+        `runTest(timeout = 30_000)` for I/O-bound tests. Also note
+        `Dispatchers.Main` on iOS requires `Dispatchers.setMain(
+        Dispatchers.Default)` in test setup — the iOS main dispatcher is
+        not initialized by default.
+      </Callout>
+
+      ### Mocking with MockK
+
+      MockK is a Kotlin-native mocking library supporting multiplatform targets.
+
+      ```kotlin
+      class GetUserUseCaseTest {
+          private val mockRepo = mockk<UserRepository>()
+          private val useCase = GetUserUseCase(mockRepo)
+
+          @Test
+          fun `returns user from repository`() = runTest {
+              coEvery { mockRepo.getUser("1") } returns User("1", "Alice", "a@t.com")
+              coEvery { mockRepo.observeUser("1") } returns flowOf(User("1", "Alice", "a@t.com"))
+              assertEquals("1", useCase("1").id)
+              coVerify(exactly = 1) { mockRepo.getUser("1") }
+          }
+      }
+      ```
+
+      ### Platform-Specific Test Runners
+
+      ```kotlin
+      // androidTest
+      class AndroidDatabaseTest {
+          @Test fun `database opens on Android`() {
+              val context = ApplicationProvider.getApplicationContext<Context>()
+              assertNotNull(AppDatabase(AndroidSqliteDriver(AppDatabase.Schema, context, "test.db")))
+          }
+      }
+      ```
+
+      ### Comparison: Testing Across Frameworks
+
+      | Aspect | KMP | Flutter | React Native |
+      |--------|-----|---------|--------------|
+      | Test Framework | kotlin.test | flutter_test | Jest |
+      | Shared Tests | commonTest (all targets) | Dart | JS (JSDOM) |
+      | Coroutine Testing | kotlinx-coroutines-test | FakeAsync | Jest mocks |
+      | Mocking | MockK | mocktail | Jest mocks |
+      | JVM Speed | sub-1s for shared logic | N/A | N/A |
+
+      ### Pitfall: Not Testing on Both Platforms
+
+      ```kotlin
+      // WRONG — only testing on JVM
+      // JVM passes but iOS may fail due to dispatcher, Unicode, or SQLite differences
+
+      // RIGHT — run on both targets
+      // ./gradlew :shared:allTests
+      ```
+
+      ### KMP Insight
+
+      Running the same test suite on JVM (sub-second) and iOS (target fidelity)
+      is KMP's unique testing advantage. Business logic iterates on JVM in
+      milliseconds before committing to an iOS build — developer experience
+      similar to server-side testing, available in mobile development.

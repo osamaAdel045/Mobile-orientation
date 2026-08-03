@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+
+    <StatGrid columns={3}>
+      <StatItem value="Dio" label="De facto HTTP client with interceptor chain architecture" />
+      <StatItem value="Repository Pattern" label="Abstract data source behind a use-case-facing interface" />
+      <StatItem value="Offline-First" label="Cache on write, replay on reconnect" />
+    </StatGrid>
+
+    ### Dio: Interceptor Chain Architecture
+
+    Dio's core differentiator is the **interceptor chain** — a middleware pipeline every request and response passes through. Interceptors run in registration order outbound and reverse on the way back, forming a layered onion around the HTTP call.
+
+    ```
+         ┌─ Auth Interceptor ──┐         ┌─ Request ─┐
+         │ attach Bearer token │         │ retry     │
+         │ refresh on 401      │────────►│ 5xx w/    │
+         └─────────────────────┘         │ backoff   │
+                         │               └───────────┘
+                         ▼                     ▲
+         ┌─ Log Interceptor ─┐        ┌─ Response ──┐
+         │ method, status,   │        │ parse DTO   │
+         │ duration, body    │◄───────│ unwrap      │
+         └───────────────────┘        │ envelope    │
+                                       └─────────────┘
+    ```
+
+    ### Auth Interceptor (Token Refresh)
+
+    ```dart
+    class AuthInterceptor extends Interceptor {
+      final AuthTokenStorage _storage;
+      final Dio _dio; // separate instance to avoid recursive retry
+      AuthInterceptor(this._storage, this._dio);
+
+      @override
+      void onRequest(RequestOptions o, RequestInterceptorHandler h) async {
+        final token = await _storage.getAccessToken();
+        if (token != null) o.headers['Authorization'] = 'Bearer $token';
+        h.next(o);
+      }
+
+      @override
+      void onError(DioException err, ErrorInterceptorHandler h) async {
+        if (err.response?.statusCode == 401) {
+          try {
+            final newToken = await _refreshToken();
+            await _storage.saveAccessToken(newToken);
+            err.requestOptions.headers['Authorization'] = 'Bearer $newToken';
+            h.resolve(await _dio.fetch(err.requestOptions));
+          } on DioException { _storage.clearTokens(); }
+        }
+        h.next(err);
+      }
+    }
+    ```
+
+    ### Retry Interceptor (Exponential Backoff)
+
+    ```dart
+    class RetryInterceptor extends Interceptor {
+      @override
+      void onError(DioException err, ErrorInterceptorHandler h) async {
+        final attempt = (err.requestOptions.extra['retryCount'] as int? ?? 0) + 1;
+        if (attempt <= 3 && _shouldRetry(err)) {
+          err.requestOptions.extra['retryCount'] = attempt;
+          await Future.delayed(Duration(seconds: pow(2, attempt).toInt()));
+          h.resolve(await Dio().fetch(err.requestOptions));
+        } else { h.next(err); }
+      }
+      bool _shouldRetry(DioException e) =>
+        e.type == DioExceptionType.connectionTimeout ||
+        e.type == DioExceptionType.receiveTimeout ||
+        (e.response?.statusCode ?? 0) >= 500;
+    }
+    ```
+
+    <Callout title="Don't Retry Unsafe Methods">
+      Never retry POST/PATCH/DELETE without an idempotency key — you could duplicate orders. Only retry GET/HEAD.
+    </Callout>
+
+    ### Repository + Error Handling
+
+    ```dart
+    sealed class NetworkException implements Exception {
+      final String message; final int? statusCode;
+      NetworkException(this.message, this.statusCode);
+    }
+    class ServerException extends NetworkException {
+      ServerException(super.message, super.statusCode);
+    }
+    class TimeoutException extends NetworkException {
+      TimeoutException() : super('Request timed out', null);
+    }
+
+    class ProductRepository implements Repository<Product, int> {
+      final ProductRemoteDataSource _remote;
+      final ProductLocalDataSource _local;
+
+      Future<Result<List<Product>>> getAll({int? page, int? limit}) async {
+        try {
+          final dtos = await _remote.fetchProducts(page: page, limit: limit);
+          await _local.cacheProducts(dtos);
+          return Result.success(dtos.map((d) => d.toEntity()).toList());
+        } on DioException {
+          final cached = await _local.getCachedProducts();
+          if (cached != null) return Result.success(cached);
+          return Result.failure(NetworkFailure('No connection and no cache'));
+        }
+      }
+    }
+    ```
+
+    Map Dio exceptions at the interceptor level — UI layers never see Dio types.
+
+    ### Pagination & Serialization
+
+    **Page-based** (offset + limit): increment page counter, end on empty list. **Cursor-based** (cursor + limit): pass last item ID — robust against data changes between pages.
+
+    | Serialization | Code-gen | Best for |
+    |---|---|---|
+    | `freezed` | Yes | Immutable models, union types, JSON |
+    | `json_serializable` | Yes | Simple DTOs with `@JsonKey` |
+    | Manual | No | Small projects |
+
+    ### Offline-First with Hive
+
+    Write-through: serialize API responses into a Hive box keyed by URL. On failure, read from Hive. Queue mutations in a pending-actions box and replay when `connectivity_plus` reports connectivity restored.
+
+    ```dart
+    class OfflineQueue {
+      final Box _box;
+      Future<void> replay() async {
+        for (final key in _box.keys) {
+          final action = QueuedAction.fromJson(_box.get(key));
+          try { await _execute(action); _box.delete(key); }
+          catch (_) { break; }
+        }
+      }
+    }
+    ```
+
+    <Callout title="WebSocket / GraphQL">
+      Dio does not support WebSocket. Use `web_socket_channel` for real-time streams. For GraphQL subscriptions, use `graphql_flutter`.
+    </Callout>
+
+    ### Comparison: React Native / Native
+
+    React Native uses `axios` or `fetch` — neither has built-in retry or auth-refresh interceptors. Android's `Retrofit` + `OkHttp` is nearly identical: same interceptor chain pattern. Flutter's advantage: same pattern in pure Dart with zero platform code.

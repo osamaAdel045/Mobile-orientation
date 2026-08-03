@@ -1,0 +1,115 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Pure Kotlin" label="commonMain Rule" />
+        <StatItem value="Narrow API" label="Shared Surface" />
+        <StatItem value="SKIE" label="iOS Idiomatic" />
+      </StatGrid>
+
+      ### Keep commonMain Pure Kotlin
+
+      The most critical rule: `commonMain` must not import any platform SDK type.
+      No `android.*`, no `platform.*`, no `java.*` (except multiplatform stdlib).
+      Every platform import restricts which targets can compile.
+
+      ```kotlin
+      // WRONG — platform imports in commonMain
+      import android.content.Context
+      class WrongRepo(private val context: Context) { }
+
+      // RIGHT — use expect/actual abstraction
+      class RightRepo(private val fileSystem: FileSystem) {
+          suspend fun cacheFile(data: ByteArray) = fileSystem.writeFile("data.json", data)
+      }
+      ```
+
+      ### expect/actual Only for Platform Boundaries
+
+      Use expect/actual when implementation fundamentally differs per OS
+      (file system, secure storage, biometrics). Prefer interface-based DI for
+      configuration differences (logging, caching).
+
+      ```kotlin
+      // GOOD — platform API
+      expect class SecureRandom { fun nextBytes(size: Int): ByteArray }
+
+      // BAD — could be an interface
+      expect class JsonParser { fun parse(text: String): JsonElement }
+      // BETTER — use kotlinx.serialization directly
+      ```
+
+      ### Expose Narrow API, Hide Implementation
+
+      The shared module should expose a minimal surface — use cases and state
+      holders. Repositories, DTOs, and data sources should be `internal`.
+
+      ```kotlin
+      // Public API — narrow and focused
+      class GetUser @Inject constructor(private val repo: UserRepository) {
+          suspend operator fun invoke(id: String): Flow<User> = repo.observe(id)
+      }
+
+      // Internal — hidden from platform consumers
+      internal data class UserDto(/* ... */)
+      internal class UserRepositoryImpl(/* ... */) : UserRepository
+      ```
+
+      <Callout title="Public API = Binary Compatibility">
+        Every public declaration is a **binary contract**. On Android, changing
+        public API breaks AAR consumers. On iOS, it breaks Xcode framework
+        consumers. Mark everything not called from platform code as `internal`.
+        Use `@ApiVersion` for published library API evolution.
+      </Callout>
+
+      ### Idiomatic APIs Per Platform
+
+      SKIE converts `StateFlow` to `AsyncSequence` and sealed classes to Swift
+      enums. For custom types, use `@ObjCName` for cleaner Swift exports.
+
+      ```kotlin
+      @ObjCName("ColorTheme")
+      enum class Theme { LIGHT, DARK, SYSTEM }
+
+      class ThemeManager {
+          @ObjCName("currentTheme") val currentTheme: Flow<Theme>
+          @ObjCName("setTheme:") fun setTheme(theme: Theme) { }
+      }
+      ```
+
+      ### Coroutine Discipline
+
+      ```kotlin
+      // WRONG — GlobalScope leaks
+      class WrongVM { fun load() { GlobalScope.launch { } } }
+
+      // RIGHT — explicit scope from platform
+      class RightVM(private val scope: CoroutineScope) {
+          fun load() { scope.launch { /* cancelled when scope ends */ } }
+      }
+      ```
+
+      ### Quick Reference Checklist
+
+      ```yaml
+      commonMain:
+        - Zero platform SDK imports
+        - Interface-based DI (Koin or manual over expect/actual)
+        - All implementation classes as internal
+
+      iOS:
+        - SKIE for StateFlow → AsyncSequence
+        - Static framework preferred (smaller app size)
+        - Test on simulator + device
+
+      Android:
+        - ProGuard rules for kotlinx.serialization (-keepattributes *Annotation*)
+        - Ktor OkHttp engine for connection pooling
+      ```
+
+      ### KMP Insight
+
+      KMP best practices converge on one principle: **the shared module is a
+      library, not a framework**. It does not call you; you call it. It does
+      not manage lifecycles; it receives scopes. It does not render UI; it
+      produces data. Treating the shared module as a well-encapsulated library
+      with a narrow API is the foundation of maintainable KMP.

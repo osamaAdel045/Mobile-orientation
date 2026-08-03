@@ -1,0 +1,144 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Clean Architecture" label="Recommended Pattern" />
+        <StatItem value="commonMain" label="Domain + Data" />
+        <StatItem value="Platform" label="Presentation Only" />
+      </StatGrid>
+
+      ### Clean Architecture in KMP
+
+      Clean Architecture maps naturally onto KMP's source set hierarchy. The **Domain
+      layer** (entities, use cases, repository interfaces) lives in `commonMain` with
+      zero platform dependencies — it imports only pure Kotlin and kotlinx libraries.
+      The **Data layer** (repository implementations, data sources, DTOs) also lives
+      in `commonMain` but may use expect/actual for platform resources. The
+      **Presentation layer** is exclusively platform-native: Jetpack Compose on Android,
+      SwiftUI on iOS.
+
+      ```kotlin
+      // commonMain — Domain layer (pure Kotlin)
+      // No imports from Android SDK, iOS SDK, or any UI framework
+      data class User(val id: String, val name: String, val email: String)
+
+      interface UserRepository {
+          suspend fun getUser(id: String): User
+          fun observeUser(id: String): Flow<User>
+      }
+
+      class GetUserUseCase(private val repo: UserRepository) {
+          suspend operator fun invoke(id: String): Flow<User> {
+              return repo.observeUser(id)
+          }
+      }
+      ```
+
+      ```kotlin
+      // commonMain — Data layer implementation
+      class UserRepositoryImpl(
+          private val api: KtorClient,
+          private val db: Database
+      ) : UserRepository {
+          override suspend fun getUser(id: String): User {
+              val dto = api.get<UserDto>("/users/$id")
+              db.userQueries.insert(dto.toEntity())
+              return dto.toDomain()
+          }
+
+          override fun observeUser(id: String): Flow<User> {
+              return db.userQueries.observe(id).map { it.toDomain() }
+          }
+      }
+      ```
+
+      <Callout title="Domain Layer Purity">
+        The domain layer must not import anything from Android (`android.*`), iOS
+        (`platform.*`), or any framework that ties it to a specific platform. This
+        guarantees the domain can be unit-tested on JVM in milliseconds without
+        emulators or simulators. A domain layer that imports `Android.Context` or
+        `UIKit.UIView` has already failed.
+      </Callout>
+
+      ### MVVM with Shared ViewModels
+
+      The ViewModel pattern works across platforms when the ViewModel is defined in
+      `commonMain` and each platform instantiates it with platform dependencies.
+
+      ```kotlin
+      // commonMain — shared ViewModel
+      class ProfileViewModel(
+          private val getUserUseCase: GetUserUseCase,
+          private val scope: CoroutineScope
+      ) {
+          private val _state = MutableStateFlow<ProfileState>(ProfileState.Loading)
+          val state: StateFlow<ProfileState> = _state.asStateFlow()
+
+          fun loadUser(id: String) {
+              scope.launch {
+                  getUserUseCase(id).collect { user ->
+                      _state.value = ProfileState.Content(user)
+                  }
+              }
+          }
+      }
+      ```
+
+      ### MVI with Shared Reducers
+
+      MVI (Model-View-Intent) centralizes state transitions in a reducer function,
+      which is naturally testable and platform-independent. The shared module defines
+      the sealed Intent class and the reducer logic.
+
+      ```kotlin
+      // commonMain — MVI reducer pattern
+      sealed class LoginIntent {
+          data object Submit : LoginIntent()
+          data class EmailChanged(val email: String) : LoginIntent()
+          data class PasswordChanged(val password: String) : LoginIntent()
+      }
+
+      data class LoginState(
+          val email: String = "",
+          val password: String = "",
+          val isLoading: Boolean = false,
+          val error: String? = null
+      )
+
+      fun loginReducer(state: LoginState, intent: LoginIntent): LoginState {
+          return when (intent) {
+              is LoginIntent.EmailChanged -> state.copy(email = intent.email)
+              is LoginIntent.PasswordChanged -> state.copy(password = intent.password)
+              is LoginIntent.Submit -> state.copy(isLoading = true, error = null)
+          }
+      }
+      ```
+
+      ### Comparison to Flutter Patterns
+
+      | Aspect | KMP | Flutter |
+      |--------|-----|---------|
+      | Domain Layer | commonMain (pure Kotlin) | Shared Dart package |
+      | DI | Koin (runtime) | get_it (runtime) |
+      | State | StateFlow/SharedFlow | Riverpod/Bloc |
+      | Platform Boundary | expect/actual (compile-time) | Platform Channels (runtime) |
+      | Testing | kotlin.test on JVM (fast) | flutter_test (needs engine) |
+      | Navigation | Native stack per platform | GoRouter (shared) |
+
+      ### Pitfall: Platform Leakage in Domain
+
+      ```kotlin
+      // WRONG — domain layer imports Android SDK
+      import android.content.Context
+      class GetUserUseCase(private val ctx: Context)
+
+      // RIGHT — domain layer is pure Kotlin
+      class GetUserUseCase(private val repo: UserRepository)
+      ```
+
+      ### KMP Insight
+
+      Clean Architecture in KMP formalizes what makes KMP valuable: the domain layer
+      compiles and tests on JVM in under a second, while the presentation layer
+      remains fully native. Developers verify business logic before ever running
+      on a device. This is the same testing loop server-side developers have —
+      instantly available in mobile development.

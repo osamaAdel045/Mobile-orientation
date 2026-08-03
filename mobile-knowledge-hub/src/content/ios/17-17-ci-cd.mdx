@@ -1,0 +1,118 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+      <StatItem value="Xcode Cloud" label="Apple CI (2021)" />
+      <StatItem value="Fastlane" label="Automation Suite" />
+      <StatItem value="GitHub Actions" label="Third-party CI" />
+      <StatItem value="TestFlight" label="Distribution" />
+    </StatGrid>
+
+    ### Xcode Cloud
+
+    Apple's integrated CI/CD service — auto-detects schemes, runs tests on real devices and
+    simulators, archives, and pushes to TestFlight. No runner management needed. Workflows
+    trigger on push, PR, or schedule. Pricing is included with the Apple Developer Program
+    (25 compute hours/month per developer, scaling to 250 for Enterprise).
+
+    ### GitHub Actions for iOS
+
+    Ephemeral runners cannot hold persistent signing identities, so certificates must be
+    generated per-run or managed via Fastlane `match`.
+
+    ```yaml
+    name: iOS CI
+
+    on:
+      push: {branches: [main, develop]}
+      pull_request: {branches: [main]}
+
+    jobs:
+      build-and-test:
+        runs-on: macos-14
+
+        steps:
+          - uses: actions/checkout@v4
+
+          - name: Select Xcode
+            run: sudo xcode-select -s /Applications/Xcode_16.0.app
+
+          - name: Resolve SPM
+            run: xcodebuild -resolvePackageDependencies \
+                    -workspace MyApp.xcworkspace -scheme MyApp
+
+          - name: Test
+            run: xcodebuild test \
+                    -workspace MyApp.xcworkspace \
+                    -scheme MyApp \
+                    -destination 'platform=iOS Simulator,name=iPhone 15 Pro,OS=17.5' \
+                    -resultBundlePath TestResults.xcresult \
+                    -enableCodeCoverage YES | xcpretty
+
+          - name: Upload results
+            if: always()
+            uses: actions/upload-artifact@v4
+            with:
+              name: test-results
+              path: TestResults.xcresult
+    ```
+
+    <Callout title="Fastlane match for Reproducible Code Signing">
+      Code signing is the most error-prone part of iOS CI. Fastlane `match` stores encrypted
+      certificates and provisioning profiles in a private Git repo, regenerates them on expiry,
+      and installs on any machine. This eliminates "profile expired" build failures and makes
+      CI runners truly ephemeral.
+    </Callout>
+
+    ### Fastlane Actions
+
+    | Action | Purpose |
+    |---|---|
+    | `match` | Sync code signing assets from a private Git repo |
+    | `scan` | Run tests with formatted output (HTML, JUnit) |
+    | `gym` | Build and export `.ipa` |
+    | `deliver` | Upload to App Store Connect with metadata |
+    | `snapshot` | Generate localized screenshots for all devices |
+    | `pilot` | Manage TestFlight builds and testers |
+
+    ```ruby
+    # Fastfile
+    lane :beta do
+      match(type: :appstore)
+      gym(scheme: "MyApp", export_method: :appstore)
+      pilot(
+        skip_submission: false,
+        distribute_external: false,
+        changelog: "Bug fixes and performance improvements"
+      )
+    end
+
+    error do |lane, exception|
+      slack(message: "Beta failed: #{exception.message}", success: false)
+    end
+    ```
+
+    ### Code Signing Deep Dive
+
+    Three signing configurations: **Development** (registered devices via Xcode), **Ad Hoc**
+    (up to 100 registered devices, no App Review), **App Store** (production). Fastlane `match`
+    encrypts all assets and syncs across the team.
+
+    ```bash
+    codesign -d --entitlements - MyApp.app
+    security cms -D -i embedded.mobileprovision | plutil -p -
+    ```
+
+    ### TestFlight Distribution
+
+    - **Internal testing**: Up to 100 team members, no beta review, unlimited builds.
+    - **External testing**: Up to 10,000 testers, requires Beta App Review for first build.
+    - Automated versioning via `xcrun agvtool new-marketing-version 2.1.0` and
+      `xcrun agvtool next-version -all`.
+
+    ### Cross-Platform Comparison
+
+    Google Play Console parallels App Store Connect but requires no code signing equivalent
+    (Play App Signing handles distribution certs). Fastlane supports Android via `supply`.
+    Flutter CI uses the same `xcodebuild` and Fastlane tooling, with `flutter build ipa`
+    wrapping `gym`. GitHub Actions patterns are identical across mobile ecosystems — only
+    signing and build-export steps differ.

@@ -1,0 +1,84 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="None (by default)" label="Shared Rendering" />
+        <StatItem value="Skia" label="Compose MP Engine" />
+        <StatItem value="Native Only" label="UI Framework" />
+      </StatGrid>
+
+      ### No Shared Rendering Pipeline (Default)
+
+      KMP's defining architectural decision: **there is no shared rendering pipeline.**
+      The shared Kotlin module produces typed data — models, state objects, error
+      enums. Each platform takes that data and renders it using its own native toolkit.
+      This eliminates the rendering overhead, platform-feel compromises, and "jank"
+      that shared-UI frameworks introduce.
+
+      ```yaml
+      Android rendering chain (default KMP):
+        Shared Kotlin → StateFlow → Jetpack Compose → Skia → OpenGL/Vulkan → Display
+
+      iOS rendering chain (default KMP):
+        Shared Kotlin → SKIE AsyncSequence → SwiftUI → Core Animation → Metal → Display
+      ```
+
+      ### Compose Multiplatform — The Optional Shared UI
+
+      JetBrains ported Jetpack Compose to iOS and Desktop via **Skia**. Compose
+      Multiplatform renders pixels on iOS the same way Flutter does — through a custom
+      Skia canvas with no native UIKit involvement. This gives shared UI at the cost
+      of platform-authentic controls and behavior.
+
+      ```kotlin
+      // shared UI with Compose Multiplatform
+      @Composable
+      fun CounterScreen(viewModel: CounterViewModel) {
+          val state by viewModel.state.collectAsState()
+          Column(horizontalAlignment = Alignment.CenterHorizontally) {
+              Text("Count: ${state.count}", fontSize = 24.sp)
+              Button(onClick = { viewModel.increment() }) {
+                  Text("Increment")
+              }
+          }
+      }
+      ```
+
+      <Callout title="Compose Multiplatform Caveats">
+        Compose Multiplatform on iOS renders through Skia, not UIKit. This means:
+        no native text selection gestures, no native accessibility tree integration
+        by default, and no UIKit component embedding without interop. Each Compose
+        version tracks a specific Kotlin release — version compatibility must be
+        exact. For form-heavy apps that need native-feeling text fields, date pickers,
+        or keyboard handling, the default KMP approach (native UI per platform) is
+        generally preferred.
+      </Callout>
+
+      ### Rendering Comparison Table
+
+      | Aspect | Default KMP | Compose MP | Flutter |
+      |--------|-------------|------------|---------|
+      | Rendering Engine | None (native) | Skia | Skia |
+      | iOS Controls | UIKit/SwiftUI | Compose Widgets | Material/Cupertino |
+      | Android Controls | Jetpack Compose | Compose Widgets | Material/Cupertino |
+      | Text Input | Native | Compose TextField | EditableText |
+      | Navigation | Native stack | Voyager/Decompose | GoRouter |
+      | Animation | Core Animation/MotionLayout | Compose Animation | Implicit/Explicit |
+      | Platform Channels | None (direct) | None (direct) | MethodChannel |
+
+      ### Pitfall: Over-estimating Compose Multiplatform
+
+      ```kotlin
+      // WRONG — assuming Compose MP on iOS behaves like UIKit
+      // Keyboard avoidance, text selection, and HapticFeedback work differently
+
+      // RIGHT — evaluate Compose MP for UI portions that don't need native controls
+      // Charts, graphs, and custom-drawn UI benefit most from shared Compose
+      ```
+
+      ### KMP Insight
+
+      The "no rendering pipeline" model is KMP's superpower for teams that already
+      hire iOS and Android engineers. Each team uses the UI framework they already
+      know — Compose or SwiftUI — while the shared module eliminates duplicate
+      business logic. KMP apps are native apps that happen to share Kotlin code,
+      not cross-platform apps that try to look native.

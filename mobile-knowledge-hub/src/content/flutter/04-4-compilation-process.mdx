@@ -1,0 +1,139 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      ### Three Compilation Modes
+
+      Flutter uses three distinct compilation modes, each optimized for a different stage of development. The key enabler is Dart's language design — the same source can be JIT-compiled for rapid iteration or AOT-compiled for production deployment, all from a single language and toolchain.
+
+      ```
+      Mode        Compiler    Optimization  Hot Reload  Performance
+      ─────       ─────────   ────────────  ──────────  ───────────
+      Debug       JIT         Minimal       Yes         ~10x slower
+      Profile     AOT         + profiling   No          ~1.2x slower
+      Release     AOT         Maximal       No          Native speed
+      ```
+
+### Debug Mode: JIT + Hot Reload
+
+      In debug mode, the Dart VM compiles source to **kernel binary** — a serialized, AST-based intermediate representation. The VM loads this kernel and initially interprets it, selectively JIT-compiling hot functions to machine code. The JIT compiler prioritizes compilation speed over output quality, which is why debug mode runs ~10x slower than release.
+
+      Hot reload works through kernel binary deltas. When you save a file, the Dart frontend recompiles only the modified library to kernel IR. The VM loads this delta, diffs class definitions, and updates the running program's state — replacing function bodies, adding fields, updating type hierarchies — **while preserving current State objects** in the widget tree.
+
+      ```dart
+      // Debug mode: JIT compiles per-function on first execution
+      void expensiveCalculation() {
+        // First call: VM interprets this function
+        // After N calls: JIT compiles to native machine code
+        // Profiling feedback: deoptimize if assumptions change
+      }
+      ```
+
+      Dart achieves this through its **object layout**: each Dart object has a header with class information. When a class definition changes, the VM creates a new class descriptor and remaps existing instances to the new layout. Old fields keep their values; new fields receive their initializers. This is fundamentally different from how Swift or Kotlin handle code reload — they do not support it at the class level.
+
+### Profile Mode: The Middle Ground
+
+      Profile mode is often overlooked but critical for performance debugging. The app is AOT-compiled (same as release) but retains the **VM service protocol** for profiling tools. This allows DevTools to connect to a profile-mode app on a real device and inspect frame rendering times, widget rebuild counts, and shader compilation events.
+
+      Profile mode generates code that is ~20% slower than full release due to profiling instrumentation, but it is the only accurate way to measure real device performance. Debug mode's JIT overhead distorts frame timing — what looks like a performance issue in debug might disappear in release. Always profile in profile mode on a real device before making optimization decisions.
+
+### Release Mode: Full AOT Pipeline
+
+      ```
+      Dart Source (.dart files)
+            │
+            ▼  dart frontend (gen_kernel)
+      Kernel Binary (AST-based intermediate representation)
+            │  Preserves type annotations, class hierarchy, function bodies
+            │  Strips syntactic sugar — canonical AST
+            ▼  TFA — Type Flow Analysis (global closed-world optimization)
+      Optimized Kernel (devirtualized, tree-shaken, inlined)
+            │  Unused classes, methods, fields eliminated
+            │  Virtual calls converted to direct calls
+            ▼  gen_snapshot (AOT compiler backend)
+      ARM64 / x86_64 Machine Code (libapp.so / App.framework)
+            │  Full native binary — no VM, no interpreter, no bytecode
+            │  Uses standard calling conventions, stack frames
+            ▼  linked with:
+      Flutter Engine (C++: Impeller, Skia, Harfbuzz, ICU)
+            │
+            ▼
+      App Bundle (Android .aab / iOS .ipa / macOS .app)
+      ```
+
+      The Dart frontend compiles source to **kernel binary** — a portable AST-based serialization. Kernel is language-agnostic in structure: it preserves Dart semantics but strips syntactic sugar. This same format is used for hot reload deltas, which is why debug and release share the frontend but diverge at the backend.
+
+### Type Flow Analysis (TFA) with Examples
+
+      TFA is the core optimization pass that makes Dart AOT competitive with hand-written native code. Operating under the **closed-world assumption** (no dynamic class loading — unlike Java or JavaScript), TFA analyzes the entire program to determine concrete types at every call site.
+
+      **Before TFA — virtual call that must check a vtable:**
+      ```dart
+      abstract class Animal { void speak(); }
+      class Dog implements Animal {
+        @override void speak() => print('Woof');
+      }
+      class Cat implements Animal {
+        @override void speak() => print('Meow');
+      }
+      void main() {
+        final Animal a = readEnabled ? Dog() : Cat();
+        a.speak();  // Virtual dispatch — must check vtable at runtime
+      }
+      ```
+
+      **After TFA — devirtualized direct call:**
+      ```dart
+      // TFA determines: Dog and Cat both implement Animal, but vtable
+      // has only 2 entries. The compiler inlines the dispatch.
+      // If the program only ever creates Dog:
+      void main() {
+        final Dog a = Dog();  // TFA narrowed the type
+        Dog_speak(a);          // Direct function call — no vtable
+      }
+      ```
+
+      TFA also enables **tree shaking** — removing code that can never be reached. If the app imports Material widgets but never calls `showDatePicker`, the date picker's dialog, animations, calendar grid, and their entire transitive dependencies are eliminated. Unused class members are also removed:
+
+      ```dart
+      // Original code in compiled binary:
+      class ComplexWidget {
+        void usedMethod() { ... }
+        void unusedMethod() { /* 500 lines eliminated */ }
+        Widget build(BuildContext context) => ...;
+      }
+      // After TFA + tree shaking:
+      // unusedMethod and everything it called is gone.
+      // The class retains only usedMethod and build().
+      ```
+
+### Binary Size Breakdown
+
+      A release-built Flutter app baseline is approximately 6-8 MB:
+
+      - **Flutter engine (~4-5 MB):** Impeller/Skia GPU backend, text shaping (Harfbuzz), ICU for internationalization, font fallback data, platform channel infrastructure, and Dart runtime stubs (static trampolines for allocation, GC write barriers). This is shared across all Flutter apps on the device when using the embedded engine on newer Android versions.
+      - **App code (~1-3 MB):** AOT-compiled Dart code after TFA and tree shaking. A minimal hello world generates roughly 1 MB. A large app with 50K+ lines of Dart and multiple packages typically lands at 3-8 MB.
+      - **Assets (variable):** Material Design icon font (~700 KB), custom fonts, images, ARB localization files.
+
+      <Callout title="Reducing binary size:">
+        Use `--split-debug-info` to strip DWARF debug symbols (saves ~30% of the Dart binary). Use `--obfuscate` to shorten symbol names. Use `flutter build appbundle --target-platform android-arm64` to target only arm64, dropping 32-bit support and saving ~30% in APK size. For iOS, bitcode stripping in App Store Connect removes additional symbols.
+      </Callout>
+
+### Comparison to Other Languages
+
+      **JavaScript (React Native):** V8 JIT-compiles JavaScript to machine code at runtime using speculative optimization — type feedback drives optimization and potential deoptimization when assumptions fail. This creates non-deterministic performance. V8's JIT compiler heap adds ~3 MB of memory overhead. Flutter's AOT avoids warm-up time, deoptimization penalties, and the JIT heap entirely.
+
+      **Swift (iOS native):** Swift uses LLVM from frontend (SIL) to backend (machine code). SIL's optimization passes are conceptually similar to Dart's TFA — devirtualization, inlining, specialization. Swift apps link against the Objective-C runtime for dynamic dispatch. Dart AOT produces code with similar single-thread performance to Swift, but the Flutter engine (Impeller) adds GPU overhead that native Swift (using UIKit + Metal directly) avoids.
+
+      **Kotlin (Android native):** Kotlin compiles to JVM bytecode; ART on Android compiles hot methods to native code over time (JIT within the OS runtime). Kotlin/Native uses LLVM for direct-to-machine-code compilation, similar to Dart AOT. Flutter's performance is comparable to Kotlin/Native, but the engine overhead means Flutter apps are typically 2-3 MB larger than equivalent Kotlin apps.
+
+      <DecisionMatrix
+        scores={[
+          { label: 'AOT Performance', score: 9 },
+          { label: 'Binary Size Efficiency', score: 6 },
+          { label: 'Debug Iteration Speed', score: 10 },
+          { label: 'Optimization Predictability', score: 9 },
+          { label: 'Platform Optimization Access', score: 5 },
+        ]}
+        pros="Deterministic AOT performance with no JIT warmup, sub-second hot reload via kernel deltas, closed-world TFA produces near-native code, tree shaking eliminates dead code aggressively, no deoptimization cycles"
+        cons="Closed-world assumption prevents runtime code generation and reflection, larger baseline binary than native (engine overhead), Dart profiler tooling less mature than LLVM-based toolchains, AOT compilation is slower than JIT compilation"
+      />

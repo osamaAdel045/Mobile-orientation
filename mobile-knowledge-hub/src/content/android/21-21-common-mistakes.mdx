@@ -1,0 +1,146 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    ### Common Android Development Mistakes and How to Fix Them
+
+    Each section shows the wrong approach followed by the correct solution with explanations of why the wrong pattern fails in production.
+
+    <StatGrid columns={3}>
+        <StatItem value="80%" label="ANRs from main-thread blocking" />
+        <StatItem value="65%" label="Apps ignoring process death" />
+        <StatItem value="50%" label="Memory leaks from static refs" />
+        <StatItem value="40%" label="Cold start >500ms (no baseline)" />
+    </StatGrid>
+
+    ### StateFlow Collection Without Lifecycle Awareness
+
+    Collecting a `StateFlow` without lifecycle awareness continues receiving emissions in the background, wasting resources and potentially triggering navigation events at the wrong time.
+
+    ```kotlin
+    {
+    // WRONG: Collects even when Activity is stopped
+    @Composable
+    fun TaskScreen(viewModel: TaskViewModel = hiltViewModel()) {
+        val uiState by viewModel.uiState.collectAsState()
+    }
+    }
+    ```
+
+    ```kotlin
+    {
+    // RIGHT: Pauses collection when lifecycle < STARTED
+    @Composable
+    fun TaskScreen(viewModel: TaskViewModel = hiltViewModel()) {
+        val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    }
+    }
+    ```
+
+    <Callout title="One-Shot Events Need Channels, Not StateFlow">
+        Using StateFlow for one-shot events (snackbar, navigation, permission requests) causes re-emission on configuration change — the event fires again. Use `Channel<UiEvent>` with `replay = 0` and consume via `LaunchedEffect`. This is the most common architectural mistake in production Compose apps.
+    </Callout>
+
+    ### Blocking the Main Thread
+
+    Network or database calls on the main thread cause ANR dialogs after 5 seconds. The system kills the process and the user sees a system-level dialog.
+
+    ```kotlin
+    {
+    // WRONG: Hangs main thread
+    fun fetchUserData(userId: String): User {
+        return runBlocking { userRepository.getUser(userId) }
+    }
+    }
+    ```
+
+    ```kotlin
+    {
+    // RIGHT: Suspend with proper dispatcher
+    suspend fun fetchUserData(userId: String): User {
+        return withContext(Dispatchers.IO) { userRepository.getUser(userId) }
+    }
+    }
+    ```
+
+    ### Not Handling Configuration Changes
+
+    Rotation, foldable unfolding, and multi-window resize destroy and recreate the Activity. Data stored in Activity fields is lost.
+
+    ```kotlin
+    {
+    // WRONG: Data wiped on every configuration change
+    class MainActivity : ComponentActivity() {
+        private var searchResults: List<Result> = emptyList()
+    }
+    }
+    ```
+
+    ```kotlin
+    {
+    // RIGHT: ViewModel survives configuration changes
+    class SearchViewModel @Inject constructor(
+        private val savedStateHandle: SavedStateHandle
+    ) : ViewModel() {
+        fun search(query: String) {
+            viewModelScope.launch {
+                savedStateHandle["lastQuery"] = query
+                _searchResults.value = repository.search(query)
+            }
+        }
+    }
+    }
+    ```
+
+    ### Memory Leaks from Long-Lived References
+
+    Holding an Activity context in a singleton prevents garbage collection of the entire View hierarchy.
+
+    ```kotlin
+    {
+    // WRONG: Static reference leaks the Activity
+    object AnalyticsTracker {
+        private var context: Context? = null
+        fun init(context: Context) { this.context = context }
+    }
+    }
+    ```
+
+    ```kotlin
+    {
+    // RIGHT: Use Application context
+    object AnalyticsTracker {
+        private var applicationContext: Context? = null
+        fun init(app: Application) { applicationContext = app }
+    }
+    }
+    ```
+
+    ### Ignoring Process Death
+
+    The system can kill your app process at any time when in the background. Relying on in-memory state alone means users lose progress.
+
+    ```kotlin
+    {
+    // WRONG: In-memory only — lost on process death
+    class CheckoutViewModel : ViewModel() {
+        var cartItems: MutableList<CartItem> = mutableListOf()
+    }
+    }
+    ```
+
+    ```kotlin
+    {
+    // RIGHT: SavedStateHandle survives process death
+    class CheckoutViewModel @Inject constructor(
+        private val savedStateHandle: SavedStateHandle
+    ) : ViewModel() {
+        val cartItems: StateFlow<List<CartItem>> =
+            savedStateHandle.getStateFlow("cart_items", emptyList())
+
+        fun addItem(item: CartItem) {
+            savedStateHandle["cart_items"] = cartItems.value + item
+        }
+    }
+    }
+    ```
+
+    These patterns account for the majority of production bugs across Android teams. Lifecycle-aware collection, ViewModel-scoped coroutines, and SavedStateHandle eliminate an entire class of runtime failures.

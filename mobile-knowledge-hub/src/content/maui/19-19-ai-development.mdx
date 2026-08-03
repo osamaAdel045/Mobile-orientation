@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem value="Strong" label="C# / XAML Training" />
+  <StatItem value="2022" label="MAUI Release Year" />
+  <StatItem value="Limited" label="MAUI-Specific Data" />
+  <StatItem value="MVVM" label="Best AI Use Case" />
+</StatGrid>
+
+### Why AI Is Strong with .NET MAUI
+
+C# and XAML have been part of AI training corpora for over two decades. The .NET ecosystem — WPF, UWP, Xamarin.Forms, and now MAUI — spans millions of open-source repositories, Stack Overflow questions, and documentation pages. This breadth makes AI assistants effective at generating syntactically correct C# and XAML, understanding MVVM patterns, and producing idiomatic .NET code. The weak point is MAUI's recency (released 2022): AI models may generate Xamarin.Forms or WPF patterns that do not work in MAUI.
+
+### MVVM Scaffolding — AI's Strongest Use Case
+
+The most reliable AI task is generating ViewModel + View pairs using CommunityToolkit.Mvvm source generators. The attributes mirror well-established .NET patterns with abundant training data.
+
+```csharp
+// Prompt: "Create a LoginViewModel with email, password, and validation
+// using CommunityToolkit.Mvvm"
+public partial class LoginViewModel : ObservableObject
+{
+    [ObservableProperty]
+    private string _email;
+
+    [ObservableProperty]
+    private string _password;
+
+    [ObservableProperty]
+    private string _errorMessage;
+
+    [RelayCommand]
+    private async Task LoginAsync()
+    {
+        if (string.IsNullOrWhiteSpace(Email) ||
+            string.IsNullOrWhiteSpace(Password))
+        {
+            ErrorMessage = "Email and password are required.";
+            return;
+        }
+        // Authentication logic
+    }
+}
+```
+
+AI consistently produces correct `[ObservableProperty]` and `[RelayCommand]` usage because these source generators are thoroughly documented in Microsoft Learn and thousands of samples.
+
+### XAML Generation from Descriptions
+
+AI can generate complex XAML layouts from natural language. The results are usually syntactically valid but may mix MAUI, Xamarin.Forms, and WPF property names.
+
+```xml
+<!-- Prompt: "Login page with centered card containing logo,
+     email field, password field, and login button" -->
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+  <ScrollView>
+    <VerticalStackLayout Spacing="20" Padding="30"
+                         VerticalOptions="Center">
+      <Image Source="logo.png" HeightRequest="80" />
+      <Entry Placeholder="Email" Keyboard="Email"
+             Text="{Binding Email}" />
+      <Entry Placeholder="Password" IsPassword="True"
+             Text="{Binding Password}" />
+      <Button Text="Login" Command="{Binding LoginCommand}"
+              IsEnabled="{Binding IsNotBusy}" />
+      <ActivityIndicator IsRunning="{Binding IsBusy}"
+                         IsVisible="{Binding IsBusy}" />
+    </VerticalStackLayout>
+  </ScrollView>
+</ContentPage>
+```
+
+<Callout type="info">
+  AI-generated XAML is usually syntactically correct but may contain properties
+  that exist only in WPF (e.g., `DataGrid`) or Xamarin.Forms (e.g., `Frame`
+  with WPF-style `Padding`). Always run `dotnet build` after generation — the
+  XAML compiler catches mismatched properties and namespaces at compile time.
+</Callout>
+
+### Test Generation
+
+AI excels at generating unit tests for ViewModels because the patterns are standard Arrange-Act-Assert with familiar mocking libraries:
+
+```csharp
+[TestClass]
+public class LoginViewModelTests
+{
+    [TestMethod]
+    public async Task Login_WithEmptyEmail_SetsErrorMessage()
+    {
+        var vm = new LoginViewModel();
+        vm.Email = string.Empty;
+        vm.Password = "password123";
+
+        await vm.LoginCommand.ExecuteAsync(null);
+
+        Assert.AreEqual("Email and password are required.",
+            vm.ErrorMessage);
+    }
+}
+```
+
+### What AI Gets Right vs Wrong
+
+**Gets right:**
+- CommunityToolkit.Mvvm patterns (`[ObservableProperty]`, `[RelayCommand]`)
+- Standard MVVM: `INotifyPropertyChanged`, `ICommand`, `IValueConverter`
+- HttpClient usage and `IHttpClientFactory` registration
+- Basic XAML layout: StackLayout, Grid, ScrollView, Border
+- Dependency injection registration in `MauiProgram.cs`
+
+**Gets wrong or hallucinates:**
+- Confuses MAUI APIs with Xamarin.Forms (e.g., `Xamarin.Forms.Button` namespace)
+- Generates WPF controls like `DataGrid` or WPF-specific `WrapPanel`
+- Suggests `Renderer` patterns removed in MAUI (replaced by Handlers)
+- Proposes UWP-only `Windows.UI.Xaml` namespaces
+- Generates obsolete MAUI preview APIs from 2021-era training data
+- Recommends `NavigationPage` over `Shell` for new projects
+- Misses MAUI-specific optimizations like compiled bindings (`x:DataType`)
+
+### DecisionMatrix — AI Reliability by Task
+
+<DecisionMatrix>
+  | Task | Reliability | Common Pitfall |
+  |---|---|---|
+  | ViewModel scaffolding | High | Fewer issues than any other task |
+  | XAML layout | Medium-High | Mixes WPF/XF/MAUI properties |
+  | Unit test generation | High | Stale mocking library references |
+  | Custom Handler | Low | Limited MAUI-specific training |
+  | Native interop | Low-Medium | Wrong Android/iOS API names |
+  | Shell navigation | Medium | Suggests NavigationPage instead |
+</DecisionMatrix>
+
+### Comparison with Flutter and SwiftUI
+
+| Aspect | .NET MAUI (with AI) | Flutter (with AI) | SwiftUI (with AI) |
+|---|---|---|---|
+| Training data span | 20+ years C# | 5+ years Dart | 5+ years Swift |
+| Framework confusion | WPF/UWP/XF mix | Single Dart SDK | UIKit + SwiftUI overlap |
+| Code gen quality | Good for MVVM | Good for widgets | Good for layouts |
+| Platform-native APIs | Weak (new MAUI) | Moderate | Strong (Apple APIs) |
+
+<Callout type="tip">
+  Always include ".NET 8 MAUI using CommunityToolkit.Maui" in your prompt.
+  This steers the model away from Xamarin.Forms and WPF patterns. For
+  platform-specific code (Handlers, native interop), seed the prompt with the
+  exact API signature you intend to use — AI performs poorly when guessing
+  MAUI-native bridge APIs from scratch.
+</Callout>

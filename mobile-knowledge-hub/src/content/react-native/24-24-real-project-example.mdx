@@ -1,0 +1,322 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+### Quick Stats
+
+<StatGrid columns={3}>
+<StatItem value="0.76+" label="React Native Version" />
+<StatItem value="12+" label="Key Libraries" />
+<StatItem value="4" label="Team Size" />
+<StatItem value="3" label="Testing Layers" />
+</StatGrid>
+
+### Reference App: Mobile Knowledge Hub
+
+A full-featured content platform built with React Native 0.76+ showcasing production patterns across every layer of the stack. The app displays framework documentation, supports offline reading, push notifications for updates, and user-contributed content.
+
+### Complete Tech Stack
+
+| Layer | Library | Version | Purpose |
+|---|---|---|---|
+| Framework | React Native | 0.76+ | Cross-platform runtime with New Architecture |
+| Language | TypeScript | 5.x | Type safety across the entire codebase |
+| Navigation | React Navigation | 6.x | Typed stack + tab + deep link routing |
+| State (Client) | Zustand | 4.x | Auth state, theme, UI preferences |
+| State (Server) | React Query (TanStack Query) | 5.x | API caching, pagination, optimistic updates |
+| HTTP | Axios | 1.x | API client with interceptors |
+| Local DB | WatermelonDB | 0.27+ | SQLite-based offline storage with sync |
+| Fast Storage | MMKV | 2.x | Encrypted local key-value (tokens, settings) |
+| Auth | Firebase Auth + react-native-keychain | latest | Biometric + token-based auth |
+| Push | Firebase Cloud Messaging + Notifee | latest | Push notifications with rich media |
+| Payments | Stripe React Native SDK | latest | In-app purchases and subscriptions |
+| CI/CD | Expo EAS Build + GitHub Actions | latest | Automated builds and deployment |
+| Monitoring | Sentry RN SDK + Firebase Performance | latest | Crash reporting + performance traces |
+
+### Project Structure
+
+```
+src/
+  features/
+    feed/          # Home feed: posts, infinite scroll, offline cache
+    content/       # MDX rendering, search, bookmarks
+    auth/          # Login, signup, biometric unlock
+    notifications/ # Push setup, deep link routing, preferences
+    profile/       # User settings, subscription management
+  core/
+    api/           # Axios client, interceptors, refresh token logic
+    storage/       # MMKV + WatermelonDB abstractions
+    navigation/    # Root navigator, linking config, auth guard
+    theme/         # Design tokens, dark/light mode
+    testing/       # Test utilities, mocks, fixtures
+    types/         # Shared TypeScript types and Zod schemas
+  modules/
+    TurboScanner/  # Custom Turbo Module for barcode scanning
+    FilePicker/    # Custom Turbo Module for document picking
+```
+
+### Architecture Layer Diagram
+
+```
+┌──────────────────────────────────────────────────────┐
+│                    UI COMPONENTS                       │
+│  FeedScreen / ContentViewer / ProfileScreen / AuthFlow │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│                   CUSTOM HOOKS                        │
+│  useFeed()  useContent()  useAuth()  useBookmarks()   │
+│  (business logic, composition, data orchestration)    │
+└──────────────────────┬───────────────────────────────┘
+                       │
+┌──────────────────────▼───────────────────────────────┐
+│              STATE MANAGEMENT LAYER                   │
+│  ┌─────────────────┐  ┌───────────────────────────┐  │
+│  │  Zustand Stores  │  │  React Query (TanStack)   │  │
+│  │  auth / theme    │  │  feeds / content / search │  │
+│  │  ui / settings   │  │  cache + pagination +     │  │
+│  │                  │  │  optimistic updates        │  │
+│  └────────┬────────┘  └─────────────┬─────────────┘  │
+└───────────┼─────────────────────────┼────────────────┘
+            │                         │
+┌───────────▼─────────────────────────▼────────────────┐
+│                  DATA ACCESS LAYER                    │
+│  ┌─────────────────┐  ┌───────────────────────────┐  │
+│  │  Axios Client    │  │  WatermelonDB (SQLite)    │  │
+│  │  interceptors    │  │  models / sync / migrate  │  │
+│  │  refresh token   │  │  offline queue            │  │
+│  └────────┬────────┘  └─────────────┬─────────────┘  │
+└───────────┼─────────────────────────┼────────────────┘
+            │                         │
+┌───────────▼─────────────────────────▼────────────────┐
+│                 NATIVE LAYER                          │
+│  Remote API  │  Push (FCM)  │  Keychain  │  MMKV     │
+│  Turbo Modules  │  Notifee  │  Sentry    │  Camera   │
+└──────────────────────────────────────────────────────┘
+```
+
+### Auth Flow Implementation
+
+```tsx
+// core/storage/auth.ts — Token management with MMKV + Keychain
+import { MMKV } from 'react-native-mmkv';
+import Keychain from 'react-native-keychain';
+
+const storage = new MMKV({ id: 'auth-storage', encryptionKey: 'com.mkh.app' });
+
+export const authStorage = {
+  async setTokens(accessToken: string, refreshToken: string) {
+    storage.set('accessToken', accessToken);
+    await Keychain.setGenericPassword('refresh', refreshToken, {
+      service: 'com.mkh.refresh',
+      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+    });
+  },
+  getAccessToken: () => storage.getString('accessToken'),
+  async getRefreshToken(): Promise<string | null> {
+    const creds = await Keychain.getGenericPassword({ service: 'com.mkh.refresh' });
+    return creds?.password ?? null;
+  },
+  async clear() {
+    storage.delete('accessToken');
+    storage.clearAll();
+    await Keychain.resetGenericPassword({ service: 'com.mkh.refresh' });
+  },
+};
+
+// features/auth/store.ts — Zustand auth store
+interface AuthState {
+  user: User | null;
+  isAuthenticated: boolean;
+  isLoading: boolean;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
+  restoreSession: () => Promise<void>;
+}
+
+export const useAuthStore = create<AuthState>()((set, get) => ({
+  user: null,
+  isAuthenticated: false,
+  isLoading: true,
+
+  restoreSession: async () => {
+    try {
+      const token = authStorage.getAccessToken();
+      if (token) {
+        const user = await apiClient.getCurrentUser(token);
+        set({ user, isAuthenticated: true, isLoading: false });
+      } else {
+        set({ isLoading: false });
+      }
+    } catch {
+      await authStorage.clear();
+      set({ user: null, isAuthenticated: false, isLoading: false });
+    }
+  },
+
+  login: async (email, password) => {
+    const { tokens, user } = await apiClient.login(email, password);
+    await authStorage.setTokens(tokens.access, tokens.refresh);
+    set({ user, isAuthenticated: true });
+  },
+
+  logout: async () => {
+    await authStorage.clear();
+    set({ user: null, isAuthenticated: false });
+  },
+}));
+```
+
+### Data Flow: Feed with Offline Support
+
+```tsx
+// features/feed/hooks/useFeed.ts
+export function useFeed() {
+  const queryClient = useQueryClient();
+
+  // React Query manages server state with offline persistence
+  const feedQuery = useInfiniteQuery({
+    queryKey: ['feed'],
+    queryFn: ({ pageParam = 1 }) => apiClient.getFeed({ page: pageParam, limit: 20 }),
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    staleTime: 5 * 60 * 1000,         // Consider data fresh for 5 minutes
+    gcTime: 24 * 60 * 60 * 1000,      // Keep in cache for 24 hours
+  });
+
+  // WatermelonDB sync on connectivity change
+  const { isConnected } = useNetInfo();
+  const database = useDatabase();
+
+  useEffect(() => {
+    if (isConnected && feedQuery.data) {
+      synchronize({
+        database,
+        pullChanges: async ({ lastPulledAt }) => {
+          const response = await apiClient.getFeedSync({ lastPulledAt });
+          return { changes: response.changes, timestamp: response.timestamp };
+        },
+        pushChanges: async ({ changes }) => {
+          await apiClient.pushFeedChanges(changes);
+        },
+      });
+    }
+  }, [isConnected, feedQuery.dataLastUpdated]);
+
+  return {
+    posts: feedQuery.data?.pages.flatMap((p) => p.items) ?? [],
+    fetchNextPage: feedQuery.fetchNextPage,
+    hasNextPage: feedQuery.hasNextPage,
+    isFetchingNextPage: feedQuery.isFetchingNextPage,
+    isLoading: feedQuery.isLoading,
+    refetch: feedQuery.refetch,
+    isOffline: !isConnected,
+  };
+}
+```
+
+### Push Notification Setup
+
+```tsx
+// features/notifications/setup.ts
+import notifee, { AndroidImportance, EventType } from '@notifee/react-native';
+import messaging from '@react-native-firebase/messaging';
+import { navigationRef } from '@/core/navigation';
+
+export async function setupNotifications() {
+  const authStatus = await messaging().requestPermission();
+  if (authStatus !== messaging.AuthorizationStatus.AUTHORIZED) return;
+
+  const fcmToken = await messaging().getToken();
+  await apiClient.registerPushToken(fcmToken);
+
+  // Foreground notification display
+  notifee.onForegroundEvent(({ type, detail }) => {
+    if (type === EventType.PRESS && detail.notification?.data) {
+      handleNotificationNavigation(detail.notification.data);
+    }
+  });
+
+  // Background tap handler (app opened from notification)
+  messaging().onNotificationOpenedApp((remoteMessage) => {
+    handleNotificationNavigation(remoteMessage.data);
+  });
+}
+
+function handleNotificationNavigation(data: Record<string, any>) {
+  if (data?.type === 'new_content') {
+    navigationRef.navigate('Content', { contentId: data.contentId });
+  } else if (data?.type === 'comment_reply') {
+    navigationRef.navigate('Post', { postId: data.postId, focusReply: true });
+  }
+}
+```
+
+### Turbo Module Example: Native Barcode Scanner
+
+```tsx
+// modules/TurboScanner/TurboScanner.ts
+import { TurboModule, TurboModuleRegistry } from 'react-native';
+
+export interface Spec extends TurboModule {
+  scanBarcode(options: { formats: string[] }): Promise<{
+    data: string;
+    format: string;
+    bounds: { x: number; y: number; width: number; height: number };
+  }>;
+}
+
+export default TurboModuleRegistry.getEnforcing<Spec>('TurboScanner');
+
+// Usage in app:
+import TurboScanner from '@/modules/TurboScanner';
+const result = await TurboScanner.scanBarcode({ formats: ['QR_CODE', 'EAN_13'] });
+```
+
+### CI/CD Pipeline (GitHub Actions + EAS Build)
+
+```yaml
+# .github/workflows/release.yml
+name: Build and Deploy
+on: [push, pull_request]
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx eslint src/
+      - run: npx jest --coverage
+  build:
+    needs: lint-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: expo/expo-github-action@v8
+        with: { eas-version: latest, token: ${{ secrets.EXPO_TOKEN }} }
+      - run: npx eas build --platform all --profile production --non-interactive
+      - run: npx eas submit --platform ios --profile production --non-interactive
+```
+
+### Testing Strategy Per Layer
+
+| Layer | Tool | What We Test |
+|---|---|---|
+| Business logic (hooks) | Jest | Pure function output, hook behavior with renderHook |
+| Zustand stores | Jest | State transitions, side-effect mocking |
+| UI components | RNTL + Jest | Render output, user interaction, accessibility |
+| Navigation | RNTL | Deep link resolution, param passing |
+| API client | MSW (Mock Service Worker) | Request/response interceptors, error handling |
+| E2E | Maestro | Critical user flows on device |
+| Native modules | Xcode XCTest / JUnit | Turbo Module spec conformance |
+
+<Callout title="This reference app proves RN's production viability — with caveats">
+The Mobile Knowledge Hub app demonstrates that RN handles complex production requirements: offline sync, push notifications, typed navigation, CI/CD, native Turbo Modules, and multi-layered testing. The pain points that emerged: WatermelonDB sync conflict resolution required significant native expertise, pushing new animated transitions required Reanimated rather than core Animated, and the CI build pipeline (especially iOS archive) is 3x slower than a pure native project. These are manageable trade-offs, not blockers.
+</Callout>
+
+### What This Reference App Reveals
+
+**RN Strengths in production:** Rapid feature iteration (a new screen in hours, not days), single-team productivity (one engineer owns a feature across both platforms), OTA critical hotfixes deployed without app review, TypeScript ecosystem integration (Zod for runtime validation, React Query for caching), and a hiring pool that made building a 4-person team feasible in weeks.
+
+**RN Weaknesses in production:** WatermelonDB sync conflict resolution required native Kotlin/Swift code, pushing custom animated transitions went beyond core Animated (required Reanimated), CI build time for iOS archiving is 3x longer than a native Swift project, debugging native crashes requires Xcode/Android Studio proficiency that JS developers lack, and the 12-hour Sentry source map upload + Hermes symbolication setup was unexpectedly painful.

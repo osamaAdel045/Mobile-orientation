@@ -1,0 +1,140 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    Android performance engineering spans Compose composable stability, View hierarchy
+    optimisation, memory leak detection, and cold-start latency. Each dimension requires
+    tooling — Macrobenchmark, Compose Compiler Reports, and Baseline Profiles.
+
+    <StatGrid>
+        <StatItem value="16ms" label="Frame budget at 60 fps (vsync window)" />
+        <StatItem value="8ms" label="Frame budget at 120 fps" />
+        <StatItem value="200ms" label="Cold-start threshold for ANR risk (input)" />
+        <StatItem value="4x" label="Speedup from Baseline Profile AOT compilation" />
+    </StatGrid>
+
+    ### Compose Performance — Recomposition and Stability
+
+    Compose skips recomposition when all inputs are **stable** and unchanged. Primitives,
+    `String`, and lambda references are stable by default. Data classes with only stable
+    properties are inferred stable; otherwise annotate `@Stable`:
+
+    ```kotlin
+    @Stable
+    data class UserUiModel(
+        val id: String,
+        val displayName: String,
+        val avatarUrl: String,
+    )
+
+    @Composable
+    fun UserRow(model: UserUiModel, onTap: (String) -> Unit) {
+        Row(modifier = Modifier.clickable { onTap(model.id) }) {
+            AsyncImage(model.avatarUrl, contentDescription = null)
+            Text(model.displayName)
+        }
+    }
+    ```
+
+    Enable Compose Compiler Reports to detect instability:
+
+    ```kotlin
+    composeCompiler {
+        reportsDestination = layout.buildDirectory.dir("compose-reports")
+        stabilityConfigurationFiles = layout.projectDirectory.files("stability.conf")
+    }
+    ```
+
+    Inspect `build/compose-reports/composable.csv` — a composable with `skippable=false`
+    always recomposes, signalling unstable parameter types.
+
+    <Callout title="LazyList recomposition is the top perf killer">
+
+        Inside `LazyColumn`, if data objects are unstable, all visible items recompose on
+        every frame. Fix by wrapping state in `derivedStateOf` or `remember`:
+
+        ```kotlin
+        val items by remember { derivedStateOf { viewState.items } }
+        LazyColumn {
+            items(items, key = { it.id }) { item -> ItemRow(item) }
+        }
+        ```
+
+    </Callout>
+
+    ### View System Performance
+
+    `ConstraintLayout` flattens deeply nested `LinearLayout` trees into a single level,
+    reducing measure passes. Profile using `LayoutInspector` or macrobenchmark `--scan`.
+
+    ### Memory Management
+
+    The Android GC runs concurrently on ART but compaction pauses still cause frame drops.
+    Detect leaks with LeakCanary — it watches destroyed Activity and Fragment instances:
+
+    ```kotlin
+    LeakCanary.config = LeakCanary.config.copy(
+        retainedVisibleThreshold = 3,
+        computeRetainedHeapSize = true,
+    )
+    ```
+
+    Common leak sources: static `Context` references, inner classes holding outer-class
+    references, unregistered listeners, and coroutine scopes not cancelled in `onDestroy`.
+
+    ### Startup Optimization
+
+    Cold start is measured from process spawn to first rendered frame. Three levers:
+
+    **1. Baseline Profiles.** Ship AOT-compiled class lists for install-time compilation:
+
+    ```kotlin
+    @Test
+    fun coldStart() = benchmarkRule.measureRepeated(
+        packageName = "com.example.app",
+        metrics = StartupTimingMetric(),
+        iterations = 10,
+        startupMode = StartupMode.COLD,
+    ) {
+        pressHome()
+        startActivityAndWait(Intent())
+    }
+    ```
+
+    **2. App Startup Library.** Defer heavy initializers off the critical path via
+    `InitializationProvider` in the Android Manifest.
+
+    **3. SplashScreen API.** The system splash theme draws instantly while the app loads:
+
+    ```kotlin
+    <style parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/background</item>
+        <item name="postSplashScreenTheme">@style/Theme.App</item>
+    </style>
+    ```
+
+    ### Benchmark Testing
+
+    Jetpack Macrobenchmark runs on real devices. `FrameTimingMetric` collects frame
+    duration and jank percentage:
+
+    ```kotlin
+    @Test
+    fun scrollJank() = benchmarkRule.measureRepeated(
+        metrics = FrameTimingMetric(),
+        iterations = 10,
+        startupMode = StartupMode.WARM,
+    ) {
+        val list = device.findObject(UiSelector().resourceId("item_list"))
+        list.setGestureMargin(device.displayWidth / 2)
+        list.flingForward(30)
+        device.waitForIdle()
+    }
+    ```
+
+    <Callout title="Cross-platform cost difference">
+
+        React Native and Flutter use a VM bridge adding per-frame serialisation overhead.
+        Compose renders directly in native Skia with no bridge, giving a measurable
+        advantage in scroll and animation smoothness — at the cost of requiring stability
+        annotations that other frameworks handle transparently.
+
+    </Callout>

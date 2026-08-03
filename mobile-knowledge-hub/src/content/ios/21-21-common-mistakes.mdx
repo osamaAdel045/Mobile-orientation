@@ -1,0 +1,143 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+        <StatItem value="@StateObject" label="Ownership" />
+        <StatItem value="MainActor" label="Blocked" />
+        <StatItem value="Error States" label="Missing" />
+        <StatItem value="Retain Cycles" label="Memory" />
+    </StatGrid>
+
+    ### Common iOS Mistakes
+
+    iOS developers encounter the same recurring bug patterns. Here are the most
+    common SwiftUI and UIKit mistakes with wrong-and-right code.
+
+    #### SwiftUI Mistakes
+
+    **@StateObject ownership.** Creating @StateObject in a child view causes
+    re-creation when the parent re-renders. The object lifecycle must match
+    the owning view's identity.
+
+    ```swift
+    // WRONG — child creates, recreated on parent re-render
+    struct ChildView: View {
+        @StateObject private var vm = ViewModel()
+        var body: some View { ... }
+    }
+
+    // RIGHT — parent owns, child receives via @Environment
+    struct ParentView: View {
+        @State private var vm = ViewModel()
+        var body: some View { ChildView().environment(vm) }
+    }
+    struct ChildView: View {
+        @Environment(ViewModel.self) private var vm
+        var body: some View { ... }
+    }
+    ```
+
+    **Blocking the MainActor.** Synchronous I/O on the main actor freezes UI.
+
+    ```swift
+    // WRONG — blocks main thread
+    @MainActor func load() {
+        let data = try! Data(contentsOf: url) // blocks
+        items = try! JSONDecoder().decode([Item].self, from: data)
+    }
+
+    // RIGHT — async, off main actor
+    func load() async throws {
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let decoded = try JSONDecoder().decode([Item].self, from: data)
+        await MainActor.run { items = decoded }
+    }
+    ```
+
+    **Missing .task lifecycle.** Starting tasks in .onAppear without cancellation
+    lets work continue after the view is dismissed.
+
+    ```swift
+    // WRONG — manual, non-cancelling
+    .onAppear { Task { await load() } }
+
+    // RIGHT — auto-cancelling
+    .task { await load() }
+    ```
+
+    **Missing error states.** Assuming network always succeeds causes silent
+    failures and confusing empty states.
+
+    ```swift
+    // WRONG — no error path
+    items = (try? await api.fetch()) ?? []
+
+    // RIGHT — explicit error state
+    @MainActor func load() async {
+        do { items = try await api.fetch(); error = nil }
+        catch { self.error = error }
+    }
+    ```
+
+    #### UIKit Mistakes
+
+    **Retain cycles in closures.** Escaping closures that capture self strongly
+    prevent deallocation.
+
+    ```swift
+    // WRONG — strong self
+    URLSession.shared.dataTask(with: url) { data, _, _ in
+        self.handle(data)
+    }
+
+    // RIGHT — weak self
+    URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+        guard let self else { return }
+        self.handle(data)
+    }
+    ```
+
+    **Massive View Controller.** All logic in one controller violates SRP.
+    Extract ViewModel, DataSource, and Router into separate types.
+
+    **Manual frame calculation.** Use Auto Layout constraints instead of
+    manual frame math for adaptive layouts. SwiftUI's layout engine handles
+    this automatically.
+
+    **Legacy reloadData().** Use UICollectionViewDiffableDataSource to avoid
+    crashes from stale snapshots. ReloadData() with inconsistent state can
+    trigger NSInternalInconsistency exceptions.
+
+    <Callout title="SwiftUI .task Modifier Auto-Cancels">
+        The .task modifier creates a Task tied to the view's identity. When
+        the view disappears, the task cancels automatically. Unlike .onAppear
+        with manual Task management, .task handles lifecycle without extra
+        boilerplate or onDisappear cleanup.
+    </Callout>
+
+    #### Retain Cycle Diagram
+
+    ```
+    ┌─────────────────┐     strong      ┌──────────────┐
+    │ ViewController   │───────────────>│  Closure     │
+    │ (self)           │<───────────────│  (captures   │
+    └─────────────────┘     strong      │  self)       │
+                                        └──────────────┘
+    Neither deallocates — closure holds self, controller
+    holds closure. [weak self] breaks the back-reference.
+    ```
+
+    #### Memory Management Rules
+
+    - [weak self] in escaping closures: URLSession, NotificationCenter, Timer
+    - Invalidate Timer on dealloc (Timer strongly retains its target)
+    - Combine sinks: [weak self] or store cancellables
+    - Delegates must always be weak references
+    - Prefer SwiftUI for new views — value types reduce retain-cycle risk
+
+    #### Cross-Platform Comparison
+
+    Android's LaunchedEffect matches SwiftUI .task lifecycle. Flutter's
+    StatefulWidget mirrors UIViewController with similar closure retain-cycle
+    risks. Swift's ARC is analogous to Kotlin GC but requires more manual
+    weak-ref discipline. Swift 6's compile-time Sendable checking catches
+    data-race patterns ahead of Kotlin's runtime coroutine dispatching.

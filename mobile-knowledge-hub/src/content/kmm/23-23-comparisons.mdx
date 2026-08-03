@@ -1,0 +1,143 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="Logic Only" label="KMP vs Flutter/RN" />
+        <StatItem value="Shared ROI" label="KMP vs Native" />
+        <StatItem value="No Engine" label="KMP vs Ionic" />
+      </StatGrid>
+
+      ### KMP vs Flutter
+
+      **KMP strength:** True native UI. The app uses UIKit/SwiftUI on iOS and
+      Jetpack Compose on Android. No widget mismatch, no accessibility gaps,
+      no platform-feel issues. KMP apps pass App Store review for custom UI
+      requirements more easily (Apple is stricter with Skia-rendered apps).
+
+      **Flutter strength:** Complete code sharing. One codebase for UI, logic,
+      state management, animations, and navigation. Faster development. Larger
+      ecosystem (pub.dev has more multiplatform packages). Dart is easier to
+      learn than Kotlin for many developers.
+
+      ```yaml
+      KMP:  Shared Kotlin → Kotlin/JVM → Android Compose
+            Shared Kotlin → Kotlin/Native → iOS SwiftUI
+            UI is 100% native per platform
+
+      Flutter:  Shared Dart → Dart AOT → Android (Skia)
+                Shared Dart → Dart AOT → iOS (Skia)
+                UI is Skia-rendered on both
+      ```
+
+      **Verdict:** Choose KMP if native UI quality and platform-specific features
+      matter more than development speed. Choose Flutter if you need to ship
+      fast on both platforms with a single team.
+
+      ### KMP vs React Native
+
+      **KMP strength:** Type safety throughout. Kotlin's type system catches
+      nullability and type errors at compile time. The shared module compiles
+      to native code — no JavaScript bridge overhead. State management with
+      `StateFlow` is thread-safe by design.
+
+      **React Native strength:** Massive ecosystem and community. JavaScript
+      and TypeScript developers are abundant. Hot reload is exceptional. New
+      Architecture (Fabric + Turbo Modules) has improved performance, but the
+      JS bridge still introduces serialization overhead. Vast library selection
+      on npm.
+
+      ```kotlin
+      // KMP — type-safe API call
+      suspend fun getUser(id: String): User {
+          return httpClient.get("/users/$id").body()
+      }
+      ```
+
+      ```javascript
+      // React Native — JS bridge call
+      const getUser = async (id) => {
+        const response = await fetch(`/users/${id}`);
+        return response.json(); // No compile-time type safety
+      };
+      ```
+
+      **Verdict:** KMP wins on performance, type safety, and native integration.
+      RN wins on ecosystem size, developer availability, and iteration speed
+      (no Xcode build for JS changes).
+
+      ### KMP vs Native (Two Separate Codebases)
+
+      **KMP strength:** Eliminates duplicated business logic. Two codebases
+      means two implementations of every API call, every data model, every
+      validation rule, every database query — and two places to fix every bug.
+      KMP shares 60-80% of non-UI code.
+
+      **Native strength:** Zero abstraction overhead. No expect/actual learning
+      curve. Each platform can use the best tools for the job independently.
+      iOS can use SwiftData while Android uses Room. No shared module dependency
+      management. No cross-team coordination for shared API changes.
+
+      ```yaml
+      Two-codebase maintenance cost over 3 years:
+        ~150% effort (two teams, duplicated logic)
+        ~200% bug surface (two implementations must be kept in sync)
+
+      KMP maintenance cost over 3 years:
+        ~120% effort (two UI teams + shared logic)
+        ~130% bug surface (one shared logic, two UI implementations)
+      ```
+
+      **Verdict:** KMP is a net positive for apps with significant business logic
+      (e-commerce, finance, healthcare). For UI-heavy apps (social media, creative
+      tools) where most effort is in the UI layer, two separate codebases may be
+      simpler.
+
+      <Callout title="The True Cost of Duplication">
+        "We'll just write it twice" works for the first year. Over five years,
+        the two codebases diverge: different API clients, different error
+        handling, different null-safety behavior, different bug fixes applied
+        on one platform but not the other. KMP forces the shared logic path,
+        eliminating this divergence pattern at the cost of shared module
+        abstraction design up front.
+      </Callout>
+
+      ### KMP vs Ionic / Cordova
+
+      **KMP strength:** Native execution. KMP code runs as ARM64 machine code
+      on iOS and JVM bytecode on Android. No WebView, no HTML/CSS rendering.
+      Full access to platform APIs without plugins.
+
+      **Ionic strength:** Web technology stack. Use React, Angular, or Vue to
+      build mobile apps. Massive web developer audience. Lower learning curve
+      for web developers. Capacitor plugins provide native access.
+
+      ```yaml
+      KMP:  ARM64 machine code → Full native performance
+            Expect/actual → Direct platform API access
+            Jetpack Compose / SwiftUI → Native UI rendering
+
+      Ionic: HTML/CSS/JS → WebView rendering (slower)
+             Capacitor plugins → Platform API via bridge
+             Ionic components → Web-based UI (not native controls)
+      ```
+
+      ### Summary Comparison Table
+
+      | Aspect | KMP | Flutter | React Native | Ionic |
+      |--------|-----|---------|-------------|-------|
+      | UI Pipeline | Native | Skia | Native Bridge | WebView |
+      | Language | Kotlin | Dart | JS/TS | JS/TS |
+      | Compilation | JVM + LLVM | Dart AOT | Hermes JIT | Web engine |
+      | Code Sharing | Logic only | UI + Logic | UI + Logic | UI + Logic |
+      | Performance | Native parity | 60fps Skia | Bridge cost | WebView cost |
+      | Ecosystem | Growing (KMP-native libs) | Mature | Very mature | Very mature |
+      | Native Feel | 100% | ~90% | ~85% | ~70% |
+      | Team Skill | Kotlin devs | Dart devs | JS/TS devs | Web devs |
+
+      ### KMP Insight
+
+      KMP occupies a unique position in the cross-platform landscape: it is the
+      only solution that shares logic at the source-code level while producing
+      truly native platform binaries. Frameworks like Flutter and RN share
+      everything through an engine layer; KMP shares nothing through an engine
+      and shares everything through the compiler. This architectural difference
+      means KMP has no framework-induced performance ceiling.

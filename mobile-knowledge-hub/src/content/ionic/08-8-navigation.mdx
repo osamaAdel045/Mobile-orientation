@@ -1,0 +1,143 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="Router Component" value="IonRouterOutlet" />
+  <StatItem label="Tabs" value="ion-tabs" />
+  <StatItem label="Transitions" value="Slide / Fade / Custom" />
+  <StatItem label="Deep Linking" value="URL-based routes" />
+  <StatItem label="Lazy Loading" value="Per-module chunks" />
+</StatGrid>
+
+### IonRouterOutlet and Stack Navigation
+
+Ionic's `ion-router-outlet` wraps the framework router and adds mobile-native view stack management. Pages pushed onto the stack animate in (slide left), and popping animates out (slide right). The stack preserves scroll position and component state across navigation.
+
+```typescript
+import { Routes } from '@angular/router';
+
+const routes: Routes = [
+  { path: '', redirectTo: '/home', pathMatch: 'full' },
+  {
+    path: 'home',
+    loadChildren: () => import('./pages/home/home.module').then(m => m.HomePageModule),
+  },
+  {
+    path: 'product/:id',
+    loadChildren: () => import('./pages/product/product.module').then(m => m.ProductPageModule),
+  },
+];
+
+// Template: <ion-router-outlet></ion-router-outlet>
+```
+
+Each route is a page component rendered inside `ion-router-outlet`. Use framework guards (`canActivate`, `canDeactivate`) for navigation control. The outlet handles the native-style transition animations automatically — no extra configuration needed.
+
+### Tab Navigation
+
+`ion-tabs` provides a mobile tab bar with lazy-loaded tab pages. Each tab maintains its own navigation stack — switching tabs preserves the state of previously visited pages, unlike a typical web router.
+
+```typescript
+const routes: Routes = [
+  {
+    path: 'tabs',
+    component: TabsPage,
+    children: [
+      { path: 'feed', loadChildren: () => import('../feed/feed.module').then(m => m.FeedPageModule) },
+      { path: 'search', loadChildren: () => import('../search/search.module').then(m => m.SearchPageModule) },
+      { path: 'profile', loadChildren: () => import('../profile/profile.module').then(m => m.ProfilePageModule) },
+      { path: '', redirectTo: '/tabs/feed', pathMatch: 'full' },
+    ],
+  },
+];
+```
+
+```html
+<ion-tabs>
+  <ion-tab-bar slot="bottom">
+    <ion-tab-button tab="feed">
+      <ion-icon name="newspaper" /><ion-label>Feed</ion-label>
+    </ion-tab-button>
+    <ion-tab-button tab="search">
+      <ion-icon name="search" /><ion-label>Search</ion-label>
+    </ion-tab-button>
+    <ion-tab-button tab="profile">
+      <ion-icon name="person" /><ion-label>Profile</ion-label>
+    </ion-tab-button>
+  </ion-tab-bar>
+</ion-tabs>
+```
+
+<Callout type="info">
+Each `ion-tab-button` `tab` attribute must match the route path segment. The tab bar renders only when inside a route that renders `<ion-tabs>`, so define tabs as a parent route with child routes.
+</Callout>
+
+### Deep Linking
+
+Ionic supports deep linking out of the box because it uses URL-based routing. On iOS, Universal Links map URLs to app routes. On Android, App Links do the same. Capacitor's `App.addListener('appUrlOpen')` captures incoming links.
+
+```typescript
+import { App } from '@capacitor/app';
+import { Router } from '@angular/router';
+
+App.addListener('appUrlOpen', (data: { url: string }) => {
+  const url = new URL(data.url);
+  // e.g., https://myapp.com/product/abc123 → /product/abc123
+  this.router.navigateByUrl(url.pathname);
+});
+```
+
+### Passing Data Between Pages
+
+Data can pass via route parameters, query strings, or framework-specific extras. For complex objects, use a shared store or `NavController` to pass state without serializing to the URL.
+
+```typescript
+// Angular — route params with state
+this.router.navigate(['/product', product.id, { state: { product } }]);
+
+// Receiver:
+import { ActivatedRoute } from '@angular/router';
+const productId = this.route.snapshot.paramMap.get('id');
+const productData = this.router.getCurrentNavigation()?.extras.state;
+```
+
+```typescript
+// React — useIonRouter with state
+const router = useIonRouter();
+router.push('/checkout', 'forward', 'push', { cartItems });
+
+// Receiver:
+const location = useLocation();
+const cartItems = (location.state as any)?.cartItems;
+```
+
+<Callout type="warning">
+Do not pass large objects (blobs, file contents, base64 images) through route state — serialization is not guaranteed across all platforms. Use a shared store or pass an identifier and fetch data on the destination page.
+</Callout>
+
+### Navigation Guards
+
+Guard routes against unauthorized access using the host framework's guard mechanism, then supplement with Ionic lifecycle hooks for token expiry checks on page re-entry.
+
+```typescript
+import { Injectable } from '@angular/core';
+import { CanActivate } from '@angular/router';
+
+@Injectable({ providedIn: 'root' })
+export class AuthGuard implements CanActivate {
+  constructor(private auth: AuthService) {}
+
+  canActivate(): boolean {
+    if (!this.auth.isLoggedIn()) {
+      this.auth.showLoginPage();
+      return false;
+    }
+    return true;
+  }
+}
+
+// Route config: { path: 'profile', canActivate: [AuthGuard], loadChildren: ... }
+```
+
+<Callout type="tip">
+Ionic's `ionViewWillEnter` lifecycle hook can supplement route guards for scenarios where a guard alone is insufficient — for example, checking token expiration on each page visit rather than only at navigation time, since mobile users may background the app for hours.
+</Callout>

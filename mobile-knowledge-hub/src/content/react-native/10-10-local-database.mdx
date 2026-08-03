@@ -1,0 +1,144 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="WatermelonDB" label="Complex Data" />
+  <StatItem value="MMKV" label="Fast KV" />
+  <StatItem value="SQLite" label="Relational" />
+  <StatItem value="Realm" label="NoSQL Sync" />
+  <StatItem value="Keychain" label="Secrets" />
+</StatGrid>
+
+### Storage Options Comparison
+
+| Library | Type | Perf (ops/s) | Sync | Encrypt | Use Case |
+|---------|------|:---:|:----:|:-------:|----------|
+| **MMKV** | KV (file) | ~60k reads | No | Yes | Preferences, tokens, cache |
+| **AsyncStorage** | KV (RN bridge) | ~2k reads | No | No | Legacy, migrating away |
+| **WatermelonDB** | SQLite + lazy | ~40k writes | Yes | No | Complex relational data |
+| **Realm** | NoSQL (C++ engine) | ~50k writes | Yes | Yes | Sync-first mobile apps |
+| **expo-sqlite** | SQLite WASM/native | ~30k reads | No | No | SQL queries on device |
+| **Encrypted Storage** | Keychain/Keystore | ~1k ops | No | Yes | Tokens, credentials |
+
+### MMKV — The Fast KV
+
+MMKV (from WeChat / Tencent) uses memory-mapped files for near-instant reads. It is 30-50x faster than AsyncStorage because it avoids the async bridge entirely and reads directly from mapped memory.
+
+```tsx
+import MMKV from 'react-native-mmkv';
+
+export const storage = new MMKV({ id: 'app-storage', encryptionKey: 'optional-key' });
+
+// Synchronous — no await needed
+storage.set('userName', 'Alice');
+storage.set('score', 42);
+storage.set('preferences', JSON.stringify({ theme: 'dark', fontSize: 16 }));
+const name = storage.getString('userName');   // 'Alice'
+const score = storage.getNumber('score');      // 42
+const prefs = JSON.parse(storage.getString('preferences')!);
+storage.delete('score');
+storage.clearAll();
+```
+
+<Callout title="MMKV for Auth Tokens">
+MMKV is the recommended storage for auth tokens in RN. Its synchronous API means you can read the token in an Axios interceptor without any async setup. For highly sensitive secrets, wrap MMKV with encryption key and store the key in platform Keychain/Keystore.
+</Callout>
+
+### WatermelonDB — Complex Relational Data
+
+WatermelonDB is a high-performance SQLite-based database built for RN. Its key innovation is **lazy loading** — only records currently visible on screen are loaded into memory, making it fast even with 100k+ records. It supports an **observable sync protocol** for real-time collaboration.
+
+```tsx
+// schema/index.ts — define your data model
+import { appSchema, tableSchema } from '@nozbe/watermelondb';
+
+export const schema = appSchema({
+  version: 3,
+  tables: [
+    tableSchema({
+      name: 'tasks',
+      columns: [
+        { name: 'title', type: 'string' },
+        { name: 'is_completed', type: 'boolean' },
+        { name: 'created_at', type: 'number' },
+        { name: 'project_id', type: 'string', isIndexed: true },
+      ],
+    }),
+  ],
+});
+
+// model/Task.ts
+import { Model } from '@nozbe/watermelondb';
+import { field, date, readonly } from '@nozbe/watermelondb/decorators';
+
+export default class Task extends Model {
+  static table = 'tasks';
+  static associations = { projects: { type: 'belongs_to' as const, key: 'project_id' } };
+
+  @field('title') title!: string;
+  @field('is_completed') isCompleted!: boolean;
+  @date('created_at') createdAt!: Date;
+}
+
+// Query — reactive, auto-updates on data changes
+const tasks = database.get<Task>('tasks').query(
+  Q.where('project_id', projectId),
+  Q.sortBy('created_at', 'desc'),
+);
+const [count, setCount] = useState(0);
+useEffect(() => {
+  const sub = tasks.observe().subscribe((records) => setCount(records.length));
+  return () => sub.unsubscribe();
+}, []);
+```
+
+### SQLite (expo-sqlite) — Raw SQL Access
+
+When you need direct SQL control (complex joins, aggregations, FTS5 search), use SQLite directly. Expo SDK 52+ ships `expo-sqlite` as a built-in.
+
+```tsx
+import * as SQLite from 'expo-sqlite';
+const db = await SQLite.openDatabaseAsync('app.db');
+
+await db.execAsync(`CREATE TABLE IF NOT EXISTS tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT)`);
+await db.runAsync('INSERT INTO tasks (title) VALUES (?)', 'Buy groceries');
+const result = await db.getAllAsync('SELECT * FROM tasks ORDER BY id DESC');
+```
+
+### Secure Storage — Keychain / Keystore
+
+Credentials, refresh tokens, and API keys should never go into plaintext storage. `react-native-keychain` wraps iOS Keychain and Android Keystore, storing data in hardware-backed secure enclaves.
+
+```tsx
+import * as Keychain from 'react-native-keychain';
+
+await Keychain.setGenericPassword('refreshToken', refreshTokenValue, { service: 'com.app.auth' });
+const credentials = await Keychain.getGenericPassword({ service: 'com.app.auth' });
+// credentials.password — the stored value
+await Keychain.resetGenericPassword({ service: 'com.app.auth' });
+```
+
+### Caching Strategy — Three-Layer Architecture
+
+```
+Memory Cache (React Query / Zustand)
+  │  instant, lost on app kill
+  ▼
+Local DB (WatermelonDB / SQLite)
+  │  persisted, survives kills
+  ▼
+Remote API (Server)
+```
+
+### Common Pitfalls
+
+**AsyncStorage for everything**: AsyncStorage is slow, unencrypted, and blocks the JS thread on large reads. Migrate to MMKV for KV needs and WatermelonDB for relational data.
+
+**No offline queue**: Mutations made while offline are lost. WatermelonDB's sync protocol queues pushes with timestamps. Alternatively, implement a mutation queue with React Query's `networkMode: 'offlineFirst'`.
+
+**Storing secrets in plain text**: Never store tokens in AsyncStorage or unencrypted MMKV. Use Keychain/Keystore for secrets and MMKV (encrypted) for session data.
+
+**Large datasets without pagination**: WatermelonDB's lazy loading helps, but always paginate queries server-side and use `fetchMore` patterns rather than loading 10k records.
+
+### vs Flutter / Native Storage
+
+Flutter: `Hive` (fast KV, similar to MMKV), `Isar` / `Drift` (SQLite ORM), `Firebase Firestore` (sync). Native: iOS uses `Core Data` (graph-based ORM) or `SwiftData` (iOS 17+) while Android uses `Room` (SQLite ORM with compile-time queries). WatermelonDB is unique in its **lazy loading** approach — Core Data and Room load all query results eagerly, which can cause OOMs with large datasets. Realm (cross-platform) offers similar lazy evaluation but with a different data model (live objects vs immutable records).

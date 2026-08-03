@@ -1,0 +1,102 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      <StatGrid>
+<StatItem value="Stencil" label="Component Compiler" />
+        <StatItem value="Web Components" label="Output Format" />
+        <StatItem value="Capacitor 6+" label="Bridge Version" />
+        <StatItem value="WKWebView / Chromium" label="WebView Layer" />
+</StatGrid>
+      
+### Ionic + Capacitor Architecture
+
+      ```
+┌─────────────────────────────────────────────┐
+│        Your Ionic App (HTML/CSS/JS)          │
+│  Angular / React / Vue (your choice)         │
+├─────────────────────────────────────────────┤
+│              Ionic Framework                  │
+│  UI Components (ion-button, ion-list, etc.)  │
+│  Stencil Web Components                      │
+├─────────────────────────────────────────────┤
+│               Capacitor Bridge               │
+│  JS API → Plugin registry → Native code     │
+├─────────────────────────────────────────────┤
+│               WebView                        │
+│  iOS: WKWebView (WebKit)                     │
+│  Android: Android WebView (Chromium-based)   │
+├─────────────────────────────────────────────┤
+│           Platform OS + GPU                   │
+└─────────────────────────────────────────────┘
+```
+      
+### Layer Breakdown
+
+Each layer in the architecture serves a distinct purpose. The **Ionic Framework** layer provides UI components built as Web Components — framework-agnostic custom elements that work in any HTML context without a framework runtime. The **Capacitor Bridge** layer mediates between JavaScript and native code using a plugin registry with Promise-based method calls. The **WebView** layer provides the browser rendering engine. The **Platform OS** layer provides system services, GPU access, and hardware peripherals.
+
+The application never talks directly to the WebView or the OS — it interacts only with Ionic's component API and Capacitor's plugin API. This abstraction is what makes Ionic apps portable across iOS and Android with a single TypeScript codebase.
+
+### Capacitor vs Cordova
+
+Capacitor is the spiritual successor to Cordova, but the architecture differs significantly at the bridge level. Cordova used an asynchronous string-based message queue — every plugin call serialized JSON, sent it over a custom URL protocol intercept, and received a string response. Capacitor uses the WebView's native JavaScript-to-native message bridge for direct method calls with Promise resolution.
+
+```typescript
+// Capacitor plugin call — Promise-based, direct bridge
+import { Geolocation } from '@capacitor/geolocation'
+
+async function getCurrentLocation() {
+  try {
+    const position = await Geolocation.getCurrentPosition()
+    console.log('Lat:', position.coords.latitude)
+    console.log('Lng:', position.coords.longitude)
+  } catch (err) {
+    console.error('Geolocation failed:', err)
+  }
+}
+```
+
+```typescript
+// Cordova equivalent — callback-based, JSON serialization
+navigator.geolocation.getCurrentPosition(
+  (pos) => console.log('Lat:', pos.coords.latitude),
+  (err) => console.error('Geolocation failed:', err)
+)
+```
+
+Capacitor plugins run in the same process as the WebView — not in a separate web server context like Cordova plugins did. This eliminates the serialization overhead on every call and enables synchronous-like patterns with async/await.
+
+<Callout variant="info">
+  **Plugin architecture**: Capacitor plugins are written in Swift for iOS and Kotlin for Android. Each plugin extends CAPPlugin on iOS or com.getcapacitor.Plugin on Android. The bridge automatically maps method names from JavaScript calls to native method invocations using the @objc runtime on iOS and reflection on Android. You write a plugin once on each platform and call it from any JavaScript framework — the bridge handles type coercion, error propagation, and lifetime management.
+</Callout>
+
+### Stencil Web Components
+
+Ionic's UI components are built with Stencil — a compiler that generates standards-compliant Web Components. Stencil combines JSX, TypeScript, and a virtual DOM at compile time, then outputs optimized vanilla JavaScript custom elements with zero framework runtime overhead in the browser.
+
+```typescript
+// Stencil component — compiles to a native Web Component
+import { Component, Prop, h } from '@stencil/core'
+
+@Component({
+  tag: 'my-button',
+  styleUrl: 'my-button.css',
+  shadow: true,
+})
+export class MyButton {
+  @Prop() variant: 'primary' | 'secondary' = 'primary'
+
+  render() {
+    return (
+      <button class={`btn btn--${this.variant}`}>
+        <slot />
+      </button>
+    )
+  }
+}
+```
+
+The output is a standard HTML custom element registered via customElements.define(). No framework-specific renderers are needed — Angular, React, Vue, Svelte, or vanilla JS all work because the browser itself provides the component runtime.
+
+### Pitfalls in the Layered Architecture
+
+The abstraction layers introduce debugging complexity. When a bug surfaces, you must trace through four layers (app code, Ionic components, Capacitor bridge, WebView rendering) to find the root cause. WebView rendering differences between iOS and Android cause subtle layout bugs — what works in Safari on macOS may differ from WKWebView's embedded behavior on iOS. Android's Chromium WebView version varies by OEM and Play Services update cadence. Always test UI on physical devices across both platforms, not just simulators.

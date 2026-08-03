@@ -1,0 +1,141 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={3}>
+      <StatItem value="Gradle KTS" label="Build System" />
+      <StatItem value="Multi-Module" label="Recommended" />
+      <StatItem value="TOML Catalog" label="Dependency Mgmt" />
+    </StatGrid>
+
+    ### Gradle Module Structure
+
+    Modern Android projects use a multi-module Gradle setup where each layer of the architecture gets its own module. This enables parallel compilation, independent testing, and strict dependency boundaries.
+
+    ```
+    Project Root/
+    ├── settings.gradle.kts
+    ├── build.gradle.kts
+    ├── gradle/
+    │   ├── libs.versions.toml       # Version catalog
+    │   └── wrapper/
+    ├── app/                         # Application entry point
+    │   ├── build.gradle.kts
+    │   └── src/main/
+    │       ├── AndroidManifest.xml
+    │       └── java/com/example/app/
+    │           ├── MainActivity.kt
+    │           ├── MainApplication.kt
+    │           ├── ui/              # Compose screens + theme + nav
+    │           ├── data/            # local, remote, repository
+    │           └── di/              # Hilt modules
+    ├── core/                        # Shared foundations
+    │   ├── model/                   # Domain models
+    │   ├── testing/                 # Test fixtures
+    │   └── ui/                      # Shared composables, design system
+    └── feature/                     # One module per screen
+        ├── feature-auth/
+        ├── feature-home/
+        └── feature-settings/
+    ```
+
+    ### Version Catalog (libs.versions.toml)
+
+    The version catalog is a single TOML file declaring all dependency coordinates. Gradle generates type-safe accessors (`libs.compose.material3`) from this file, eliminating duplication across modules.
+
+    ```toml
+    # gradle/libs.versions.toml
+    [versions]
+    compose-bom = "2024.12.01"
+    kotlin = "2.0.21"
+    room = "2.6.1"
+    hilt = "2.52"
+    retrofit = "2.11.0"
+
+    [libraries]
+    compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "compose-bom" }
+    compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+    room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+    room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+    room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+    hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
+    hilt-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
+
+    [plugins]
+    android-application = { id = "com.android.application", version = "8.7.2" }
+    kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+    compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+    hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+    ksp = { id = "com.google.devtools.ksp", version = "2.0.21-1.0.25" }
+    ```
+
+    <Callout title="Version Catalog Rules">
+      Never hardcode dependency versions in module-level build.gradle.kts files. The catalog ensures a single version of every dependency across all modules. Use `version.ref` to reference the centralized `[versions]` block, not inline version strings.
+    </Callout>
+
+    ### Build Configuration (build.gradle.kts)
+
+    The module-level `build.gradle.kts` configures SDK versions, build types, and Compose. The Compose compiler plugin is required in modern Kotlin 2.0+ projects.
+
+    ```kotlin
+    // app/build.gradle.kts
+    plugins {
+        alias(libs.plugins.android.application)
+        alias(libs.plugins.kotlin.android)
+        alias(libs.plugins.compose.compiler)
+        alias(libs.plugins.hilt)
+        alias(libs.plugins.ksp)
+    }
+
+    android {
+        namespace = "com.example.app"
+        compileSdk = 35
+        defaultConfig {
+            applicationId = "com.example.app"
+            minSdk = 26
+            targetSdk = 35
+            versionCode = 1
+            versionName = "1.0.0"
+        }
+        buildTypes {
+            debug { isMinifyEnabled = false; applicationIdSuffix = ".debug" }
+            release {
+                isMinifyEnabled = true
+                isShrinkResources = true
+                proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"),
+                    "proguard-rules.pro")
+            }
+        }
+        buildFeatures { compose = true }
+    }
+
+    dependencies {
+        implementation(platform(libs.compose.bom))
+        implementation(libs.compose.material3)
+        implementation(libs.room.runtime)
+        implementation(libs.room.ktx)
+        ksp(libs.room.compiler)
+    }
+    ```
+
+    ### Build Types and Product Flavors
+
+    Build types (`debug`, `release`) control debuggability and optimization. Product flavors add another dimension — `demo` vs `full`, or `staging` vs `production` backends. Gradle generates variant-specific source sets.
+
+    ```kotlin
+    // Product flavors in build.gradle.kts
+    android {
+        flavorDimensions += "tier"
+        productFlavors {
+            create("free") { dimension = "tier"; applicationIdSuffix = ".free" }
+            create("paid") { dimension = "tier"; applicationIdSuffix = ".paid" }
+        }
+    }
+    // Generated variants: freeDebug, freeRelease, paidDebug, paidRelease
+    ```
+
+    ### Multi-Module Architecture Benefits
+
+    Multi-module projects enforce **dependency direction** — `:feature-auth` depends on `:core:ui` but never the reverse. This prevents the spaghetti graphs that plague single-module projects. Gradle builds independent modules in parallel, CI tests only changed modules, and build cache hits increase as module boundaries stabilize.
+
+    <Callout title="Module Granularity Rule">
+      A module should be the smallest deployable unit you would independently test. If a module's public API exceeds 10 classes, consider splitting. If a module has zero public API and zero tests, merge it into its consumer. The `:core:testing` module should export only test fixtures and never contain production code.
+    </Callout>

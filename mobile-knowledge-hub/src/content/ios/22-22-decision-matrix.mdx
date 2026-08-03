@@ -1,0 +1,107 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={3}>
+        <StatItem value="5/5" label="Platform Access" />
+        <StatItem value="5/5" label="Performance" />
+        <StatItem value="5/5" label="Ecosystem" />
+    </StatGrid>
+
+    ### Native iOS Decision Matrix
+
+    <DecisionMatrix
+        scores={[
+            { label: 'Platform Access', score: 5 },
+            { label: 'Code Sharing', score: 1 },
+            { label: 'Performance', score: 5 },
+            { label: 'Ecosystem', score: 5 },
+            { label: 'Dev Experience', score: 4 },
+            { label: 'Hiring Cost', score: 3 },
+            { label: 'Learning Curve', score: 3 }
+        ]}
+        pros="Day-1 Apple API access, Metal GPU + ANE, Swift Concurrency safety, smallest binary size, premium UX, ecosystem integration (Watch, Vision Pro, iPad, Mac)"
+        cons="Apple-only platform, no code sharing to Android, Swift talent is expensive, separate team needed for Android, Apple App Review gate, Mac required for development"
+    />
+
+    #### Score Breakdown
+
+    **Platform Access (5/5)** — Native iOS receives every Apple API on day one:
+    Metal 4, ARKit 8, Core ML, WidgetKit, App Intents, Live Activities. No bridge,
+    no abstraction layer, no waiting for third-party bindings. WWDC announcements
+    are usable immediately in production.
+
+    **Code Sharing (1/5)** — Zero code sharing with Android or web. Swift compiles
+    only for Apple platforms. Swift on Server (Vapor) exists but is a separate
+    ecosystem. KMP can share business logic with Swift but adds complexity and
+    does not enable UI sharing. Code sharing is native iOS's weakest dimension.
+
+    **Performance (5/5)** — LLVM + SIL compilation produces the smallest binaries
+    and fastest startup times. Direct Metal GPU access matches Vulkan in practice.
+    Apple Neural Engine access for on-device ML inference. No GC pauses, no JIT
+    warmup, no runtime overhead from an abstraction layer.
+
+    **Ecosystem (5/5)** — The App Store is the most monetized mobile marketplace.
+    SPM handles dependencies, XCTest + Swift Testing for tests, Instruments for
+    profiling, App Store Connect for distribution, TestFlight for beta testing.
+    Apple's developer documentation and WWDC content are high quality.
+
+    **Dev Experience (4/5)** — Swift is expressive and modern. SwiftUI previews
+    and live editing boost iteration speed. Xcode is powerful but has stability
+    issues — SourceKit crashes, slow indexing on large projects, simulator memory
+    pressure. Build times degrade with module count.
+
+    **Hiring Cost (3/5)** — iOS developers command premium salaries. Senior
+    SwiftUI + Swift Concurrency engineers are in high demand. Many candidates
+    have UIKit-only experience and require SwiftUI upskilling. The Mac requirement
+    narrows the talent pool versus Android (any OS) or cross-platform.
+
+    **Learning Curve (3/5)** — Swift is approachable, but the iOS SDK is vast.
+    Mastering SwiftUI's lifecycle, property wrappers, Swift Concurrency, and
+    Cocoa Touch patterns takes significant investment. App Review guidelines,
+    provisioning profiles, code signing, and certificate management add
+    operational complexity not present in other platforms.
+
+    #### Code Example: Direct API Access
+
+    Native iOS code accesses Apple APIs without a bridge, abstraction layer,
+    or third-party binding. These imports and calls work immediately on the
+    current OS version — no waiting for cross-platform framework updates.
+
+    ```swift
+    import Metal       // GPU compute, available day-1
+    import CoreML      // ANE-accelerated ML, no wrapper needed
+    import WidgetKit   // Home Screen widgets, no plugin required
+    import AppIntents  // Siri and Shortcuts integration
+
+    // Direct Metal GPU access — no abstraction overhead
+    let gpu = MTLCreateSystemDefaultDevice()!
+    let commandQueue = gpu.makeCommandQueue()
+
+    // Widget timeline refresh — single system call
+    WidgetCenter.shared.reloadAllTimelines()
+    ```
+
+    <Callout title="Native iOS Excels at Platform Integration">
+        If your product requires Apple Watch, Vision Pro, iPad multitasking,
+        Mac Catalyst, or Apple TV — native iOS is the only viable path.
+        Cross-platform frameworks cannot target these devices, making native
+        the mandatory choice for multi-device Apple ecosystem products.
+    </Callout>
+
+    #### When to Choose Native iOS
+
+    - Your product targets Apple's ecosystem (iPhone, iPad, Mac, Watch, Vision Pro)
+    - You need day-1 access to new Apple APIs and hardware features
+    - Premium UX is a differentiator — 120 Hz animations, haptics, transitions
+    - You leverage ANE for on-device ML, Metal for GPU compute, or ARKit
+    - Widgets, App Intents, Live Activities, or Shortcuts integration is required
+    - You have separate iOS and Android teams or budget for platform-specific code
+    - Binary size and startup time are critical — native is the smallest and fastest
+
+    #### When Not to Choose Native iOS
+
+    - Your app must ship to Android simultaneously with identical feature sets
+    - You have budget for a single mobile team that must cover both platforms
+    - Code sharing between platforms is a critical cost-saving requirement
+    - Your app is simple enough that cross-platform frameworks meet all needs
+    - You need to iterate rapidly on both platforms with a small team
+    - You have no existing iOS talent and cannot justify dedicated iOS hires

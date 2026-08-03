@@ -1,0 +1,118 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+      <StatItem value="ARC" label="No GC Pauses" />
+      <StatItem value="Instruments" label="Profiling Suite" />
+      <StatItem value="120Hz" label="ProMotion" />
+      <StatItem value="Metal" label="GPU Compute" />
+    </StatGrid>
+
+    ### ARC — Deterministic Memory Management
+
+    Automatic Reference Counting inserts `retain`/`release` calls at compile time, avoiding the
+    stop-the-world GC pauses of ART (Android) or the Dart VM. Deallocation is synchronous when
+    the last strong reference drops. The key risk is retain cycles from closure captures.
+
+    ```swift
+    final class NetworkManager {
+        private var onCompletion: (() -> Void)?
+
+        func fetch() {
+            onCompletion = { [weak self] in
+                guard let self else { return }
+                self.didComplete()
+            }
+        }
+        private func didComplete() { }
+    }
+    ```
+
+    Retain cycles are detectable via Instruments > Leaks. Use `weak`/`unowned` or capture
+    lists (`[weak self]`) to break cycles.
+
+    ### SwiftUI Performance
+
+    SwiftUI views are value-type `structs` — cheap to create. The framework tracks identity via
+    `id(_:)` and structural identity (type + position). Every `@State` or `@Observable` change
+    invalidates the body, and SwiftUI diffs the result against the prior render tree.
+
+    ```swift
+    struct ExpensiveRow: View {
+        let item: Item
+
+        var body: some View {
+            HStack {
+                Text(item.title)
+                Text(item.subtitle).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // Conform to Equatable to eliminate redundant body evaluations
+    extension ExpensiveRow: Equatable {
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.item.id == rhs.item.id
+        }
+    }
+    ```
+
+    Attach `.equatable()` to stop SwiftUI from recomputing the body when the data hasn't changed.
+    Avoid `AnyView` — it loses static type identity, forcing the framework into runtime diffs.
+
+    <Callout title="Avoid Offscreen Rendering in Scrolling Views">
+      `layer.cornerRadius` + `clipsToBounds` on every table cell forces offscreen GPU passes that
+      tank scroll FPS. Profile with Instruments > Core Animation ("Color Offscreen-Rendered Yellow"
+      toggle). Prefer `UIBezierPath` clipping in `draw(_:)` or clip a container view once.
+    </Callout>
+
+    ### Instruments Suite
+
+    | Instrument | Use Case |
+    |---|---|
+    | Time Profiler | CPU sampling, hot-method identification |
+    | Allocations | Heap growth, retain-cycle detection |
+    | Leaks | Automatic reference-cycle discovery |
+    | Core Animation | FPS counter, offscreen-rendering overlay |
+    | SwiftUI Instruments | View body invocations, identity invalidation |
+    | Metal System Trace | GPU shader execution, command-buffer timelines |
+
+    ### Startup Optimization
+
+    Launch time is dominated by `dyld` resolving Mach-O dylibs. Merge dylibs, prefer static
+    linking, and use a launch storyboard (iOS 15+, rendered from a `.plist` instead of a PNG).
+
+    ```swift
+    import os.signpost
+
+    let launchLog = OSLog(subsystem: "com.example.app", category: "Launch")
+    let spid = OSSignpostID(log: launchLog)
+
+    os_signpost(.begin, log: launchLog, name: "AppDidFinishLaunching", signpostID: spid)
+    // ... configure ...
+    os_signpost(.end, log: launchLog, name: "AppDidFinishLaunching", signpostID: spid)
+    ```
+
+    ### Metal GPU Compute
+
+    Metal provides direct GPU access for parallel workloads. Apple's unified memory architecture
+    eliminates PCIe buffer copies. Use `MPSGraph` for ML tensor acceleration or direct Metal
+    shaders for image processing and physics simulations.
+
+    ### ProMotion 120 Hz
+
+    Target 8.33 ms frames on 120 Hz displays. Use `CADisplayLink` with `preferredFrameRateRange`
+    to adapt. Instrument hitches via `os_signpost` with the `Animation` category.
+
+    ```swift
+    let displayLink = CADisplayLink(target: self, selector: #selector(step))
+    displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120)
+    displayLink.add(to: .current, forMode: .common)
+    ```
+
+    ### Cross-Platform Comparison
+
+    Android's ART GC introduces non-deterministic pauses (heap compaction). Flutter's Dart VM
+    stops for root scanning. ARC is deterministic — no stop-the-world pause. The trade-off is
+    per-instruction refcount overhead visible in Instruments' Reference Counting instrument.
+    Metal's unified memory gives iOS a latency advantage over Android's Vulkan (which manages
+    explicit memory transfers), though throughput is similar.

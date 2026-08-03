@@ -1,0 +1,81 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      <StatGrid>
+<StatItem value="Standard Web" label="Rendering Pipeline" />
+        <StatItem value="60 fps" label="Target Framerate" />
+        <StatItem value="GPU Compositor" label="Animation Thread" />
+        <StatItem value="transform / opacity" label="GPU Properties" />
+</StatGrid>
+      
+### Standard Web Rendering (Browser Engine)
+
+      ```
+1. HTML parsed → DOM tree
+2. CSS parsed → CSSOM tree
+3. DOM + CSSOM → Render tree
+4. Layout (reflow) — compute positions and sizes
+5. Paint — fill pixels (rasterize)
+6. Composite — GPU layers combined → Screen
+```
+      
+Ionic does not add its own rendering pipeline. Every frame goes through the standard browser rendering pipeline inside the platform's WebView. This is both a strength and a limitation. The strength: you get decades of browser rendering optimization — incremental layout, hardware-accelerated compositing, and sophisticated paint invalidation from the engine. The limitation: every UI change traverses this entire pipeline, and you cannot bypass any step the way native frameworks like SwiftUI or Jetpack Compose do.
+
+### Step-by-Step Breakdown
+
+**Parsing (steps 1-2).** When the WebView loads your app, the HTML parser builds a DOM tree while the CSS parser builds a CSSOM tree. Both parsers run on the main thread. Large documents or deeply nested CSS selectors can delay the first render. Ionic components use Shadow DOM to scope styles, preventing selector performance issues from cascade resolution. Shadow DOM also encapsulates styles so that component CSS does not leak or require BEM-style naming conventions.
+
+**Render Tree (step 3).** The browser combines DOM and CSSOM into a render tree containing only visible elements. Elements with display: none are excluded entirely. Elements with visibility: hidden are included but marked invisible — they still occupy layout space. This step determines which elements need painting, making it important to use display: none instead of visibility: hidden for truly offscreen elements.
+
+**Layout (step 4).** The browser computes exact positions and sizes for every visible element. Layout (also called reflow) is the most expensive pipeline step because changing one element's geometry can cascade to its children, siblings, and parent — triggering a full subtree layout. Properties that force layout: width, height, margin, padding, border, position, top, left, display, font-size. Ionic mitigates this by using flexbox-based layouts that minimize cascading geometry changes, and by avoiding CSS properties that trigger layout during animations.
+
+**Paint (step 5).** The browser rasterizes each render tree node into pixels on GPU-backed bitmaps. Text rendering, gradient fills, box shadows, and border-radius all happen here. Paint time increases with the number of layers and the visual complexity of CSS effects — a single layer with multiple box-shadows and a gradient can take 2-3x longer to paint than a flat color layer.
+
+**Composite (step 6).** The browser combines GPU texture layers into the final screen image. This step runs on the GPU compositor thread and is immune to main thread JavaScript jank — making it the only safe place for WebView animations that must sustain 60fps.
+
+```typescript
+// Good: compositor-only animation — no main thread involvement
+const card = document.querySelector('ion-card')
+
+card.animate(
+  [
+    { transform: 'translateY(0px)', opacity: 1 },
+    { transform: 'translateY(-20px)', opacity: 0.8 },
+  ],
+  { duration: 200, easing: 'ease-out', fill: 'both' }
+)
+```
+
+```typescript
+// Bad: animating layout properties — forces reflow every frame
+card.style.width = '200px'
+card.style.height = '300px'
+// ^^ These trigger layout recalculation on the main thread.
+// Never animate width, height, top, left, margin, or padding.
+```
+
+### Hardware-Accelerated CSS
+
+Ionic leverages CSS transform, opacity, and will-change to promote elements to their own GPU compositor layers. Animations on these properties run entirely on the GPU compositor thread — no layout or paint cost per frame. This strategy is critical for achieving 60fps in a WebView environment where main thread CPU time is shared with JavaScript execution, Capacitor bridge calls, and garbage collection.
+
+<Callout variant="info">
+  **The 60fps rule**: Only CSS transform and opacity guarantee compositor-only animation. Animating width, height, top, left, margin, or padding triggers layout recalculation on every frame — running on the main thread and competing with JavaScript. In an Ionic app, always prefer transform-based animations over geometry-based ones. Use will-change: transform to proactively promote an element to its own compositor layer before the animation begins — but use it sparingly because each compositor layer consumes GPU memory (approximately 4 bytes per pixel at the layer's resolution).
+</Callout>
+
+### Pitfalls in WebView Rendering
+
+Not all CSS properties composite equally. filter, backdrop-filter, clip-path, and mix-blend-mode often force paint on every frame even when combined with transform animations. On iOS WKWebView, backdrop-filter has known performance degradation during scroll — the filter is reapplied on every scroll frame. On Android, older Chromium WebView versions (pre-84) lack support for some compositing optimizations including transform-style: preserve-3d and individual transform properties like translateX and scale.
+
+Layer promotion itself has a cost. Each compositor layer is a separate GPU texture — promoting hundreds of elements creates GPU memory pressure that causes texture upload stalls. Use will-change on exactly the elements you are actively animating, and remove it afterward. Chrome DevTools' Layers panel and Safari's Layers tab let you inspect how many compositor layers your app creates.
+
+The most common cause of jank in Ionic apps is excessive DOM size. A render tree with 5,000+ nodes makes layout and paint expensive even without JavaScript involvement. Ionic's ion-virtual-scroll solves this by recycling DOM nodes and keeping only the visible subset in the render tree — critical for long lists in social feeds, message threads, and data tables.
+
+### WKWebView vs Chromium Rendering Differences
+
+iOS WKWebView and Android Chromium WebView share the same web standards but differ in rendering internals. WKWebView uses WebKit's rendering engine with Metal-backed compositing on modern iOS devices. Chromium WebView uses Blink's rendering engine with Skia for rasterization and either OpenGL or Vulkan for compositing depending on the device. These differences mean the same CSS animation can perform differently on each platform — iOS tends to handle backdrop-filter and blur effects more efficiently, while Android handles complex SVG rendering faster. Profile animations on both platforms, not just one, before shipping.
+
+### Framework Insight: WebView vs Native Rendering
+
+Native iOS apps use Core Animation layers (CALayer) backed directly by GPU Metal textures. Native Android apps use the hardware-accelerated Canvas or Vulkan rendering paths — both bypass DOM and CSSOM parsing entirely and can push rendering work to the GPU without main thread marshalling. Ionic apps cannot match this direct rendering path. However, web rendering handles dynamic content, responsive layout, and CSS-based theming automatically — things native frameworks require explicit SwiftUI layout code or Jetpack Compose modifiers to achieve. Choose based on whether rendering flexibility or raw frame throughput matters more for your primary UI surface.
+
+For most content-driven Ionic apps — social feeds, e-commerce listings, news readers — the WebView rendering pipeline delivers smooth 60fps with proper optimization. The key is knowing which CSS properties are safe to animate and keeping the DOM lean.

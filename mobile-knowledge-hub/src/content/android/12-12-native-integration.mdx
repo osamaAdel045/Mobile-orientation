@@ -1,0 +1,144 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    ### Quick Stats on Native Integration
+
+    <StatGrid columns={3}>
+      <StatItem value="1988" label="JNI specification first published" />
+      <StatItem value="15-40%" label="Performance gain from C++ over Kotlin for CPU-bound loops" />
+      <StatItem value="4" label="ABIs Android targets per APK" />
+    </StatGrid>
+
+    ### JNI Deep Dive
+
+    JNI is the bidirectional bridge between the JVM (Kotlin/Java) and native code (C/C++). Every `external fun` in Kotlin maps to a C function with the mangled name pattern `Java_package_Class_method`. The overhead per JNI call is roughly 3-6 native instructions plus type marshaling.
+
+    ```kotlin
+    // Kotlin side
+    class ImageProcessor {
+        companion object {
+            init { System.loadLibrary("image_processor") }
+        }
+        external fun nativeProcessPixels(inputBuffer: ByteArray, width: Int, height: Int, threshold: Float): ByteArray
+        external fun nativeProcessDirect(buffer: java.nio.ByteBuffer, length: Int)
+    }
+    ```
+
+    ```cpp
+    // C++ side (jni_image_processor.cpp)
+    #include <jni.h>
+    #include <algorithm>
+
+    extern "C" JNIEXPORT jbyteArray JNICALL
+    Java_com_example_ImageProcessor_nativeProcessPixels(
+        JNIEnv* env, jobject /* thiz */, jbyteArray inputBuffer,
+        jint width, jint height, jfloat threshold
+    ) {
+        jboolean isCopy;
+        jbyte* inputData = env->GetByteArrayElements(inputBuffer, &isCopy);
+        jsize length = env->GetArrayLength(inputBuffer);
+
+        jbyteArray outputBuffer = env->NewByteArray(length);
+        jbyte* outputData = env->GetByteArrayElements(outputBuffer, nullptr);
+
+        for (int i = 0; i < length; i++) {
+            float value = static_cast<float>(inputData[i] & 0xFF);
+            outputData[i] = static_cast<jbyte>(
+                std::clamp(static_cast<int>(value * threshold), 0, 255));
+        }
+
+        env->ReleaseByteArrayElements(inputBuffer, inputData, JNI_ABORT);
+        env->ReleaseByteArrayElements(outputBuffer, outputData, 0);
+        return outputBuffer;
+    }
+    ```
+
+    <Callout title="JNI Performance Rules">
+      Each JNI boundary crossing costs 3-6 native instructions. Batch operations by passing arrays
+      and processing in native code rather than calling JNI per element. Use
+      `GetPrimitiveArrayCritical` / `ReleasePrimitiveArrayCritical` for zero-copy access in
+      short-lived critical regions.
+    </Callout>
+
+    ### NDK and CMake Configuration
+
+    The NDK compiles C/C++ into shared libraries (`.so`) for each target ABI: `arm64-v8a`, `armeabi-v7a`, `x86_64`, `x86`.
+
+    ```cmake
+    # CMakeLists.txt
+    cmake_minimum_required(VERSION 3.22)
+    project("image_processor")
+    set(CMAKE_CXX_STANDARD 20)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+    find_library(log-lib log)
+    find_library(jnigraphics-lib jnigraphics)
+
+    add_library(image_processor SHARED
+        src/main/cpp/jni_image_processor.cpp
+        src/main/cpp/convolution.cpp
+        src/main/cpp/color_utils.cpp
+    )
+
+    target_link_libraries(image_processor ${log-lib} ${jnigraphics-lib})
+    ```
+
+    ```kotlin
+    // build.gradle.kts
+    android {
+        ndkVersion = "27.0.12077973"
+        defaultConfig { ndk { abiFilters += listOf("arm64-v8a", "x86_64") } }
+        externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt"); version = "3.22.1+" } }
+    }
+    ```
+
+    ### Kotlin/Native C Interop
+
+    Kotlin/Native provides `cinterop` for calling C libraries without JNI boilerplate, commonly used in KMM.
+
+    ```kotlin
+    // .def file (src/nativeInterop/cinterop/libyuv.def)
+    // headers = libyuv.h
+    // headerFilter = libyuv/*
+    // staticLibraries = libyuv.a
+    // libraryPaths = /usr/local/lib
+
+    // Kotlin usage — auto-generated bindings
+    import libyuv.*
+
+    fun convertToGrayscale(srcData: ByteArray, srcStride: Int, width: Int, height: Int): ByteArray {
+        val dstData = ByteArray(srcData.size)
+        ARGBToI420(srcData.toCValues().ptr, srcStride,
+            dstData.toCValues().ptr, width /* ... */ )
+        return dstData
+    }
+    ```
+
+    ### When to Use Native Code
+
+    | Scenario | Stay in Kotlin | Go Native (NDK/JNI) |
+    |---|---|---|
+    | JSON parsing, CRUD, business logic | Yes | No — Kotlin is faster to iterate |
+    | Image processing (pixel-by-pixel) | No | Yes — 5-10x speedup with SIMD/NEON |
+    | Audio/video codecs | No | Yes — must use NDK MediaCodec or FFmpeg |
+    | ML inference | No | Yes — TFLite / NNAPI delegates are C++ |
+    | UI rendering | Yes | No — Compose is GPU-accelerated internally |
+
+    ### Common Pitfalls
+
+    - **JNI global reference leak**: Every `NewGlobalRef()` without `DeleteGlobalRef()` leaks the object forever. Use local references by default.
+    - **ABI mismatch**: Distributing an APK without all target ABIs causes crashes on unsupported devices. Use Android App Bundle for per-device ABI delivery.
+    - **Missing `extern "C"`**: C++ name mangling produces symbols the JVM can't resolve. Always wrap JNI functions with `extern "C"`.
+    - **Exception handling**: A C++ exception thrown through a JNI call crashes the VM. Catch all exceptions at the JNI boundary and convert via `ThrowNew()`.
+
+    ### Comparison to Platform Channels and Turbo Modules
+
+    <DecisionMatrix
+      scores={[
+        { label: "Performance", score: 5 },
+        { label: "Development velocity", score: 2 },
+        { label: "Cross-platform sharing", score: 1 },
+        { label: "Memory safety", score: 2 },
+      ]}
+      pros="NDK code runs at full native speed with SIMD/NEON auto-vectorization. Zero-copy access to camera frames and GPU buffers. Direct OpenGL ES, Vulkan, and NNAPI access."
+      cons="JNI boilerplate and manual memory management are error-prone. Flutter's Platform Channels abstract FFI behind Dart; React Native's Turbo Modules provide C++ JSI bindings with better ergonomics."
+    />

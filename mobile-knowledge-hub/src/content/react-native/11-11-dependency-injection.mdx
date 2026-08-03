@@ -1,0 +1,126 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid columns={3}>
+  <StatItem value="React Context" label="Built-in DI" />
+  <StatItem value="jest.mock" label="Natural Mocking" />
+  <StatItem value="InversifyJS" label="Full DI" />
+  <StatItem value="TSyringe" label="Lightweight" />
+  <StatItem value="Singleton" label="Most Common" />
+</StatGrid>
+
+### Why DI Matters Less in RN
+
+JS modules are singletons by default — importing a module always returns the same instance. Combined with `jest.mock()` for swapping implementations in tests, RN apps often need less formal DI than native Android (Dagger/Hilt) or iOS (Swinject/Resolver). However, as apps grow, manual wiring becomes messy, and a DI strategy prevents coupling.
+
+### React Context as Basic DI
+
+Context is the simplest DI mechanism in RN. Provide dependencies at the app root and consume them via hooks anywhere in the tree.
+
+```tsx
+// services/api.ts — no framework dependency, pure TS
+export class ApiClient {
+  constructor(private baseUrl: string, private tokenProvider: () => string | null) {}
+  async get<T>(path: string): Promise<T> { /* fetch with auth header */ }
+}
+
+// di/ApiContext.tsx
+const ApiCtx = createContext<ApiClient | null>(null);
+
+export function ApiProvider({ baseUrl, tokenProvider, children }: Props) {
+  const api = useMemo(() => new ApiClient(baseUrl, tokenProvider), [baseUrl, tokenProvider]);
+  return <ApiCtx.Provider value={api}>{children}</ApiCtx.Provider>;
+}
+
+export function useApi() {
+  const api = useContext(ApiCtx);
+  if (!api) throw new Error('useApi must be used within ApiProvider');
+  return api;
+}
+
+// App.tsx — wiring at the root
+<ApiProvider baseUrl={API_URL} tokenProvider={() => storage.getString('token')}>
+  <QueryProvider>
+    <NavigationContainer>
+      <RootNavigator />
+    </NavigationContainer>
+  </QueryProvider>
+</ApiProvider>
+
+// Any screen — no knowledge of how ApiClient was created
+function UserScreen() { const api = useApi(); /* call api.get */ }
+```
+
+
+### InversifyJS — Full Decorator-Based DI
+
+For large apps, InversifyJS provides constructor injection with decorators, similar to Angular or NestJS.
+
+```typescript
+export const TYPES = { Logger: Symbol.for('Logger'), ApiClient: Symbol.for('ApiClient'), UserRepo: Symbol.for('UserRepo') };
+
+@injectable()
+class Logger { log(msg: string) { console.log(`[App] ${msg}`); } }
+
+@injectable()
+class UserRepository {
+  constructor(@inject(TYPES.ApiClient) private api: ApiClient, @inject(TYPES.Logger) private log: Logger) {}
+  async getUsers() { this.log.log('Fetching users'); return this.api.get<User[]>('/users'); }
+}
+
+import { Container } from 'inversify';
+const container = new Container();
+container.bind(TYPES.ApiClient).toConstantValue(new ApiClient(BASE_URL, getToken));
+container.bind(TYPES.Logger).to(Logger).inSingletonScope();
+container.bind(TYPES.UserRepo).to(UserRepository);
+```
+
+### TSyringe — Lightweight Alternative
+
+Microsoft's TSyringe offers similar constructor injection with less overhead (uses `emitDecoratorMetadata`, no reflection library).
+
+```typescript
+import { container, injectable, inject } from 'tsyringe';
+
+@injectable()
+class AnalyticsService { track(event: string, data?: object) { /* ... */ } }
+
+class HomeViewModel {
+  constructor(@inject(AnalyticsService) private analytics: AnalyticsService) {}
+  onScreenLoad() { this.analytics.track('home_viewed'); }
+}
+// const vm = container.resolve(HomeViewModel);
+```
+
+### Decision Matrix
+
+<DecisionMatrix scores={[
+  {label: "React Context", score: 8},
+  {label: "Service Locator", score: 5},
+  {label: "InversifyJS", score: 7},
+  {label: "TSyringe", score: 7},
+  {label: "Manual Prop Injection", score: 6},
+]} pros="Context: built-in, no deps, tree-scoped, testable via Provider mocking" cons="InversifyJS: decorator syntax, metadata compilation cost, overkill for <20 screens" />
+
+### Testing with DI
+
+```tsx
+// With Context — wrap in test provider
+render(<ApiProvider baseUrl="http://mock" tokenProvider={() => 'test'}><UserScreen /></ApiProvider>);
+
+// With jest.mock — auto-mocks the module
+jest.mock('../services/api-client', () => ({ get: jest.fn().mockResolvedValue(mockUsers) }));
+```
+
+### Common Pitfalls
+
+**Over-engineering**: For apps with fewer than 15-20 screens, Context + manual singletons is sufficient. InversifyJS adds build complexity (decorator transform in Babel/Metro).
+
+**Accessing container in components**: `container.resolve(Service)` inside a component couples it to the global container. Inject via Context or props instead.
+
+**Circular dependencies**: InversifyJS throws on circular dependencies. Break the cycle by refactoring into smaller services.
+
+**Not cleaning up singletons between tests**: InversifyJS/TSyringe containers and Context providers retain state across tests. Reset the container or remount Provider trees in `beforeEach`.
+
+### vs Flutter and Native DI
+
+Flutter: `GetIt` (service locator), `Riverpod` (declarative DI with state), `Provider` (like React Context). Android: `Hilt` (annotation-based, compile-time verification), `Koin` (lightweight). iOS: `Swinject` (like InversifyJS), `Resolver`. RN's unique advantage: `jest.mock` provides free DI for testing with zero framework overhead. Where Hilt/Dagger verify DI graphs at compile time, RN relies on runtime checks and TypeScript — InversifyJS bridges this gap for large teams.

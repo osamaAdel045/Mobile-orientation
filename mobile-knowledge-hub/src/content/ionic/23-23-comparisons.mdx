@@ -1,0 +1,104 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Ionic vs Flutter
+
+Ionic runs standard web technologies inside a WebView; Flutter compiles to native ARM code using the Skia rendering engine. This is the fundamental architectural divide.
+
+Flutter offers superior performance (its own rendering pipeline with no DOM overhead), consistent 60fps animations, and pixel-perfect platform-agnostic UI. The cost is learning Dart, a bespoke widget system that replaces CSS, and near-zero code sharing with existing web properties. Hot reload is excellent, but debugging requires Flutter DevTools rather than Chrome DevTools.
+
+```typescript
+// Ionic — standard web imports
+import { Component } from '@angular/core'
+import { IonContent, IonList, IonItem } from '@ionic/angular/standalone'
+```
+
+```dart
+// Flutter — custom widget system
+class MyWidget extends StatelessWidget {
+  Widget build(BuildContext context) {
+    return Scaffold(body: ListView(children: [ListTile(title: Text('Item'))]))
+  }
+}
+```
+
+Ionic wins on developer accessibility. Any web developer contributes immediately. The same CSS knowledge and browser DevTools apply. Ionic projects can also deploy as PWAs without changes — Flutter PWAs exist but are a secondary target with limited browser API support. Choose Flutter for performance-critical consumer apps. Choose Ionic when web skill reuse, PWA dual-target, and fast delivery dominate.
+
+### Ionic vs React Native
+
+React Native bridges JavaScript to real native UI components via a JavaScript-to-native thread bridge. Ionic renders entirely in a WebView and overlays components that mimic native appearance.
+
+React Native delivers closer-to-native platform feel because the UI layer uses actual iOS `UIView` and Android `View` instances. However, the bridge introduces serialization overhead for every interaction — complex gestures and frequent state updates can cause jank on the bridge boundary. The toolchain adds Metro bundler and a custom debugger separate from browser DevTools.
+
+```typescript
+// Ionic — same component works in browser, on device, and as PWA
+<IonList>
+  <IonItem button *ngFor="let item of items" (click)="open(item)">
+    <IonLabel>{{ item.name }}</IonLabel>
+  </IonItem>
+</IonList>
+```
+
+```tsx
+// React Native — native bridge, no PWA fallback
+<FlatList
+  data={items}
+  renderItem={({ item }) => <TouchableOpacity onPress={() => open(item)}>
+    <Text>{item.name}</Text>
+  </TouchableOpacity>}
+/>
+```
+
+Ionic has simpler debugging (standard browser DevTools), smaller bundle sizes for simple apps (no bridge overhead), and works identically as a PWA. React Native has a larger ecosystem of third-party native modules and better performance for animation-heavy interfaces.
+
+<Callout type="info">
+  React Native's new architecture (Fabric renderer, JSI) eliminates the bridge overhead in theory, but the ecosystem migration is gradual. Evaluate whether your app's critical libraries have migrated before choosing React Native over Ionic. For most data-display apps the performance difference is negligible.
+</Callout>
+
+### Ionic vs PWA-Only
+
+Ionic with Capacitor gives you App Store and Play Store deployment from the same codebase that runs as a PWA. This is the decisive advantage.
+
+```bash
+# Same codebase → two targets
+ionic build --prod && npx cap sync && npx cap open ios  # App Store
+ionic build --prod && npx cap sync && npx cap open android  # Play Store
+# Same codebase → also a PWA with no changes
+ng build --configuration production
+```
+
+A standalone PWA is lighter, simpler, and skips native build tooling entirely — no Xcode, no Android SDK, no app review cycles. However, PWAs cannot access critical native APIs: Bluetooth, advanced camera controls (multiple lenses, RAW capture), background file downloads, silent push notifications, and secure biometric storage.
+
+### Ionic vs Native (Swift / Kotlin)
+
+Native development provides the best raw performance, smallest memory footprint, and most authentic platform feel. Animations run at 60fps, gestures respond with zero delay, and every system API is available.
+
+The cost is maintaining two independent codebases (Swift for iOS, Kotlin for Android) or sharing logic through a cross-platform layer. Development velocity is roughly half that of Ionic for equivalent features.
+
+```typescript
+// Ionic — one codebase, two platforms
+async function saveToken(token: string): Promise<void> {
+  await SecureStoragePlugin.set({ key: 'token', value: token })
+}
+```
+
+```swift
+// Native iOS — separate implementation
+class KeychainManager {
+  func save(token: String) throws { /* SecItemAdd */ }
+}
+```
+
+```kotlin
+// Native Android — separate implementation
+class EncryptedPrefs(context: Context) {
+  fun saveToken(token: String) { /* EncryptedSharedPreferences */ }
+}
+```
+
+<Callout type="tip">
+  A hybrid strategy works well: build the core app in Ionic, and wrap platform-specific screens as Capacitor custom native plugins. This gives you web velocity for standard UI while keeping native performance where it matters — the best of both approaches.
+</Callout>
+
+### Performance Ceiling Summary
+
+Across all comparisons, the WebView pipeline is the invariant bottleneck. No amount of Ionic optimization makes it render as fast as native or Flutter. The question is whether the performance difference matters for your specific app. For 80% of business and productivity apps, it does not. The cost savings from code sharing and web developer availability usually outweigh the performance gap.

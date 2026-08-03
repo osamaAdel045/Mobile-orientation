@@ -1,0 +1,145 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Quick Stats
+
+<StatGrid>
+  <StatItem label="Primary Nav" value="Shell (URI-based routing)" />
+  <StatItem label="Stack Nav" value="NavigationPage (Push/Pop)" />
+  <StatItem label="Tab Patterns" value="TabbedPage, FlyoutPage" />
+  <StatItem label="Deep Linking" value="AppLinkRoute, custom URI schemes" />
+  <StatItem label="Modal" value="Navigation.PushModalAsync" />
+</StatGrid>
+
+### Core Concept
+
+MAUI offers two navigation systems: **Shell** (recommended for most apps) and **NavigationPage** (classic push/pop stack). Shell provides declarative route registration, URI-based navigation, and built-in deep linking. NavigationPage gives imperative push/pop control and is still used for modal or nested stack scenarios where Shell's automatic stack management falls short.
+
+### Shell Navigation -- Route Registration
+
+Routes are registered in two steps -- declarative via `AppShell.xaml` and programmatic via `Routing.RegisterRoute`:
+
+```xml
+<Shell x:Class="MyApp.AppShell">
+  <FlyoutItem Title="Store">
+    <ShellContent Title="Home" ContentTemplate="{DataTemplate views:HomePage}" />
+    <ShellContent Title="Cart" ContentTemplate="{DataTemplate views:CartPage}" />
+  </FlyoutItem>
+  <TabBar>
+    <ShellContent Title="Search" ContentTemplate="{DataTemplate views:SearchPage}" />
+    <ShellContent Title="Profile" ContentTemplate="{DataTemplate views:ProfilePage}" />
+  </TabBar>
+</Shell>
+```
+
+```csharp
+// AppShell.xaml.cs
+Routing.RegisterRoute("product/details", typeof(ProductDetailPage));
+Routing.RegisterRoute("product/details/reviews", typeof(ReviewsPage));
+```
+
+Route URIs use an absolute `//` prefix for top-level destinations and relative paths for hierarchical navigation.
+
+### Navigation with Query Parameters
+
+Navigating with parameters is type-safe and URI-based:
+
+```csharp
+await Shell.Current.GoToAsync("product/details", new Dictionary<string, object>
+{
+  { "id", productId },
+  { "source", "home" }
+});
+```
+
+The target receives parameters via `IQueryAttributable`:
+
+```csharp
+public partial class ProductDetailViewModel : ObservableObject, IQueryAttributable
+{
+  public void ApplyQueryAttributes(IDictionary<string, object> query)
+  {
+    if (query.TryGetValue("id", out var id))
+      ProductId = id.ToString();
+  }
+}
+```
+
+Alternatively, use `[QueryProperty]` for single-parameter binding directly on the ViewModel.
+
+### NavigationPage -- Stack-Based Navigation
+
+For scenarios requiring imperative stack control, wrap pages in a `NavigationPage`:
+
+```csharp
+NavigationPage.SetHasNavigationBar(this, true);
+await Navigation.PushAsync(new DetailPage(item));
+await Navigation.PopAsync();
+await Navigation.PopToRootAsync();
+```
+
+`NavigationPage` maintains a LIFO stack. It supports `PushAsync`, `PopAsync`, `PopToRootAsync`, and `InsertPageBefore`. The navigation bar renders a back button automatically for all but the root page.
+
+<Callout type="warning">
+  Avoid mixing Shell and NavigationPage navigation within the same hierarchy. Shell manages its own internal stack -- calling `Navigation.PushAsync` inside a Shell page can lead to unexpected nesting and broken back-button behavior.
+</Callout>
+
+### Modal Navigation
+
+Modals overlay the current page and are commonly used for login screens, pickers, or confirmations:
+
+```csharp
+await Navigation.PushModalAsync(new LoginPage(new LoginViewModel()));
+await Navigation.PopModalAsync();
+```
+
+In Shell, push modally using `Shell.Current.GoToAsync` with `true` as the animated parameter, and configure the route with `Shell.PresentationMode.ModalAnimated` for consistent transition behavior.
+
+### Passing Complex Objects
+
+For structured data beyond simple query strings, use the navigation dictionary with shared references:
+
+```csharp
+await Shell.Current.GoToAsync("checkout", new Dictionary<string, object>
+{
+  { "Order", orderData }
+});
+```
+
+The target implements `IQueryAttributable` and casts the value from the dictionary. For large object graphs, prefer passing a lightweight identifier and having the target fetch the full object from a shared service or cache to avoid serialization overhead.
+
+### Deep Linking
+
+Shell supports deep linking via `AppLink` attributes and custom URI schemes:
+
+```csharp
+[AppLink("product/{id}")]
+public partial class ProductDetailPage : ContentPage { }
+```
+
+Register custom URI schemes per platform:
+- **Android** -- `IntentFilter` attribute in `MainActivity.cs` or entries in `AndroidManifest.xml`
+- **iOS** -- `CFBundleURLSchemes` in `Info.plist` plus `OpenUrl` override in `AppDelegate`
+
+When a deep link arrives, Shell resolves the route and navigates automatically, optionally calling `OnAppLinkRequestReceived` for custom interception logic.
+
+### Pitfalls
+
+- **Unregistered routes**. Navigating to a route not registered with `Routing.RegisterRoute` throws `ArgumentException`. Always register routes during shell startup.
+- **Parameter key mismatches**. The dictionary key must match the `[QueryProperty]` name or `IQueryAttributable` key exactly -- typos silently produce `null` value bindings.
+- **Modal stacking without cleanup**. Repeatedly pushing modals without popping creates a silent memory leak. Always ensure `PopModalAsync` is called in the modal's completion or cancellation path.
+
+### Framework Insight
+
+Shell navigation is built on a **URI routing engine** analogous to ASP.NET Core's endpoint routing. Each registered route resolves to a page type and a factory delegate. When `GoToAsync` is called, Shell parses the URI, resolves query parameters, matches route segments (including nested paths like `product/details/reviews`), constructs the page, and pushes it onto the internal navigation stack -- all through the `IMauiHandlersCollection` pipeline.
+
+### Comparison: Shell vs NavigationPage
+
+<DecisionMatrix
+  columns={["Shell", "NavigationPage"]}
+  rows={[
+    { property: "Routing style", "Shell": "Declarative + URI-based", "NavigationPage": "Imperative Push/Pop" },
+    { property: "Deep linking", "Shell": "Built-in via URI route registration", "NavigationPage": "Manual custom URL handling" },
+    { property: "Tabs + Flyout", "Shell": "Native TabBar and FlyoutItem elements", "NavigationPage": "Separate TabbedPage, FlyoutPage classes" },
+    { property: "Stack isolation", "Shell": "Automatic per tab or flyout item", "NavigationPage": "Single stack per NavigationPage instance" }
+  ]}
+/>

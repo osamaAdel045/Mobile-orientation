@@ -1,0 +1,150 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      <StatGrid>
+<StatItem value="7" label="Pipeline Steps" />
+        <StatItem value="Handler" label="Control Factory" />
+        <StatItem value="Platform" label="GPU Renderer" />
+        <StatItem value="Native" label="Output Level" />
+</StatGrid>
+
+### From XAML to Screen: The 7-Step Pipeline
+
+```
+┌──────────────────────────────────────────────────┐
+│ 1. XAML Source                                  │
+│    <Button Text="Submit" />                     │
+├──────────────────────────────────────────────────┤
+│ 2. XAML Parser → .NET IL Objects                │
+│    Button instance created via reflection        │
+├──────────────────────────────────────────────────┤
+│ 3. Attach to Visual Tree                        │
+│    ContentPage → VerticalStackLayout → Button    │
+├──────────────────────────────────────────────────┤
+│ 4. Handler Resolution                           │
+│    IButton → ButtonHandler (from DI container)   │
+├──────────────────────────────────────────────────┤
+│ 5. Handler.CreatePlatformView()                  │
+│    → Android: new AppCompatButton(context)       │
+│    → iOS: new UIButton(frame)                   │
+│    → Windows: new Button()                       │
+├──────────────────────────────────────────────────┤
+│ 6. Property Mapper Execution                     │
+│    Text → nativeButton.Text = "Submit"           │
+│    TextColor → SetTextColor(...)                 │
+│    Font → Typeface = ...                        │
+├──────────────────────────────────────────────────┤
+│ 7. Platform GPU Render Pipeline                  │
+│    Android: Canvas → Skia → OpenGL ES/Vulkan     │
+│    iOS: CoreAnimation → Metal                    │
+│    Windows: WinUI Composition → Direct2D/D3D     │
+└──────────────────────────────────────────────────┘
+```
+
+### Step-by-Step Breakdown
+
+**Step 1-2: XAML Parsing.** The XAML compiler (XAMLC, enabled by default in Release builds) transforms XAML into IL at build time. In Debug mode, XAML is parsed at runtime via `Microsoft.Maui.Controls.Xaml.XamlParser`, which walks the XML DOM and emits `CreateObject`, `SetProperty`, and `AddChild` calls. With XAMLC, these calls are compiled directly into the assembly.
+
+```csharp
+// What XAMLC generates (simplified)
+// From: <Button Text="Submit" Clicked="OnSubmit" />
+private void BuildButton(Button __x_btn)
+{
+    __x_btn.Text = "Submit";
+    __x_btn.Clicked += OnSubmit;
+}
+```
+
+**Step 3: Visual Tree Attachment.** When a `ContentPage` is pushed onto the navigation stack, MAUI walks the logical tree and creates the platform visual tree in parallel. The `VisualTreeManager` calls `OnChildAdded` for each element, which triggers handler creation. This is a depth-first traversal — children are created before parents finish layout.
+
+**Step 4-5: Handler Resolution.** The framework checks an internal `HandlerRegistry` (populated at `MauiAppBuilder` startup):
+
+```csharp
+// Registration at app startup
+builder.Services.AddSingleton<IHandlerRegistry>(sp =>
+{
+    var registry = new HandlerRegistry();
+    registry.Register<IButton, ButtonHandler>();
+    registry.Register<ILabel, LabelHandler>();
+    // ... 40+ default registrations
+    return registry;
+});
+```
+
+At resolution time, the container calls `CreatePlatformView()` which calls the platform constructor — `new AppCompatButton(context)` on Android, `new UIButton(CGRect.Empty)` on iOS. The handler receives a reference to the parent context (Android `Context`, iOS `UIWindow`).
+
+**Step 6: Property Mapper.** The mapper dictionary fires for every property with a non-default value:
+
+```csharp
+// Property mapper execution order:
+// 1. Default values set in handler constructor
+// 2. Explicit XAML attribute values
+// 3. Binding-updated values (via INotifyPropertyChanged)
+foreach (var prop in view.GetApplicableProperties())
+{
+    if (Mapper.TryGetValue(prop.Name, out var setter))
+    {
+        setter(this, view); // native setter call
+    }
+}
+```
+
+<Callout type="info">
+MAUI does NOT render anything itself. Once the Handler creates the native control and maps the properties, the platform's native rendering pipeline takes over. A MAUI Button IS a UIButton on iOS, an AppCompatButton on Android, and a WinUI Button on Windows — the platform GPU renders it exactly as it renders any native control. This makes MAUI a "thin wrapper" architecture, unlike Flutter which owns every pixel on screen via Skia.
+</Callout>
+
+### No Custom Renderer (Unlike Flutter)
+
+Flutter renders every pixel through its own Skia engine — a Flutter `ElevatedButton` is a custom-drawn shape, not a native Android button. This gives Flutter pixel-perfect cross-platform consistency but means the app ignores platform OS updates (new Material Design buttons, new accessibility APIs) until Flutter updates its engine.
+
+MAUI takes the opposite approach: **maximum platform fidelity, minimum abstraction.** A MAUI Button inherits platform accessibility features (TalkBack, VoiceOver, Narrator), platform theming (Material You on Android 12+), and future OS updates automatically. The cost: platform-specific visuals vary (an iOS button looks like iOS, an Android button looks like Android).
+
+### Native Control Lifecycle
+
+```csharp
+public class ButtonHandler : ViewHandler<IButton, Android.Widget.Button>
+{
+    // 1. Create — called once when control enters visual tree
+    protected override Android.Widget.Button CreatePlatformView()
+        => new Android.Widget.Button(Context);
+
+    // 2. Connect — wire events, attach listeners
+    protected override void ConnectHandler(Android.Widget.Button platformView)
+    {
+        platformView.Click += OnNativeClick;
+    }
+
+    // 3. Disconnect — detach to avoid leaks
+    protected override void DisconnectHandler(Android.Widget.Button platformView)
+    {
+        platformView.Click -= OnNativeClick;
+    }
+}
+```
+
+<Callout type="warning">
+The `DisconnectHandler` method is critical for memory management. If you attach platform listeners (click handlers, observers, gesture recognizers) in `ConnectHandler` and fail to detach them in `DisconnectHandler`, the native view may outlive the managed handler, causing a leak. MAUI calls `DisconnectHandler` when the control is removed from the visual tree.
+</Callout>
+
+### Framework Insight: Where the GPU Enters
+
+MAUI never issues GPU commands. The handoff happens implicitly:
+
+1. MAUI calls `handler.PlatformView.Layout(left, top, right, bottom)` to position the native control
+2. The platform view invalidates its drawing surface (Android: `View.invalidate()`, iOS: `UIView.setNeedsDisplay()`)
+3. The platform's rendering loop picks up the invalidation:
+   - **Android:** Choreographer → DisplayList → Skia/OpenGL ES → GPU
+   - **iOS:** CoreAnimation render server → Metal → GPU
+   - **Windows:** Dispatcher → Composition engine → Direct2D → GPU
+
+MAUI's layout coordinates (device-independent pixels at ~160 dpi) are multiplied by the platform scale factor: `nativeWidth = (int)(mauiWidth * displayScale + 0.5)`.
+
+### Comparison: MAUI vs Flutter vs React Native Rendering
+
+| Concern | MAUI | Flutter | React Native |
+|---------|------|---------|-------------|
+| Native control | Yes (real UIButton) | No (Skia canvas) | Yes (real UIView) |
+| Engine | Platform GPU pipeline | Skia (self-contained) | Platform GPU pipeline |
+| OS theming | Automatic | Must replicate | Automatic |
+| ABI bridge | .NET interop (P/Invoke) | C/C++ engine (dart:ffi) | JSON bridge (JSI) |
+| Startup render | ~300ms (native view create) | ~800ms (Skia init) | ~400ms (bridge init) |

@@ -1,0 +1,129 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+### Project Overview
+
+A field-service inspection app for a mid-size enterprise. Technicians use iOS and Android devices to receive work orders, complete inspection checklists offline, sync when connectivity resumes, and receive push notifications for urgent assignments. Backend: Azure Functions + SQL Server with a REST API.
+
+### Architecture
+
+**Shell + MVVM layout:**
+```
+┌──────────────────────────────────┐
+│          Shell App               │
+│  TabBar(WOrders, Dashboard)      │
+│  FlyoutItem(Settings, Logout)    │
+│         │                        │
+│  ┌──────▼─────────────────┐      │
+│  │  MVVM Layer            │      │
+│  │  VM ←→ Service ←→ API  │      │
+│  │     ↕         ↕        │      │
+│  │  SQLite   SecureStorage│      │
+│  └────────────────────────┘      │
+└──────────────────────────────────┘
+```
+
+**Data flow**: `ViewModel` calls `ISyncService.FetchWorkOrdersAsync()` -> service checks `Connectivity.Current.NetworkAccess` -> if online, calls `IWorkOrderApi.GetPendingAsync()` via Refit -> deserializes JSON -> stores in SQLite via `IRepository<T>` -> publishes `WorkOrdersLoadedMessage` via `WeakReferenceMessenger` -> ViewModel updates `ObservableCollection<WorkOrder>`. If offline, loads from SQLite directly and queues a sync job.
+
+### Project Structure
+
+```
+FieldService/
+├── App.xaml(.cs)              # Entry, theme resources
+├── MauiProgram.cs             # DI registration
+├── AppShell.xaml(.cs)         # Routes, flyout, tabs
+├── Models/                    # POCOs for API contracts
+│   └── WorkOrder.cs, InspectionItem.cs, SyncQueueItem.cs
+├── ViewModels/                # CommunityToolkit.Mvvm
+│   └── WorkOrderListViewModel.cs, InspectionViewModel.cs, SettingsViewModel.cs
+├── Views/                     # XAML pages (compiled bindings)
+│   └── WorkOrderListPage.xaml, InspectionPage.xaml, SettingsPage.xaml
+├── Services/                  # API interfaces + implementations
+│   └── IWorkOrderApi.cs, ISyncService.cs, INotificationService.cs, IAuthService.cs
+├── Data/                      # SQLite + repository
+│   └── AppDatabase.cs, Repository.cs
+└── Controls/                  # Custom Handlers
+    └── SignaturePadHandler.cs
+```
+
+### Key Code Patterns
+
+**DI registration in MauiProgram.cs:**
+```csharp
+builder.Services.AddSingleton<AppDatabase>();
+builder.Services.AddSingleton<IAuthService, AuthService>();
+builder.Services.AddSingleton<IConnectivity>(Connectivity.Current);
+builder.Services.AddTransient<IRepository<WorkOrder>, Repository<WorkOrder>>();
+builder.Services.AddTransient<ISyncService, SyncService>();
+builder.Services.AddTransient<INotificationService, NotificationService>();
+builder.Services.AddRefitClient<IWorkOrderApi>()
+    .ConfigureHttpClient(c => c.BaseAddress = new Uri("https://api.example.com"))
+    .AddPolicyHandler(Policy.TimeoutAsync<HttpResponseMessage>(10));
+builder.Services.AddTransient<WorkOrderListViewModel>();
+```
+
+**Offline sync with SQLite retry queue:**
+```csharp
+public class SyncService : ISyncService
+{
+    private readonly IRepository<SyncQueueItem> _queue;
+    public async Task SyncPendingAsync()
+    {
+        var pending = await _queue.GetManyAsync(q => q.Status == SyncStatus.Pending);
+        foreach (var item in pending.OrderBy(i => i.CreatedAt))
+        {
+            try
+            {
+                await _api.PostInspectionAsync(item.Payload);
+                item.Status = SyncStatus.Completed;
+            }
+            catch (HttpRequestException)
+            {
+                item.Status = SyncStatus.Failed;
+                item.RetryCount++;
+            }
+            await _queue.UpdateAsync(item);
+        }
+    }
+}
+```
+
+<Callout variant="default" title="Offline-First Pattern">
+All data reads go through SQLite first. The API refreshes in the background. This keeps the UI responsive regardless of connectivity. Conflicts use "last-write-wins" with `UpdatedAt` timestamps.
+</Callout>
+
+**Push notification registration via FCM / Azure Notification Hubs:**
+```csharp
+public async Task RegisterForPushAsync()
+{
+#if ANDROID
+    var token = await FirebaseMessaging.Instance.GetTokenAsync();
+#elif IOS
+    var data = await UNUserNotificationCenter.Current
+        .RequestAuthorizationAsync(UNAuthorizationOptions.Alert | UNAuthorizationOptions.Badge);
+#endif
+    await _api.RegisterDeviceAsync(new DeviceRegistration { PushToken = token });
+}
+```
+
+**Secure credential storage with MSAL:**
+```csharp
+public async Task<string> GetAccessTokenAsync()
+{
+    var cached = await SecureStorage.GetAsync("access_token");
+    if (!string.IsNullOrEmpty(cached)) return cached;
+
+    var authResult = await _pca.AcquireTokenInteractive(scopes)
+        .WithParentActivityOrWindow(Platform.CurrentActivity)
+        .ExecuteAsync();
+    await SecureStorage.SetAsync("access_token", authResult.AccessToken);
+    return authResult.AccessToken;
+}
+```
+
+### CI/CD Pipeline
+
+**GitHub Actions** builds, tests (via `dotnet test` with `Microsoft.Maui.Testing`), and publishes to App Center / TestFlight (iOS) and Google Play (Android) on each tag push. A macOS runner handles iOS; a Windows runner handles Android. The pipeline runs `maui-check` to validate the environment before building.
+
+<Callout variant="info" title="Production Checklist">
+Before shipping: verify compiled bindings on every page (set `x:DataType`), prune unused NuGet packages, enable linker (`<MtouchLink>Full</MtouchLink>` on iOS, `<AndroidLinkMode>SdkOnly</AndroidLinkMode>` on Android), and test all offline flows with airplane mode enabled.
+</Callout>

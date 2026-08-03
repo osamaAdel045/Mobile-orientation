@@ -1,0 +1,122 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="SQLDelight" label="Recommended DB" />
+        <StatItem value="Typesafe SQL" label="Approach" />
+        <StatItem value="multiplatform-settings" label="Key-Value" />
+      </StatGrid>
+
+      ### SQLDelight — Typesafe Multiplatform SQL
+
+      **SQLDelight** generates Kotlin types from SQL statements. Write SQL in
+      `.sq` files; SQLDelight creates type-safe query functions for each platform.
+      It uses platform-specific SQLite drivers: `android.database.sqlite` on
+      Android and native SQLite (`sqlite3` C library) on iOS.
+
+      ```sql
+      -- shared/src/commonMain/sqldelight/com/app/db/User.sq
+      CREATE TABLE user (
+          id TEXT NOT NULL PRIMARY KEY,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          avatar_url TEXT,
+          updated_at INTEGER NOT NULL DEFAULT 0
+      );
+
+      selectAll:
+      SELECT * FROM user ORDER BY name ASC;
+
+      selectById:
+      SELECT * FROM user WHERE id = ?;
+
+      upsert:
+      INSERT OR REPLACE INTO user (id, name, email, avatar_url, updated_at)
+      VALUES (?, ?, ?, ?, ?);
+
+      observeAll:
+      SELECT * FROM user ORDER BY name ASC;
+      ```
+
+      ```kotlin
+      // commonMain — expect driver factory
+      expect class DatabaseDriverFactory { fun createDriver(): SqlDriver }
+
+      class UserLocalDataSource(factory: DatabaseDriverFactory) {
+          private val db = AppDatabase(factory.createDriver())
+          fun observeUsers(): Flow<List<User>> =
+              db.userQueries.observeAll().asFlow().mapToList(Dispatchers.Default)
+      }
+      ```
+
+      ### Platform-Specific Drivers
+
+      ```kotlin
+      // androidMain
+      actual class DatabaseDriverFactory(private val context: Context) {
+          actual fun createDriver(): SqlDriver =
+              AndroidSqliteDriver(AppDatabase.Schema, context, "app.db")
+      }
+
+      // iosMain
+      actual class DatabaseDriverFactory {
+          actual fun createDriver(): SqlDriver =
+              NativeSqliteDriver(AppDatabase.Schema, "app.db")
+      }
+      ```
+
+      <Callout title="SQLDelight Schema Migrations">
+        SQLDelight supports sequenced `.sqm` migration files in the
+        `sqldelight/migrations/` directory. Each file is one schema version.
+        SQLDelight validates the migration against the schema defined in your
+        `.sq` files at compile time — mismatches are compile errors. SQLite
+        cannot rename columns without table recreation, so test migrations
+        with a rollback plan.
+      </Callout>
+
+      ### Key-Value Storage — multiplatform-settings
+
+      For preferences, **multiplatform-settings** (russhwolf) provides a `Settings`
+      interface backed by `SharedPreferences` on Android and `NSUserDefaults` on iOS.
+
+      ```kotlin
+      class SessionStore(private val settings: Settings) {
+          var authToken: String?
+              get() = settings.getStringOrNull("auth_token")
+              set(value) {
+                  if (value != null) settings.putString("auth_token", value)
+                  else settings.remove("auth_token")
+              }
+      }
+      ```
+
+      ### Comparison to Room and Drift
+
+      | Aspect | SQLDelight | Room | Drift (Flutter) |
+      |--------|------------|------|-----------------|
+      | Platforms | All KMP | JVM (KMP exp.) | Dart |
+      | Schema | SQL first | Annotation-based | SQL first |
+      | Migrations | .sqm files | Auto/migration | Custom callbacks |
+      | Observability | Flow via asFlow() | Flow/LiveData | Stream queries |
+      | Driver | Platform-specific | Android SQLite | sqlite3 FFI |
+
+      ### Pitfall: Wrong Driver on iOS
+
+      ```kotlin
+      // WRONG — Android driver on iOS crashes
+      actual class DatabaseDriverFactory(private val context: Context) {
+          actual fun createDriver() = AndroidSqliteDriver(AppDatabase.Schema, context, "app.db")
+      }
+
+      // RIGHT — Native SQLite on iOS
+      actual class DatabaseDriverFactory {
+          actual fun createDriver() = NativeSqliteDriver(AppDatabase.Schema, "app.db")
+      }
+      ```
+
+      ### KMP Insight
+
+      SQLDelight validates SQL at compile time — misspelled column names and
+      wrong parameter types are caught before runtime. This is especially
+      valuable on iOS where debug iteration is slower due to Xcode build
+      integration. A compile error in a `.sq` file is caught on JVM in under
+      a second.

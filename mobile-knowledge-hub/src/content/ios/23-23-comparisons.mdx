@@ -1,0 +1,123 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+        <StatItem value="iOS" label="Swift" />
+        <StatItem value="Android" label="Kotlin" />
+        <StatItem value="Flutter" label="Dart" />
+        <StatItem value="React Native" label="JavaScript" />
+    </StatGrid>
+
+    ### Cross-Platform Comparisons
+
+    Understanding iOS relative to other mobile development approaches helps
+    make informed architectural and resourcing decisions.
+
+    #### iOS vs Android Native
+
+    | Dimension | iOS (Swift) | Android (Kotlin) |
+    |-----------|-------------|-------------------|
+    | Language | Swift 6, value semantics | Kotlin 2, null-safety |
+    | UI Framework | SwiftUI (declarative) | Jetpack Compose (declarative) |
+    | IDE | Xcode (macOS only) | Android Studio (macOS/Win/Linux) |
+    | GPU API | Metal 4 | Vulkan 1.3 / OpenGL ES |
+    | Async | async/await, actors | Coroutines + Flow |
+    | Binary Size | ~8 MB minimal | ~6 MB minimal |
+    | App Store | App Review (24-48h) | Play Console (instant) |
+    | Startup | ~400 ms cold | ~500 ms cold |
+
+    Both platforms converged on declarative UI and structured concurrency. iOS
+    leads in GPU performance (Metal), startup time, and binary size. Android
+    leads in IDE portability, review speed, and tooling choice.
+
+    #### iOS vs Flutter
+
+    Flutter renders through Skia/Impeller rather than native UIKit or SwiftUI,
+    producing consistent visuals across platforms at the cost of platform feel.
+
+    | Dimension | iOS Native | Flutter |
+    |-----------|-----------|---------|
+    | Language | Swift | Dart |
+    | Rendering | Native UIKit/SwiftUI | Skia / Impeller |
+    | GPU | Metal direct | Metal via Impeller |
+    | Binary Size | ~8 MB | ~15 MB+ |
+    | Startup | ~400 ms | ~1000 ms |
+    | API Access | Direct, day-1 WWDC | Platform channels |
+    | Platform Feel | Native | Custom, noticeably non-native on iOS |
+
+    Flutter's pixel-level control is powerful for branded designs, but platform
+    channels introduce latency for native API access. The bundled Skia/Impeller
+    engine adds ~7 MB to binary size. iOS users notice the non-native scroll
+    physics, text selection, and navigation gestures.
+
+    #### iOS vs React Native
+
+    RN uses a JavaScript bridge (Fabric) for native communication, adding
+    overhead for every platform API call and animation frame.
+
+    | Dimension | iOS Native | React Native |
+    |-----------|-----------|-------------|
+    | Language | Swift / Obj-C | JavaScript / TypeScript |
+    | UI | Native SwiftUI views | JS thread + bridge |
+    | GPU | Metal 4 | No direct GPU access |
+    | Binary Size | ~8 MB | ~20 MB+ (Hermes) |
+    | Startup | ~400 ms | ~800-1500 ms |
+    | Animations | Core Animation, 120 Hz | Native Driver or Reanimated |
+    | Code Sharing | Apple ecosystem only | iOS + Android + Web |
+
+    RN's JSI bridge improved performance, but the JS thread remains a bottleneck
+    for gesture handling, list scrolling, and animations. Native iOS gesture
+    recognizers and collection view performance are measurably smoother.
+
+    #### iOS vs Kotlin Multiplatform (KMP)
+
+    KMP is complementary, not competitive. It shares business logic (networking,
+    validation, models) across platforms while keeping platform-specific UI. The
+    Swift interop generates Kotlin-to-Swift mappings, but you still write SwiftUI
+    for the iOS layer. KMP is a backend-sharing strategy, not a UI framework.
+
+    ```swift
+    // Shared KMP logic called from SwiftUI
+    import SharedSDK
+    struct LoginView: View {
+        @State private var email = ""
+        @State private var password = ""
+        var body: some View {
+            Form {
+                TextField("Email", text: $email)
+                SecureField("Password", text: $password)
+                Button("Login") {
+                    Task {
+                        let result = try await AuthRepository.shared
+                            .login(email: email, password: password)
+                        // Handle result
+                    }
+                }
+            }
+        }
+    }
+    ```
+
+    #### iOS vs WebView-Based (Ionic, Cordova)
+
+    WebView frameworks wrap a web app in a native shell. DOM rendering, JS
+    execution, and CSS animations cannot match native 120 Hz scrolling or
+    gesture-driven transitions. These are not viable for production-quality
+    mobile apps beyond simple content display.
+
+    #### Binary Size Comparison
+
+    | Platform | Minimal App Size | Runtime Bundled |
+    |----------|-----------------|-----------------|
+    | iOS (Swift) | ~8 MB | No (ABI stable in OS since iOS 12) |
+    | Android (Kotlin) | ~6 MB | No (ART in OS) |
+    | Flutter | ~15 MB | Skia/Impeller engine (~7 MB) |
+    | React Native | ~20 MB | Hermes engine + RN runtime |
+    | Ionic | ~25 MB | WebView + app shell |
+
+    <Callout title="Native iOS Has the Smallest Binary Size">
+        Swift achieved ABI stability in iOS 12, so the Swift runtime is part of
+        the operating system. Native iOS apps bundle no engine or runtime,
+        resulting in the smallest download sizes. For comparison, Flutter bundles
+        the Skia/Impeller engine (~7 MB) and RN bundles Hermes (~15 MB). This
+        directly affects install conversion rates and over-the-air update size.
+    </Callout>

@@ -1,0 +1,99 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+### Quick Stats
+
+<StatGrid columns={3}>
+<StatItem value="1M+" label="RN Apps in Production" />
+<StatItem value="2M+" label="npm Packages Available" />
+<StatItem value="2015" label="Year Created" />
+<StatItem value="Meta" label="Maintainer" />
+</StatGrid>
+
+### Detailed Scoring Dimensions
+
+<DecisionMatrix
+  scores={[
+    { label: "Dev Familiarity", score: 9 },
+    { label: "Performance", score: 7 },
+    { label: "Code Sharing", score: 9 },
+    { label: "Ecosystem", score: 10 },
+    { label: "Platform Feel", score: 9 },
+    { label: "Animation Quality", score: 6 },
+    { label: "OTA Updates", score: 10 },
+    { label: "Learning Curve", score: 8 },
+    { label: "Hiring Pool", score: 9 },
+    { label: "Production Readiness", score: 8 },
+  ]}
+  pros="Largest cross-platform hiring pool (React devs), most mature OTA update story (CodePush, EAS Update), native platform controls mean apps look native by default, massive npm ecosystem with 2M+ packages, New Architecture eliminates bridge bottleneck for JSI-based synchronous native calls, React DevTools and Flipper for debugging, Expo for zero-config builds, strong TypeScript support from the core team"
+  cons="JS thread still a single-threaded bottleneck for heavy computation, animation pipeline requires Reanimated for smooth 60fps (native animations only for transform/opacity), upgrading between major versions is painful, native module setup requires knowledge of both iOS (Swift/Obj-C) and Android (Kotlin/Java), Metro bundler slower than Vite/esbuild, New Architecture adoption is still incomplete across the ecosystem, debugging native crashes requires native platform tooling (Xcode, Android Studio)"
+/>
+
+### Score Justifications
+
+**Dev Familiarity (9/10)** — React developers can transition to RN with minimal retraining. The component model, hooks, and JSX syntax are identical. The gap is learning the RN component library (View, Text, FlatList) and platform concepts.
+
+**Performance (7/10)** — Excellent for 90% of use cases. The New Architecture (JSI, Fabric) closes the gap with truly native. But JS thread bottlenecks remain for heavy data processing, and animation-heavy apps still need Reanimated to approach Flutter smoothness.
+
+**Code Sharing (9/10)** — Share business logic, types, API client, and state management across web and mobile. Using a monorepo, teams achieve 60-80% code sharing between RN and React web apps. UI components themselves aren't shared (web uses DOM, RN uses native views), but the logic layer is highly portable.
+
+**Ecosystem (10/10)** — Access to npm's 2M+ packages is a unique advantage. No other mobile framework offers this. Most web libraries work in RN with minor adaptations. Community RN-specific libraries cover virtually every common mobile need.
+
+**Platform Feel (9/10)** — RN components render as native platform controls. A `<Picker>` on iOS renders UIPickerView; on Android it renders Spinner. Users cannot distinguish RN screens from native screens when implemented correctly.
+
+**Animation Quality (6/10)** — The weakest dimension. The Animated API handles basic transitions, but complex gesture-driven animations require Reanimated + Gesture Handler. Heavy game-like animations still perform better in Flutter (Impeller) or native.
+
+**OTA Updates (10/10)** — Uniquely powerful. CodePush and EAS Update enable pushing JS bundle updates directly to users without app store review. Critical for hotfixes, A/B testing, and feature flag delivery. No other framework offers this without a WebView.
+
+<Callout title="The New Architecture changes the calculus">
+Pre-New Architecture (0.72 and earlier), RN scored lower on performance (5/10) and production readiness (6/10) due to bridge overhead. JSI eliminates JSON serialization for native calls, Fabric enables synchronous layout, and Turbo Modules reduce memory. Projects starting today on 0.76+ with the New Architecture enabled enjoy a fundamentally different performance profile than even RN 0.73 projects.
+</Callout>
+
+### When to Choose React Native
+
+1. **Web team expanding to mobile** — Your team already knows React. RN lets them ship mobile apps using 80% of their existing knowledge. The alternative (learning Swift/Kotlin from scratch) costs 6-12 months of ramp-up time per developer.
+
+2. **MVP with frequent updates** — RN's OTA update capability and rapid development cycle make it the fastest path from idea to production. Ship an MVP in weeks, iterate based on user feedback without waiting for app store approval.
+
+3. **Content-driven apps** — Social feeds, news apps, e-commerce catalogs, marketplaces, and dashboards. These apps are I/O-bound (API calls, image loading) rather than CPU-bound, so RN's performance profile is ideal.
+
+4. **Apps needing native UX** — If the app must feel native (platform-standard navigation, native text selection, native scroll physics), RN provides this out of the box without the "looks like a web page" quality of Ionic or PWAs.
+
+5. **Cross-platform with OTA updates** — Any app where you need to push code changes without app store review. Enterprise apps with compliance requirements, apps with regulatory-driven feature toggles, or any product team practicing continuous delivery.
+
+### When NOT to Choose React Native
+
+1. **Heavy animation / gaming** — If the app is a game, AR experience, or has complex gesture-driven animations with 60+ FPS requirements, Flutter's Impeller rendering engine or native (Metal/Vulkan directly) will outperform RN even with Reanimated.
+
+2. **Smallest possible binary** — RN adds ~15MB to the app binary (Hermes, RN core, Yoga). For comparison, a native SwiftUI app can be under 5MB. If binary size is a hard constraint, go native.
+
+3. **Cutting-edge platform APIs day one** — RN is always behind native by at least one major OS release. New iOS APIs (VisionOS APIs, advanced SwiftUI features) land in RN months after the native release. If your app must use platform APIs on launch day, choose native.
+
+4. **Offline-first with complex sync** — While WatermelonDB enables offline SQLite sync, conflicts, multi-device sync, and background sync are harder to implement in RN than in native (which has direct access to NSMetadataQuery, BGTaskScheduler, WorkManager). KMP with native sync logic is a stronger choice here.
+
+5. **No JavaScript expertise on the team** — If your team is exclusively Kotlin/Swift/C# developers, RN's JS/TS ecosystem is a new learning curve. Flutter (Dart is similar to Kotlin) or native development may be more productive.
+
+### Team Composition Decision Tree
+
+**Has React web developers:** Choose React Native. Leverage existing expertise. Web devs become productive RN devs in 2-4 weeks.
+
+**Has native iOS/Android developers:** Consider Kotlin Multiplatform (KMP) for logic sharing with native UI, or Flutter if the team is willing to learn a new language. RN doesn't leverage native expertise as well.
+
+**Has neither:** Flutter has a gentler ramp (single language, single framework) for developers without React experience. RN requires learning React + the RN component model + platform concepts. However, RN's hiring pool is 5-10x larger if you need to grow the team.
+
+**Mixed team (some web, some native):** RN is the bridge technology. Web devs own the JS/TS layer (screens, state, navigation), native devs own the Turbo Module layer (platform APIs, performance-critical paths). This separation mirrors the architecture itself.
+
+### RN vs Flutter vs Native — Comparison Row
+
+| Dimension | React Native | Flutter | Native (Swift/Kotlin) |
+|---|---|---|---|
+| Rendering | Native UI controls | Custom engine (Impeller) | Native UI controls |
+| Language | TypeScript / JavaScript | Dart | Swift / Kotlin |
+| Compilation | Hermes AOT (bytecode) | Dart AOT (native) | LLVM / ART (native) |
+| Binary Size | ~15MB baseline | ~12MB baseline | ~4MB baseline |
+| Animation | Reanimated for 60fps | Impeller: 120fps | Core Animation: 120fps |
+| OTA Updates | Yes (CodePush/EAS) | No (must rebuild) | No (must rebuild) |
+| Hiring Pool | Largest | Medium | Large (specialized) |
+| Learning Curve | Low (if React) | Medium | High |
+| Ecoystem | 2M+ npm packages | 50K+ pub packages | Apple/Google SDKs |
+| New Arch Impact | JSI eliminates bridge | Impeller new renderer | N/A |

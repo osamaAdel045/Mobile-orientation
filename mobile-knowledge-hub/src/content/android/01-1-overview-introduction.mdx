@@ -1,0 +1,125 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    <StatGrid columns={4}>
+      <StatItem value="Google" label="Steward" />
+      <StatItem value="Kotlin/Java" label="Languages" />
+      <StatItem value="2008" label="First Release" />
+      <StatItem value="Apache 2.0" label="License" />
+    </StatGrid>
+
+    ### The Native Android Value Proposition
+
+    Android's defining characteristic is **direct platform access with no abstraction layer**. Unlike cross-platform frameworks that insert a bridge between your code and the OS, native Android apps compile to DEX bytecode running on ART (Android Runtime) with direct syscall access to the Linux kernel. Every OS API — Camera HAL, Neural Networks API, Bluetooth LE, UWB ranging, satellite SOS — is available on the day of release with zero framework adapter delay.
+
+    <Callout title="First-Class OS Citizen">
+      Native Android is the only model where your code runs in the same process as system services. There is no serialization boundary, no event-loop translation, no bridge. When Android 15 adds a new API, native apps consume it immediately — cross-platform frameworks wait months for bindings.
+    </Callout>
+
+    ### Jetpack Compose vs Legacy View System
+
+    Android offers two UI paradigms. Jetpack Compose is the modern declarative framework built on Kotlin compiler plugins and the Compose runtime. The legacy View system, while still supported, is in maintenance mode for existing projects.
+
+    ```kotlin
+    // Jetpack Compose — declarative, reactive, state-driven
+    @Composable
+    fun WelcomeCard(userName: String) {
+        var expanded by remember { mutableStateOf(false) }
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+                .clickable { expanded = !expanded }
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("Welcome, $userName", style = MaterialTheme.typography.headlineSmall)
+                AnimatedVisibility(visible = expanded) {
+                    Text("Full profile content here, visible on expand")
+                }
+            }
+        }
+    }
+    ```
+
+    ```kotlin
+    // Legacy View system — imperative, XML-inflated, manual lifecycle
+    class WelcomeFragment : Fragment() {
+        private var _binding: WelcomeFragmentBinding? = null
+        private val binding get() = _binding!!
+
+        override fun onCreateView(
+            inflater: LayoutInflater, container: ViewGroup?,
+            savedInstanceState: Bundle?
+        ): View {
+            _binding = WelcomeFragmentBinding.inflate(inflater, container, false)
+            binding.welcomeText.text = "Welcome, ${arguments?.getString("userName")}"
+            binding.card.setOnClickListener {
+                binding.details.visibility = if (binding.details.visibility == View.GONE)
+                    View.VISIBLE else View.GONE
+            }
+            return binding.root
+        }
+
+        override fun onDestroyView() {
+            super.onDestroyView()
+            _binding = null
+        }
+    }
+    ```
+
+    | Dimension | Jetpack Compose | Legacy View System |
+    |---|---|---|
+    | Paradigm | Declarative, recomposition | Imperative, event-driven |
+    | State | Snapshot state, automatic | Manual setState() |
+    | Layout | Single-pass intrinsic | Two-pass measure/layout |
+    | Interop | Bidirectional with View | — |
+    | Tooling | Compose Preview only | Layout Inspector |
+
+
+    ### When to Choose Native Android
+
+    Native Android is mandatory when your product requires low-level OS access. AR/VR apps using ARCore need direct GPU context. Camera apps streaming RAW sensor data depend on Camera2 at the HAL level. Health platforms reading HRM or SpO2 from Wear OS use Health Connect API that no cross-platform framework wraps. Games using Vulkan require native GPU pipeline access. Any app targeting foldable displays, satellite SOS, or passkey management on day one of a new OS release must be native. The ecosystem spans 2.5B+ active devices across phones, foldables, Wear OS, Android TV, Android Auto, and ChromeOS.
+
+    ### When NOT to Choose Native Android
+
+    Single-platform development by definition excludes iOS. If feature parity on both platforms is required at launch, maintaining two independent codebases is expensive. Prototypes needing rapid iteration, teams without Kotlin experience, or apps that never touch OS hardware are better served by Kotlin Multiplatform (shared logic) or Compose Multiplatform (shared UI). For pure content-reader apps with no sensor requirements, Flutter or React Native eliminate per-platform build overhead.
+
+    ```kotlin
+    // Minimal Compose entry point — every Android app starts here
+    class MainActivity : ComponentActivity() {
+        override fun onCreate(savedInstanceState: Bundle?) {
+            super.onCreate(savedInstanceState)
+            setContent {
+                MaterialTheme(colorScheme = dynamicLightColorScheme(this)) {
+                    Greeting("Android")
+                }
+            }
+        }
+    }
+
+    @Composable
+    fun Greeting(name: String, modifier: Modifier = Modifier) {
+        Surface(color = MaterialTheme.colorScheme.background) {
+            Column(
+                modifier = modifier.fillMaxSize().wrapContentSize(Alignment.Center)
+            ) {
+                Text(text = "Hello, $name!", style = MaterialTheme.typography.displayMedium)
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(onClick = { /* direct platform API call */ }) {
+                    Text("Native API Access")
+                }
+            }
+        }
+    }
+    ```
+
+    <Callout title="Ecosystem Reach">
+      Google Play serves apps to 2.5B+ active devices across 190+ countries. The Android SDK ships 3-4 API level bumps per year. Over 120 OEMs manufacture Android devices, creating the largest addressable mobile market of any platform globally.
+    </Callout>
+
+    ### Stack Summary
+
+    Android's architecture stacks Linux kernel, Hardware Abstraction Layer, ART runtime, Android framework services, and your application. The recommended architecture follows MVVM with ViewModel, StateFlow for reactive state, Hilt for dependency injection, and Jetpack Navigation Compose for routing. Networking uses Retrofit + OkHttp (or Ktor client for multiplatform), while local persistence uses Room over SQLite or DataStore for key-value preferences. Testing runs via JUnit, Espresso, Compose UI tests, and MockK for mocking.
+
+    ### Comparison to Cross-Platform Approaches
+
+    Cross-platform frameworks (Flutter, React Native, Kotlin Multiplatform) prioritize developer velocity and code sharing over OS integration. Flutter renders everything through its own Skia engine, bypassing Android's platform widgets entirely — this guarantees visual consistency but sacrifices platform-native behavior like accessibility services, font fallback, and edge-to-edge display. React Native bridges JavaScript to native threads via a serialization boundary that adds 2-5ms round-trip latency per interaction. Native Android alone offers zero-latency API access, full Material You theming integration, and automatic support for every Android accessibility, privacy, and security feature on the day it ships.

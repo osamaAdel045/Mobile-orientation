@@ -1,0 +1,129 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+    ### Modern Android Development Best Practices
+
+    The Android platform has converged on architecture recommendations and toolchain choices that reduce boilerplate, improve testability, and align with Google's own first-party development standards. These practices are codified in the official App Architecture Guide and updated each I/O release.
+
+    <StatGrid columns={3}>
+        <StatItem value="100%" label="New projects should use Compose" />
+        <StatItem value="1" label="Activity in modern architecture" />
+        <StatItem value="3+" label="Architecture layers (UI/Domain/Data)" />
+        <StatItem value="2023" label="Predictive back gesture stable" />
+        <StatItem value="2022" label="Edge-to-edge requirement announced" />
+        <StatItem value="12+" label="Material 3 components stable" />
+    </StatGrid>
+
+    ### Compose-First for All New Projects
+
+    Jetpack Compose is the recommended UI toolkit for all new Android development. The View system is in maintenance mode — Google ships new features exclusively through Compose. Third-party libraries increasingly provide Compose-first APIs (Maps Compose, CameraX Compose, Accompanist).
+
+    ```kotlin
+    {
+    class MainActivity : ComponentActivity() {
+        override fun onCreate(savedInstanceState: Bundle?) {
+            super.onCreate(savedInstanceState)
+            enableEdgeToEdge()
+            setContent {
+                MyTheme {
+                    NavHost(
+                        startDestination = Route.Home,
+                        modifier = Modifier.fillMaxSize()
+                            .windowInsetsPadding(WindowInsets.systemBars)
+                    ) {
+                        composable<Route.Home> { HomeScreen() }
+                        composable<Route.Detail> { DetailScreen() }
+                    }
+                }
+            }
+        }
+    }
+    }
+    ```
+
+    <Callout title="Compose Is Production-Ready but Has Performance Footguns">
+        Avoid heavy computation inside composable lambdas, use `derivedStateOf` for derived values, prefer `LazyColumn` for scrollable lists, and profile with Compose Compiler Metrics. Recomposition scope is per-function — extracting subcomposables reduces unnecessary redraws. Never create new `State` objects inside a `LaunchedEffect` keyed on the same scope.
+    </Callout>
+
+    ### ViewModel Scoping and Lifecycle Awareness
+
+    ViewModels survive configuration changes, but collecting flows without lifecycle awareness leaks resources. Use `collectAsStateWithLifecycle` for safe collection:
+
+    ```kotlin
+    {
+    @Composable
+    fun TaskScreen(viewModel: TaskViewModel = hiltViewModel()) {
+        val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+        // Pauses collection when lifecycle < STARTED, resumes when visible
+    }
+    }
+    ```
+
+    ### Structured Concurrency with CoroutineScope
+
+    ViewModels tie `viewModelScope` to their lifecycle, automatically canceling coroutines when cleared. Never pass a `CoroutineScope` from a Composable into a ViewModel:
+
+    ```kotlin
+    {
+    class TaskViewModel @Inject constructor(
+        private val taskRepository: TaskRepository
+    ) : ViewModel() {
+        private val _uiState = MutableStateFlow(TaskUiState())
+        val uiState: StateFlow<TaskUiState> = _uiState.asStateFlow()
+
+        init {
+            viewModelScope.launch {
+                taskRepository.observeAll()
+                    .catch { _uiState.update { it.copy(error = it.message) } }
+                    .collect { tasks -> _uiState.update { it.copy(tasks = tasks) } }
+            }
+        }
+    }
+    }
+    ```
+
+    ```text
+    ┌──────────────── Lifecycle-Aware Scope Hierarchy ────────────┐
+    │  viewModelScope ── cancelled when ViewModel.clear() fires    │
+    │    └── lifecycleScope ── cancelled on Lifecycle destroy      │
+    │         └── rememberCoroutineScope ── cancelled on remove    │
+    │              └── LaunchedEffect ── cancelled on key change   │
+    └──────────────────────────────────────────────────────────────┘
+    ```
+
+    ### Single-Activity Architecture and Navigation
+
+    Modern Android apps use one Activity with Jetpack Navigation (Navigation Compose). This avoids complex multi-Activity back stacks, simplifies intent handling, and enables predictive back gesture support.
+
+    ```kotlin
+    {
+    sealed interface Route {
+        @Serializable data object Home : Route
+        @Serializable data class Detail(val taskId: String) : Route
+    }
+    }
+    ```
+
+    ### Material 3 Theming with Dynamic Color
+
+    Material 3 provides dynamic color extraction from the user's wallpaper (Android 12+). Always fall back to a fixed palette for older API levels:
+
+    ```kotlin
+    {
+    @Composable
+    fun MyTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+        val colorScheme = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+                val context = LocalContext.current
+                if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            }
+            darkTheme -> darkColorScheme()
+            else -> lightColorScheme()
+        }
+        MaterialTheme(colorScheme = colorScheme, typography = AppTypography, content = content)
+    }
+    }
+    ```
+
+    ### Edge-to-Edge and Predictive Back Gesture
+
+    Android 15+ enforces edge-to-edge rendering by default. Use `enableEdgeToEdge()` in the Activity and apply `windowInsetsPadding` modifiers. Predictive back gesture (stable since Android 14) requires opt-in via the manifest. Apps targeting Android 15+ that omit edge-to-edge risk visual cutouts under system bars and may face Play Store compliance issues.

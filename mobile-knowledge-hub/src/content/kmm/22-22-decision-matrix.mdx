@@ -1,0 +1,129 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+      <StatGrid columns={3}>
+        <StatItem value="4/5" label="Code Sharing" />
+        <StatItem value="5/5" label="Platform Feel" />
+        <StatItem value="5/5" label="Performance" />
+      </StatGrid>
+
+      <StatGrid columns={3}>
+        <StatItem value="3/5" label="Ecosystem Maturity" />
+        <StatItem value="3/5" label="Learning Curve" />
+        <StatItem value="2/5" label="Hiring" />
+      </StatGrid>
+
+      ### KMP Decision Scores
+
+      | Criteria | Score | Rationale |
+      |----------|-------|-----------|
+      | Code Sharing | 4/5 | Logic only (not UI). Shared network, models, DB, validation, state. ~60-80% of business logic code is shared. UI code remains separate. |
+      | Platform Feel | 5/5 | Each platform renders natively. No uncanny valley, no widget mismatch. Users cannot distinguish KMP from native. |
+      | Performance | 5/5 | JVM bytecode on Android == native. LLVM ARM64 on iOS == native. No bridge, no serialization overhead. |
+      | Ecosystem Maturity | 3/5 | Core libraries (Ktor, SQLDelight, Koin) are stable. But younger than Flutter (2017) or RN (2015). Some libraries still experimental for KMP. |
+      | Learning Curve | 3/5 | Requires Kotlin knowledge (not trivial for Swift-only developers). Gradle configuration is complex. expect/actual is a new concept. |
+      | Hiring | 2/5 | KMP developers are scarce. Kotlin developers exist but KMP experience is niche. Teams typically train existing iOS/Android engineers. |
+
+      ### When to Choose KMP
+
+      KMP is the right choice when:
+
+      ```yaml
+      ✅ Existing native teams:
+         - You have separate iOS (Swift) and Android (Kotlin) engineers
+         - Both teams want to share business logic without rewriting UI
+         - Each platform maintains its own UI codebase (Compose / SwiftUI)
+
+      ✅ Kotlin-first organizations:
+         - Android teams already use Kotlin
+         - Backend may also use Kotlin (Ktor, Spring, Kogito)
+         - Kotlin knowledge is organizational IP
+
+      ✅ Native UI quality is non-negotiable:
+         - Apps that must match platform HIG exactly
+         - Apps using platform-specific features (Widgets, Live Activities, iMessage)
+         - Enterprise apps with strict UX guidelines
+
+      ✅ Large apps with significant business logic:
+         - E-commerce (product catalog, cart, checkout logic)
+         - Finance (transaction processing, validation, compliance)
+         - Healthcare (data models, HIPAA validation rules)
+      ```
+
+      <Callout title="KMP Is a Library, Not a Framework">
+        The decision to adopt KMP is a library decision, not a framework
+        decision. You do not "write a KMP app" — you write a native Android
+        app and a native iOS app that both import a shared Kotlin library.
+        This framing helps evaluate KMP against organizational constraints:
+        can your teams consume a shared Kotlin library written by a shared
+        logic team? If yes, KMP fits.
+      </Callout>
+
+      ### When NOT to Choose KMP
+
+      ```yaml
+      ❌ Need full UI sharing:
+         - Small team building a simple app
+         - UI is the majority of the code
+         - Speed of development > platform perfection
+         → Choose Flutter or React Native
+
+      ❌ No Kotlin expertise:
+         - iOS-only shop wanting to expand to Android
+         - Team unwilling to learn Kotlin
+         → Choose Flutter (Dart) or RN (JS)
+         → Or hire native teams (separate codebases)
+
+      ❌ Rapid prototyping / MVP:
+         - Need to validate an idea in weeks
+         - KMP's two-UI-codebase overhead is expensive
+         → Flutter for fastest time-to-market
+
+      ❌ Niche platforms:
+         - Web is a primary target
+         - KMP targets Desktop/JS but ecosystem varies
+         → React/Next.js for web + mobile
+      ```
+
+      ### Decision Matrix
+
+      <DecisionMatrix
+        columns={["KMP", "Flutter", "React Native", "Native (two codebases)"]}
+        rows={[
+          {
+            feature: "Code sharing %",
+            values: ["60% (logic only)", "90%+ (UI + logic)", "90%+ (UI + logic)", "0% (duplicated)"]
+          },
+          {
+            feature: "UI authenticity",
+            values: ["100% native", "Skia-rendered", "Native widgets via bridge", "100% native"]
+          },
+          {
+            feature: "Time to market (new app)",
+            values: ["Medium (2 UI codebases)", "Fast (1 codebase)", "Fast (1 codebase)", "Slow (2 codebases)"]
+          },
+          {
+            feature: "Performance",
+            values: ["Native parity", "60fps Skia", "Bridge overhead", "Native parity"]
+          },
+          {
+            feature: "Team composition",
+            values: ["iOS + Android + shared", "Dart devs", "JS/TS devs", "iOS + Android separately"]
+          },
+          {
+            feature: "Ecosystem maturity",
+            values: ["Stable core, growing", "Mature", "Very mature", "Fully mature"]
+          },
+          {
+            feature: "Best for",
+            values: ["Existing native teams", "Greenfield apps", "Quick iteration", "Maximum quality per platform"]
+          }
+        ]}
+      />
+
+      ### KMP Insight
+
+      KMP scores 5/5 on the dimensions that matter long-term (native quality,
+      performance) and lower on short-term convenience (learning curve, hiring).
+      It is a strategic technology choice that pays off over years of maintenance
+      rather than months of initial development. The decision matrix clarifies
+      that KMP is best for established native teams, not startups seeking speed.

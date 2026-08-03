@@ -1,0 +1,145 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+
+      <StatGrid>
+<StatItem value="Roslyn" label="C# Compiler" />
+        <StatItem value="JIT/AOT" label="Runtime Strategy" />
+        <StatItem value="CIL" label="Intermediate Format" />
+        <StatItem value="3" label="Target Runtimes" />
+</StatGrid>
+
+### Compilation Pipeline Overview
+
+```
+C# + XAML Source
+    ↓ .NET compiler (Roslyn)
+IL (Intermediate Language / CIL)
+    ↓ Platform runtime compiler
+    ├── Android: Mono JIT (default) or Mono AOT (opt-in)
+    ├── iOS:     Mono AOT (required — no JIT allowed)
+    └── Windows: CoreCLR RyuJIT
+Native Code (ARM64 / x64 / ARMv8)
+    ↓ packaged with
+Mono runtime (iOS — statically linked)
+.NET runtime (Android / Windows)
+```
+
+### Stage 1: Roslyn Compilation (C# to CIL)
+
+The C# compiler (Roslyn, `csc.dll`) compiles source files, XAML-generated code-behind, and Razor/Blazor files into Common Intermediate Language (CIL) assemblies. This stage is identical for all MAUI targets:
+
+```csharp
+// Source: Button.cs
+namespace MyApp;
+public class MainPage : ContentPage
+{
+    public MainPage() => InitializeComponent();
+}
+```
+
+Roslyn emits a .NET PE file containing CIL and metadata. The XAML compiler (`XamlC`) runs as a Roslyn source generator in .NET 8+, converting:
+
+```xml
+<!-- XAML input -->
+<Label Text="{Binding Name}" FontSize="18" />
+```
+
+```csharp
+// Generated C# (source generator output)
+// Compiled directly — no runtime XAML parsing
+partial class MainPage
+{
+    private void InitializeComponent()
+    {
+        var label0 = new Label();
+        label0.SetBinding(Label.TextProperty, "Name");
+        label0.FontSize = 18;
+        Content = label0;
+    }
+}
+```
+
+<Callout type="info">
+XAMLC (XAML compilation) is enabled by default in Release builds via `<MauiXamlC>true</MauiXamlC>`. It eliminates runtime XAML parsing, reducing startup time by 30-50% on cold start. Verify it's active by checking the build output for "XAML compilation succeeded" messages.
+</Callout>
+
+### Stage 2: Platform Compilation Strategies
+
+Each MAUI target applies a different compilation strategy from the shared CIL:
+
+**Android — Mono JIT (default).** The Mono runtime compiles CIL to native ARM64/x64 at runtime through the Mono JIT engine. Methods are compiled lazily (on first call), which spreads compilation cost across the app session. JIT enables runtime code generation and generic sharing. Startup cost: ~200-400ms of JIT warmup for core framework types.
+
+```xml
+<!-- Enable AOT for Android Release builds -->
+<PropertyGroup Condition="'$(Configuration)'=='Release'">
+  <RunAOTCompilation>true</RunAOTCompilation>
+  <AndroidEnableProfiledAot>true</AndroidEnableProfiledAot>
+</PropertyGroup>
+```
+
+**iOS — Mono Full AOT (required).** Apple's App Store prohibits JIT compilation. Mono compiles ALL CIL to ARM64 at build time. The resulting native code is statically linked with the Mono runtime into the app binary. There is no JIT fallback — every method in every assembly is pre-compiled. This produces larger IPAs (~25 MB baseline for a MAUI app) but eliminates JIT startup entirely. Generic sharing is limited — each generic instantiation is fully compiled separately (code bloat).
+
+**Windows — CoreCLR RyuJIT.** The same .NET JIT used by ASP.NET and desktop apps. RyuJIT is an evolution of the original .NET JIT, optimized for x64 and ARM64. It applies tiered compilation: methods start with a quick JIT pass (minimal optimization), then frequently-called methods are re-JITted at higher optimization levels. Server GC and `ReadyToRun` images are available.
+
+### ReadyToRun (R2R) on Windows
+
+`ReadyToRun` pre-compiles CIL to native code at publish time, reducing JIT work at startup:
+
+```xml
+<PropertyGroup>
+  <PublishReadyToRun>true</PublishReadyToRun>
+  <PublishReadyToRunComposite>true</PublishReadyToRunComposite>
+</PropertyGroup>
+```
+
+R2R images contain native code alongside the original CIL. The JIT uses the pre-compiled code when available, skipping compilation. Startup improvement: ~30-50% reduction in JIT time. Tradeoff: larger binary (native code + CIL both present in the image).
+
+<Callout type="warning">
+ReadyToRun on Windows targets the host CPU architecture only. Publishing an x64 R2R image yields no benefit on an ARM64 Windows device — the JIT falls back to full compilation. Use `<PublishReadyToRun>*</PublishReadyToRun>` combined with per-architecture publish profiles.
+</Callout>
+
+### Mono Runtime Memory Model
+
+The Mono runtime used on Android and iOS is a separate GC and execution engine within the .NET family:
+
+| Feature | Mono (Android/iOS) | CoreCLR (Windows) |
+|---------|-------------------|-------------------|
+| GC | SGen (generational, concurrent) | Server GC / Workstation GC |
+| JIT | Mono JIT (MIR-based) | RyuJIT (SSA-based) |
+| AOT | Full AOT (iOS), Hybrid AOT (Android) | ReadyToRun (partial) |
+| Codegen | ARM64, x64, ARMv8 | x64, ARM64, x86 |
+| Exception handling | Mono-specific EH | Structured EH (SEH) |
+| Thread pool | Mono thread pool | Windows thread pool (IOCP) |
+
+### Build Artifact Size Comparison
+
+```xml
+<!-- .csproj publish profiles per platform -->
+dotnet publish -f net8.0-android -c Release    # ~12-18 MB APK
+dotnet publish -f net8.0-ios -c Release        # ~25-35 MB IPA
+dotnet publish -f net8.0-maccatalyst -c Release # ~20-30 MB app bundle
+dotnet publish -f net8.0-windows10.0.19041.0   # ~15-25 MB + .NET runtime
+```
+
+### Framework Insight: The XAML Compilation Double-Compile
+
+MAUI XAML undergoes a "double-compile" process:
+
+1. **Build-time (XAMLC):** Roslyn source generator reads `.xaml` files, emits C# code-behind (binding setup, property assignments), which is then compiled to CIL by Roslyn. This replaces the runtime XAML parser.
+2. **Runtime (JIT/AOT):** The CIL from step 1 is JIT- or AOT-compiled to native code by the platform runtime.
+
+XAMLC eliminates step 1 at runtime. Without it, the XAML parser would walk the XML DOM, reflect on types, and emit `SetValue` calls — a significant cold-start cost of 200-600ms depending on page complexity.
+
+### Comparison: Compilation Approach by Framework
+
+| Framework | Language | IR | Runtime Compilation | Binary Size |
+|-----------|----------|----|-------------------|-------------|
+| MAUI (Android) | C# | CIL | Mono JIT/AOT | 12-18 MB |
+| MAUI (iOS) | C# | CIL | Mono Full AOT | 25-35 MB |
+| MAUI (Windows) | C# | CIL | CoreCLR RyuJIT | 15-25 MB |
+| Flutter | Dart | Dart IL (kernel) | Dart VM JIT / AOT | 6-12 MB |
+| React Native | JS/TS | Hermes bytecode | Hermes interpreter | 5-10 MB |
+
+<Callout type="info">
+MAUI's AOT compilation on iOS produces self-contained native binaries that include the Mono GC and runtime statically linked. Unlike React Native's Hermes interpreter, there is no bytecode interpreter at runtime on iOS — every instruction is native ARM64. This yields better per-frame performance but larger download sizes.
+</Callout>

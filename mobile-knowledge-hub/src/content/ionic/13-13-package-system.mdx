@@ -1,0 +1,132 @@
+import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
+
+<StatGrid>
+  <StatItem label="npm Packages" value="2M+" />
+  <StatItem label="Capacitor Plugins" value="200+" />
+  <StatItem label="Plugin Downloads/Month" value="5M+" />
+  <StatItem label="Auto-Linking" value="Built-in" />
+</StatGrid>
+
+### npm as the Foundation
+
+Ionic projects are standard Node.js applications at their core. The dependency tree lives in `package.json`, managed by npm (or pnpm/yarn). All web-facing dependencies -- frameworks (Angular, React, Vue), UI components (`@ionic/angular`, `@ionic/react`), utility libraries, and build tools (Vite, Angular CLI) -- resolve through the npm registry.
+
+```json
+{
+  "dependencies": {
+    "@ionic/react": "^8.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/camera": "^6.0.0"
+  }
+}
+```
+
+### Capacitor Plugin Registry
+
+Capacitor plugins are npm packages that bundle native code alongside their JavaScript API surface. The official registry lives under the `@capacitor/*` scope on npm, with community plugins published under `@capacitor-community/*` or `@ionic-enterprise/*`. Each plugin exposes a unified TypeScript API that abstracts platform-specific implementations.
+
+```
+@capacitor/camera
+├── Camera.ts              (TypeScript API)
+├── android/
+│   └── src/main/java/     (Java/Kotlin impl)
+└── ios/
+    └── Plugin/            (Swift impl)
+```
+
+### capacitor.config.ts Configuration
+
+The `capacitor.config.ts` file at the project root controls plugin behavior and native project settings. Plugins are configured under the `plugins` key using their canonical names.
+
+```typescript
+import { CapacitorConfig } from '@capacitor/cli'
+
+const config: CapacitorConfig = {
+  appId: 'com.example.app',
+  appName: 'MyApp',
+  webDir: 'dist',
+  plugins: {
+    SplashScreen: {
+      launchShowDuration: 2000,
+      backgroundColor: '#ffffff',
+    },
+    PushNotifications: {
+      presentationOptions: ['badge', 'sound', 'alert'],
+    },
+  },
+}
+
+export default config
+```
+
+`webDir` points to the framework's build output directory. Capacitor copies this directory into each platform's native project during `npx cap sync`.
+
+<Callout type="warning" title="Plugin Compatibility">
+  Not all Capacitor plugins support both platforms equally. Always check a plugin's README for platform coverage tables. Some plugins require additional native permissions configured via `Info.plist` (iOS) or `AndroidManifest.xml` (Android) beyond what `capacitor.config.ts` provides.
+</Callout>
+
+### Auto-Linking Mechanism
+
+When you run `npx cap sync`, the Capacitor CLI reads `package.json`, identifies installed plugins under `node_modules/@capacitor/*`, and invokes each plugin's `capacitor-plugin.json` manifest. The manifest declares:
+
+```json
+{
+  "ios": {
+    "pod": "CapacitorCamera",
+    "source": "https://github.com/ionic-team/capacitor-plugins.git"
+  },
+  "android": {
+    "package": "com.capacitorjs.plugins.camera"
+  }
+}
+```
+
+The CLI then writes these into the native project files automatically -- no manual Podfile or Gradle edits required.
+
+### CocoaPods and Gradle Integration
+
+Native dependency resolution operates through each platform's standard toolchain.
+
+For **iOS**, Capacitor generates a `Podfile` that includes all plugin pods. Running `npx cap sync` triggers `pod install`, resolving CocoaPods specifications from the Capacitor plugin registry and third-party native SDKs:
+
+```ruby
+platform :ios, '14.0'
+use_frameworks!
+target 'App' do
+  pod 'Capacitor', :path => '../../node_modules/@capacitor/ios'
+  pod 'CapacitorCordova', :path => '../../node_modules/@capacitor/cordova'
+  pod 'CapacitorCamera', :path => '../../node_modules/@capacitor/camera'
+end
+```
+
+For **Android**, plugins are declared in the app-level `build.gradle`:
+
+```groovy
+dependencies {
+  implementation project(':capacitor-camera')
+  implementation project(':capacitor-push-notifications')
+}
+```
+
+Capacitor maps each plugin's Android package to a Gradle subproject under `android/capacitor-camera/` automatically during `sync`.
+
+### Common Pitfalls in Plugin Management
+
+- **Version mismatches** between `@capacitor/core` and plugin versions cause runtime crashes. Always align plugin versions with the Capacitor major version.
+- **Missing native permissions** fail silently on iOS (camera, photo library) unless `Info.plist` includes the required usage description strings.
+- **Cordova plugin fallthrough** -- Capacitor supports Cordova plugins via a compatibility layer, but not all Cordova APIs map cleanly. Prefer Capacitor-native plugins.
+- **Plugin not found on sync** occurs when `@capacitor/*` packages are listed as `devDependencies` instead of `dependencies`.
+
+### Framework Interop
+
+Each frontend framework handles plugin consumption slightly differently. React uses hooks, Angular uses DI `Inject` tokens, and Vue uses composables -- but the underlying `@capacitor/core` `Plugins` object unifies the API surface across all three.
+
+```typescript
+import { Camera, CameraResultType } from '@capacitor/camera'
+
+// Works identically in Angular, React, and Vue
+const photo = await Camera.getPhoto({
+  resultType: CameraResultType.Uri,
+  quality: 90,
+})
+```
