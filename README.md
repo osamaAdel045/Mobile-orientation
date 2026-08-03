@@ -40,6 +40,15 @@ Mobile-orientation/
 │   ├── 11-design-system.md         ← Design tokens & components
 │   ├── 12-admin-panel-sprints.md   ← Admin dashboard planning
 │   └── system index.md
+├── mobile-knowledge-hub/            ← Engineering Knowledge Base (Week 1)
+│   └── src/content/       (8 frameworks × 24 topics — 192 articles)
+│       ├── flutter/       (24 deep-dive articles)
+│       ├── react-native/  (24 deep-dive articles)
+│       ├── android/       (24 deep-dive articles)
+│       ├── ios/           (24 deep-dive articles)
+│       ├── ionic/         (24 deep-dive articles)
+│       ├── kmm/           (24 deep-dive articles)
+│       └── maui/          (24 deep-dive articles)
 ├── lightbite-api/                   ← Laravel Backend (PHP)
 │   ├── app/Models/        (19 models)
 │   ├── app/Services/      (8 services)
@@ -68,15 +77,7 @@ Mobile-orientation/
 │   ├── components/        (UI component docs)
 │   ├── features/          (Feature documentation)
 │   └── technical/         (Architecture, state, navigation, API)
-└── mobile-knowledge-hub/            ← Engineering Knowledge Base
-    └── src/content/       (8 frameworks × 24 topics each — 192 articles)
-        ├── flutter/       (24 deep-dive articles)
-        ├── react-native/  (24 deep-dive articles)
-        ├── android/       (24 deep-dive articles)
-        ├── ios/           (24 deep-dive articles)
-        ├── ionic/         (24 deep-dive articles)
-        ├── kmm/           (24 deep-dive articles)
-        └── maui/          (24 deep-dive articles)
+```
 ```
 
 ---
@@ -89,6 +90,29 @@ Mobile-orientation/
 Every architectural decision documented: vision, PRD, personas, user stories, functional & non-functional requirements, roadmap, system architecture, database ERD, API specification, design system, admin panel planning, and full traceability matrix.
 
 📁 [system-desing/ →](system-desing/)
+
+---
+
+### 🧠 mobile-knowledge-hub — Engineering Knowledge Base (Week 1)
+> **203 files · 30,236 lines · 192 articles across 8 frameworks**
+
+Built in Week 1 alongside the system design. My first step out of Flutter — learning React by building a real project.
+
+Interactive React + MDX knowledge hub for cross-framework mobile engineering. Each framework covered across 24 topics:
+
+| Framework | Topics | Status |
+|-----------|--------|--------|
+| **Flutter** | Architecture, rendering, compilation, state, navigation, networking, DI, testing, CI/CD… | ✅ |
+| **React Native** | Architecture, rendering, compilation, state, navigation, networking, DI, testing, CI/CD… | ✅ |
+| **Android (Kotlin)** | Architecture, rendering, compilation, state, navigation, networking, DI, testing, CI/CD… | ✅ |
+| **iOS (Swift)** | Architecture, rendering, compilation, state, navigation, networking, DI, testing, CI/CD… | ✅ |
+| **Ionic** | Architecture, rendering, compilation, state, navigation, networking, DI, testing, CI/CD… | ✅ |
+| **KMM** | Architecture, rendering, compilation, state, navigation, networking, DI, testing, CI/CD… | ✅ |
+| **MAUI** | Architecture, rendering, compilation, state, navigation, networking, DI, testing, CI/CD… | ✅ |
+
+Includes: best practices, common mistakes, decision matrices, framework comparisons, real project examples, and AI-assisted development guides for each framework.
+
+📁 [mobile-knowledge-hub/ →](mobile-knowledge-hub/)
 
 ---
 
@@ -167,18 +191,6 @@ VitePress site covering every aspect of the React Native app:
 - **Technical:** Architecture, state management, navigation, API networking, theme system, localization, code quality
 
 📁 [lightbite-rn-docs/ →](lightbite-rn-docs/)
-
----
-
-### 🧠 mobile-knowledge-hub — Engineering Knowledge Base
-> **203 files · 30,236 lines**
-
-Interactive React + MDX knowledge hub for cross-framework mobile engineering:
-- **8 Frameworks:** Flutter, React Native, Android, iOS, Ionic, KMM, MAUI
-- **24 Topics each:** Architecture, rendering pipeline, compilation, state management, navigation, networking, database, DI, native integration, performance, debugging, testing, CI/CD, security, AI development, best practices, common mistakes, decision matrix, comparisons, real project examples
-- **192 Total Articles** — framework-agnostic deep dives with framework-specific comparisons
-
-📁 [mobile-knowledge-hub/ →](mobile-knowledge-hub/)
 
 ---
 
