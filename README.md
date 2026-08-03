@@ -78,7 +78,6 @@ Mobile-orientation/
 │   ├── features/          (Feature documentation)
 │   └── technical/         (Architecture, state, navigation, API)
 ```
-```
 
 ---
 
