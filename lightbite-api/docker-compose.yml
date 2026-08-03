@@ -1,0 +1,178 @@
+services:
+  # PHP Application
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lightbite-app
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - .:/var/www
+      - ./storage:/var/www/storage
+    environment:
+      - APP_ENV=local
+      - APP_DEBUG=true
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=lightbite
+      - DB_USERNAME=lightbite
+      - DB_PASSWORD=secret
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+      - BROADCAST_DRIVER=reverb
+      - FILESYSTEM_DISK=local
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - lightbite
+    ports:
+      - "9000:9000"
+
+  # Web Server
+  nginx:
+    image: nginx:alpine
+    container_name: lightbite-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - .:/var/www
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - app
+    networks:
+      - lightbite
+
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: lightbite-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootsecret
+      MYSQL_DATABASE: lightbite
+      MYSQL_USER: lightbite
+      MYSQL_PASSWORD: secret
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - lightbite
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: lightbite-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - lightbite
+
+  # Queue Worker
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lightbite-queue
+    restart: unless-stopped
+    working_dir: /var/www
+    command: php artisan queue:work redis --sleep=3 --tries=3 --max-time=3600
+    volumes:
+      - .:/var/www
+    environment:
+      - APP_ENV=local
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=lightbite
+      - DB_USERNAME=lightbite
+      - DB_PASSWORD=secret
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_CONNECTION=redis
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - lightbite
+
+  # WebSocket Server
+  reverb:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lightbite-reverb
+    restart: unless-stopped
+    working_dir: /var/www
+    command: php artisan reverb:start --host=0.0.0.0 --port=8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/var/www
+    environment:
+      - APP_ENV=local
+      - REVERB_SERVER_HOST=0.0.0.0
+      - REVERB_SERVER_PORT=8080
+      - REVERB_APP_ID=lightbite
+      - REVERB_APP_KEY=lightbite-key
+      - REVERB_APP_SECRET=lightbite-secret
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      redis:
+        condition: service_started
+    networks:
+      - lightbite
+
+  # Scheduled Tasks
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lightbite-scheduler
+    restart: unless-stopped
+    working_dir: /var/www
+    command: php artisan schedule:work
+    volumes:
+      - .:/var/www
+    environment:
+      - APP_ENV=local
+      - DB_CONNECTION=mysql
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_DATABASE=lightbite
+      - DB_USERNAME=lightbite
+      - DB_PASSWORD=secret
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - lightbite
+
+networks:
+  lightbite:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  redis_data:
