@@ -1,0 +1,8 @@
+import { {{featureName}}Schema } from '@/features/{{folderPath}}/schemas/{{featureName}}.schema';
+
+describe('{{pascalName}}Schema', () => {
+  it('validates valid input', () => {
+    const result = {{featureName}}Schema.safeParse({});
+    expect(result.success).toBe(true);
+  });
+});

@@ -1,0 +1,14 @@
+import { useCallback } from 'react';
+
+import { use{{pascalName}}Store } from '../store/{{featureName}}.store';
+
+export function use{{pascalName}}() {
+  const screenState = use{{pascalName}}Store((s) => s.screenState);
+  const load = use{{pascalName}}Store((s) => s.load);
+
+  const refresh = useCallback(() => {
+    load();
+  }, [load]);
+
+  return { screenState, refresh };
+}

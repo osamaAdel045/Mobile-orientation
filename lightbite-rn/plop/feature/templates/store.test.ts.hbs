@@ -1,0 +1,12 @@
+import { use{{pascalName}}Store } from '@/features/{{folderPath}}/store/{{featureName}}.store';
+
+describe('{{pascalName}}Store', () => {
+  beforeEach(() => {
+    use{{pascalName}}Store.setState({ screenState: { status: 'loading' } });
+  });
+
+  it('initializes with loading state', () => {
+    const state = use{{pascalName}}Store.getState();
+    expect(state.screenState).toEqual({ status: 'loading' });
+  });
+});

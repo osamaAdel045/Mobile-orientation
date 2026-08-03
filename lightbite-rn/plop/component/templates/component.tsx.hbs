@@ -1,0 +1,17 @@
+import { View, Text } from 'react-native';
+
+import { useTheme } from '@/core/hooks/useTheme';
+
+interface {{name}}Props {
+  // TODO: Add props
+}
+
+export function {{name}}({}: {{name}}Props) {
+  const theme = useTheme();
+
+  return (
+    <View style=\{{ padding: theme.spacing.md }}>
+      <Text>{{name}}</Text>
+    </View>
+  );
+}

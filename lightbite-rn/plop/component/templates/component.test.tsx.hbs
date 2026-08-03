@@ -1,0 +1,10 @@
+import { render } from '@testing-library/react-native';
+
+import { {{name}} } from '@/core/ui/{{name}}';
+
+describe('{{name}}', () => {
+  it('renders without crashing', () => {
+    const { getByText } = render(<{{name}} />);
+    expect(getByText('{{name}}')).toBeTruthy();
+  });
+});

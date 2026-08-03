@@ -1,0 +1,26 @@
+import { err, ok, Result } from 'neverthrow';
+
+import { apiClient } from '@/core/api/client';
+import { AppError, mapApiError } from '@/core/api/types';
+
+import type { {{pascalName}}Item, {{pascalName}}Request } from '../types';
+
+export async function fetch{{pascalName}}s(): Promise<Result<{{pascalName}}Item[], AppError>> {
+  try {
+    const response = await apiClient.get<{ data: {{pascalName}}Item[] }>('/{{featureName}}s');
+    return ok(response.data.data);
+  } catch (error) {
+    return err(mapApiError(error));
+  }
+}
+
+export async function create{{pascalName}}(
+  input: {{pascalName}}Request,
+): Promise<Result<{{pascalName}}Item, AppError>> {
+  try {
+    const response = await apiClient.post<{ data: {{pascalName}}Item }>('/{{featureName}}s', input);
+    return ok(response.data.data);
+  } catch (error) {
+    return err(mapApiError(error));
+  }
+}

@@ -1,0 +1,40 @@
+import { create } from 'zustand';
+
+import { AppError } from '@/core/api/types';
+
+import { fetch{{pascalName}}s } from '../api/{{featureName}}.api';
+import type { {{pascalName}}Item } from '../types';
+
+type ScreenState =
+  | { status: 'loading' }
+  | { status: 'loaded'; data: {{pascalName}}Item[] }
+  | { status: 'error'; message: string }
+  | { status: 'empty' };
+
+interface {{pascalName}}Store {
+  screenState: ScreenState;
+  load: () => Promise<void>;
+}
+
+export const use{{pascalName}}Store = create<{{pascalName}}Store>((set) => ({
+  screenState: { status: 'loading' },
+
+  load: async () => {
+    set({ screenState: { status: 'loading' } });
+
+    const result = await fetch{{pascalName}}s();
+
+    result.match(
+      (data) => {
+        if (data.length === 0) {
+          set({ screenState: { status: 'empty' } });
+        } else {
+          set({ screenState: { status: 'loaded', data } });
+        }
+      },
+      (error: AppError) => {
+        set({ screenState: { status: 'error', message: error.message } });
+      },
+    );
+  },
+}));
