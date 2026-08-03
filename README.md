@@ -33,14 +33,14 @@ Mobile-orientation/
 │   ├── 04-user-stories.md          ← 64 user stories
 │   ├── 05-functional-requirements.md
 │   ├── 06-non-functional-requirements.md
-│   ├── 07-product-roadmap.md       ← 8 phases over 35 weeks
+│   ├── 07-product-roadmap.md       ← 8 phases
 │   ├── 08-architecture.md          ← System architecture
 │   ├── 09-database-schema.md       ← ERD + 24 tables
 │   ├── 10-api-spec.md              ← OpenAPI specification
 │   ├── 11-design-system.md         ← Design tokens & components
 │   ├── 12-admin-panel-sprints.md   ← Admin dashboard planning
 │   └── system index.md
-├── mobile-knowledge-hub/            ← Engineering Knowledge Base (Week 1)
+├── mobile-knowledge-hub/            ← Engineering Knowledge Base
 │   └── src/content/       (8 frameworks × 24 topics — 192 articles)
 │       ├── flutter/       (24 deep-dive articles)
 │       ├── react-native/  (24 deep-dive articles)
@@ -92,10 +92,9 @@ Every architectural decision documented: vision, PRD, personas, user stories, fu
 
 ---
 
-### 🧠 mobile-knowledge-hub — Engineering Knowledge Base (Week 1)
-> **203 files · 30,236 lines · 192 articles across 8 frameworks**
+### 🧠 mobile-knowledge-hub — Engineering Knowledge Base > **203 files · 30,236 lines · 192 articles across 8 frameworks**
 
-Built in Week 1 alongside the system design. My first step out of Flutter — learning React by building a real project.
+My first step out of Flutter — learning React by building a real project alongside the system design.
 
 Interactive React + MDX knowledge hub for cross-framework mobile engineering. Each framework covered across 24 topics:
 
@@ -312,4 +311,4 @@ cd mobile-knowledge-hub && npm install && npm run dev
 
 ---
 
-> *"I'm not here to build a food delivery app. I'm here to prove that with AI as a learning partner, a Flutter developer can become a Software Engineer in weeks — not years."*
+> *"I'm not here to build a food delivery app. I'm here to prove that with AI as a learning partner, a Flutter developer can become a Software Engineer."*
