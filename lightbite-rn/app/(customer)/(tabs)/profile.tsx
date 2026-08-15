@@ -1,9 +1,10 @@
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ScrollView, Switch, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useTheme } from '@/core/hooks/useTheme';
+import { useThemeController } from '@/core/hooks/useThemeController';
 import { Button } from '@/core/ui/Button';
 import { Card } from '@/core/ui/Card';
 import { useAuthStore } from '@/features/auth/store/auth.store';
@@ -20,6 +21,7 @@ export default function CustomerProfileScreen() {
   const theme = useTheme();
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { isDark, preference, toggleTheme } = useThemeController();
 
   const user = useAuthStore((s) => s.user);
   const isLoggingOut = useAuthStore((s) => s.isLoading);
@@ -155,6 +157,46 @@ export default function CustomerProfileScreen() {
               ) : null}
             </View>
           ))}
+        </Card>
+
+        {/* Theme */}
+        <Card style={{ marginBottom: theme.spacing.md }}>
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <View style={{ flex: 1, marginRight: theme.spacing.md }}>
+              <Text
+                style={{
+                  fontSize: theme.fontSize.base,
+                  fontWeight: theme.fontWeight.medium,
+                  color: theme.colors.neutral[900],
+                }}
+              >
+                {t('theme.darkMode')}
+              </Text>
+              <Text
+                style={{
+                  fontSize: theme.fontSize.sm,
+                  color: theme.colors.neutral[500],
+                  marginTop: theme.spacing.xs,
+                  textTransform: 'capitalize',
+                }}
+              >
+                {t(`theme.${preference}`)}
+              </Text>
+            </View>
+            <Switch
+              value={isDark}
+              onValueChange={toggleTheme}
+              trackColor={{ false: theme.colors.neutral[300], true: theme.colors.primary[500] }}
+              thumbColor={theme.colors.neutral[0]}
+              accessibilityLabel={t('theme.darkMode')}
+            />
+          </View>
         </Card>
 
         <Button

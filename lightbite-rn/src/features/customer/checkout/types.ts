@@ -1,3 +1,5 @@
+export type PaymentMethod = 'cash_on_delivery' | 'card';
+
 export interface OrderResult {
   uuid: string;
   order_number: string;
@@ -14,5 +16,6 @@ export interface OrderResult {
 export interface PlaceOrderRequest {
   restaurant_uuid: string;
   delivery_address_uuid: string;
+  payment_method: PaymentMethod;
   customer_note?: string;
 }

@@ -36,6 +36,8 @@ export function useCustomerCheckout() {
   const orderResult = useCheckoutStore((s) => s.orderResult);
   const customerNote = useCheckoutStore((s) => s.customerNote);
   const setCustomerNote = useCheckoutStore((s) => s.setCustomerNote);
+  const paymentMethod = useCheckoutStore((s) => s.paymentMethod);
+  const setPaymentMethod = useCheckoutStore((s) => s.setPaymentMethod);
   const placeOrder = useCheckoutStore((s) => s.placeOrder);
   const resetCheckout = useCheckoutStore((s) => s.reset);
 
@@ -54,6 +56,8 @@ export function useCustomerCheckout() {
     orderResult,
     customerNote,
     setCustomerNote,
+    paymentMethod,
+    setPaymentMethod,
     placeOrder,
     resetCheckout,
   };

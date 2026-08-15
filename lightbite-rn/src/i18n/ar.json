@@ -123,6 +123,10 @@
       "changeAddress": "تغيير",
       "customerNote": "ملاحظة للعميل",
       "customerNotePlaceholder": "أضف ملاحظة للمطعم (اختياري)",
+      "paymentMethod": "طريقة الدفع",
+      "cashOnDelivery": "الدفع عند الاستلام",
+      "card": "بطاقة",
+      "cardSimulated": "الدفع بالبطاقة محاكى في هذه النسخة التجريبية",
       "placeOrder": "تأكيد الطلب",
       "quantity": "الكمية",
       "selectAddress": "اختر العنوان",
@@ -250,6 +254,7 @@
       "online": "متصل",
       "offline": "غير متصل",
       "waitingForJobs": "في انتظار الطلبات...",
+      "waitingForJobsLive": "نستمع للطلبات مباشرة...",
       "newJob": "طلب جديد متاح!",
       "activeDelivery": "توصيل نشط",
       "pickup": "استلام",
@@ -274,11 +279,13 @@
     },
     "delivery": {
       "pickupTitle": "استلام الطلب",
+      "startDeliveryTitle": "بدء التوصيل",
       "deliveryTitle": "توصيل الطلب",
       "pickupFrom": "الاستلام من",
       "deliverTo": "التوصيل إلى",
       "navigate": "تنقل",
       "confirmPickup": "تأكيد الاستلام",
+      "startDelivery": "بدء التوصيل",
       "confirmDelivery": "تأكيد التوصيل",
       "jobEarnings": "أرباح الطلب",
       "distance": "المسافة",
@@ -303,13 +310,23 @@
       "title": "الملف الشخصي",
       "vehicle": "المركبة",
       "vehicleComingSoon": "تفاصيل المركبة قريباً",
+      "vehicleType": "النوع",
+      "vehiclePlate": "اللوحة",
+      "noVehicle": "لا توجد مركبة مسجلة",
       "stats": "الإحصائيات",
       "totalTrips": "إجمالي الرحلات",
       "rating": "التقييم",
+      "noStats": "لا توجد إحصائيات سائق بعد",
       "comingSoon": "قريباً",
       "logout": "تسجيل الخروج",
       "logoutConfirmTitle": "تسجيل الخروج؟",
       "logoutConfirmMessage": "هل أنت متأكد من رغبتك في تسجيل الخروج؟"
     }
+  },
+  "theme": {
+    "darkMode": "الوضع الداكن",
+    "light": "فاتح",
+    "dark": "داكن",
+    "system": "النظام"
   }
 }

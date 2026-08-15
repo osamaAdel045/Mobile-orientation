@@ -66,6 +66,7 @@ describe('CheckoutStore', () => {
       orderError: null,
       orderResult: null,
       customerNote: '',
+      paymentMethod: 'cash_on_delivery',
     });
     useCartStore.setState({
       screenState: { status: 'loading' },
@@ -85,6 +86,7 @@ describe('CheckoutStore', () => {
     expect(state.orderError).toBeNull();
     expect(state.orderResult).toBeNull();
     expect(state.customerNote).toBe('');
+    expect(state.paymentMethod).toBe('cash_on_delivery');
   });
 
   it('returns false without calling the API when the cart is not loaded', async () => {
@@ -123,6 +125,7 @@ describe('CheckoutStore', () => {
     expect(mockPlaceOrder).toHaveBeenCalledWith({
       restaurant_uuid: 'r1',
       delivery_address_uuid: 'addr-1',
+      payment_method: 'cash_on_delivery',
       customer_note: 'Ring bell #1203',
     });
     expect(useCheckoutStore.getState().orderResult).toEqual(order);
@@ -143,6 +146,7 @@ describe('CheckoutStore', () => {
     expect(mockPlaceOrder).toHaveBeenCalledWith({
       restaurant_uuid: 'r1',
       delivery_address_uuid: 'addr-1',
+      payment_method: 'cash_on_delivery',
       customer_note: undefined,
     });
   });
@@ -174,12 +178,36 @@ describe('CheckoutStore', () => {
     expect(useCheckoutStore.getState().customerNote).toBe('Ring bell');
   });
 
+  it('sets the payment method', () => {
+    useCheckoutStore.getState().setPaymentMethod('card');
+
+    expect(useCheckoutStore.getState().paymentMethod).toBe('card');
+  });
+
+  it('includes the selected payment method when placing an order', async () => {
+    useCartStore.setState({ screenState: { status: 'loaded', data: cart } });
+    useCustomerAddressStore.setState({
+      screenState: { status: 'loaded', data: [address] },
+      selectedUuid: 'addr-1',
+    });
+    useCheckoutStore.getState().setPaymentMethod('card');
+    mockPlaceOrder.mockResolvedValueOnce(ok(order));
+
+    const success = await useCheckoutStore.getState().placeOrder();
+
+    expect(success).toBe(true);
+    expect(mockPlaceOrder).toHaveBeenCalledWith(
+      expect.objectContaining({ payment_method: 'card' }),
+    );
+  });
+
   it('resets all state', () => {
     useCheckoutStore.setState({
       isPlacingOrder: true,
       orderError: 'Something went wrong.',
       orderResult: order,
       customerNote: 'Ring bell',
+      paymentMethod: 'card',
     });
 
     useCheckoutStore.getState().reset();
@@ -189,5 +217,6 @@ describe('CheckoutStore', () => {
     expect(state.orderError).toBeNull();
     expect(state.orderResult).toBeNull();
     expect(state.customerNote).toBe('');
+    expect(state.paymentMethod).toBe('cash_on_delivery');
   });
 });

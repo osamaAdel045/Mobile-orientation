@@ -4,15 +4,17 @@ import { useCustomerAddressStore } from '@/features/customer/address/store/addre
 import { useCartStore } from '@/features/customer/cart/store/cart.store';
 
 import { placeOrder } from '../api/checkout.api';
-import type { OrderResult } from '../types';
+import type { OrderResult, PaymentMethod } from '../types';
 
 interface CheckoutStore {
   isPlacingOrder: boolean;
   orderError: string | null;
   orderResult: OrderResult | null;
   customerNote: string;
+  paymentMethod: PaymentMethod;
 
   setCustomerNote: (note: string) => void;
+  setPaymentMethod: (method: PaymentMethod) => void;
   placeOrder: () => Promise<boolean>;
   reset: () => void;
 }
@@ -22,8 +24,11 @@ export const useCheckoutStore = create<CheckoutStore>((set, get) => ({
   orderError: null,
   orderResult: null,
   customerNote: '',
+  paymentMethod: 'cash_on_delivery',
 
   setCustomerNote: (note) => set({ customerNote: note }),
+
+  setPaymentMethod: (method) => set({ paymentMethod: method }),
 
   placeOrder: async () => {
     const cart = useCartStore.getState();
@@ -40,9 +45,16 @@ export const useCheckoutStore = create<CheckoutStore>((set, get) => ({
 
     set({ isPlacingOrder: true, orderError: null });
 
+    // Demo: card payments have no real gateway — simulate a short processing
+    // window so the flow feels realistic, then place the order as usual.
+    if (get().paymentMethod === 'card') {
+      await new Promise((resolve) => setTimeout(resolve, 900));
+    }
+
     const result = await placeOrder({
       restaurant_uuid: cart.screenState.data.restaurant.uuid,
       delivery_address_uuid: selectedAddress.uuid,
+      payment_method: get().paymentMethod,
       customer_note: get().customerNote || undefined,
     });
 
@@ -59,5 +71,11 @@ export const useCheckoutStore = create<CheckoutStore>((set, get) => ({
   },
 
   reset: () =>
-    set({ isPlacingOrder: false, orderError: null, orderResult: null, customerNote: '' }),
+    set({
+      isPlacingOrder: false,
+      orderError: null,
+      orderResult: null,
+      customerNote: '',
+      paymentMethod: 'cash_on_delivery',
+    }),
 }));

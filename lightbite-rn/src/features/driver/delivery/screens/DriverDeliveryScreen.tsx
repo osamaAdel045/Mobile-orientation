@@ -13,14 +13,15 @@ import type { DriverDeliveryJob } from '../types';
 
 interface Props {
   job: DriverDeliveryJob;
-  phase: 'pickup' | 'delivering';
+  phase: 'pickup' | 'picked_up' | 'delivering';
 }
 
 export default function DriverDeliveryScreen({ job, phase }: Props) {
+  console.log('DriverDeliveryScreen rendered with job:', job, 'phase:', phase);
   const { t } = useTranslation();
   const theme = useTheme();
   const router = useRouter();
-  const { isConfirming, completedEarnings, error, setJob, confirmPickup, confirmDelivery, clear } =
+  const { isConfirming, completedEarnings, error, setJob, confirmPickup, startDelivery, confirmDelivery, clear } =
     useDriverDelivery();
 
   useEffect(() => {
@@ -29,6 +30,7 @@ export default function DriverDeliveryScreen({ job, phase }: Props) {
   }, [job, phase, setJob, clear]);
 
   const isPickup = phase === 'pickup';
+  const isPickedUp = phase === 'picked_up';
 
   const handleNavigate = useCallback(() => {
     const lat = isPickup ? job.restaurant_lat : job.customer_lat;
@@ -44,13 +46,21 @@ export default function DriverDeliveryScreen({ job, phase }: Props) {
       if (success) {
         router.replace({
           pathname: '/(driver)/delivery',
-          params: { job: JSON.stringify(job) },
+          params: { job: JSON.stringify(job), phase: 'picked_up' },
+        });
+      }
+    } else if (isPickedUp) {
+      const success = await startDelivery();
+      if (success) {
+        router.replace({
+          pathname: '/(driver)/delivery',
+          params: { job: JSON.stringify(job), phase: 'delivering' },
         });
       }
     } else {
       await confirmDelivery();
     }
-  }, [isPickup, confirmPickup, confirmDelivery, job, router]);
+  }, [isPickup, isPickedUp, confirmPickup, startDelivery, confirmDelivery, job, router]);
 
   const handleBackToHome = useCallback(() => {
     clear();
@@ -102,14 +112,28 @@ export default function DriverDeliveryScreen({ job, phase }: Props) {
     );
   }
 
-  const locationName = isPickup ? job.restaurant.name : job.customer_area;
+  const locationName = isPickup
+    ? job.restaurant.name
+    : isPickedUp
+      ? job.customer_area
+      : job.customer_area;
   const locationAddress = isPickup ? job.restaurant.address : null;
+
+  const headerTitle = isPickup
+    ? t('driver.delivery.pickupTitle')
+    : isPickedUp
+      ? t('driver.delivery.startDeliveryTitle')
+      : t('driver.delivery.deliveryTitle');
+
+  const confirmLabel = isPickup
+    ? t('driver.delivery.confirmPickup')
+    : isPickedUp
+      ? t('driver.delivery.startDelivery')
+      : t('driver.delivery.confirmDelivery');
 
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.neutral[50] }}>
-      <ScreenHeader
-        title={isPickup ? t('driver.delivery.pickupTitle') : t('driver.delivery.deliveryTitle')}
-      />
+      <ScreenHeader title={headerTitle} />
 
       <ScrollView contentContainerStyle={{ padding: theme.spacing.md }}>
         {error ? (
@@ -185,9 +209,7 @@ export default function DriverDeliveryScreen({ job, phase }: Props) {
           style={{ marginBottom: theme.spacing.md }}
         />
         <Button
-          title={
-            isPickup ? t('driver.delivery.confirmPickup') : t('driver.delivery.confirmDelivery')
-          }
+          title={confirmLabel}
           onPress={handleConfirm}
           size="lg"
           loading={isConfirming}

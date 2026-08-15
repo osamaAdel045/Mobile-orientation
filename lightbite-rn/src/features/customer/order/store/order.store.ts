@@ -1,6 +1,17 @@
 import { create } from 'zustand';
 
 import { AppError } from '@/core/api/types';
+import {
+  buildOrderChannel,
+  webSocketClient,
+  DRIVER_ASSIGNED_EVENT,
+  ORDER_STATUS_EVENT,
+} from '@/core/websocket';
+import type {
+  DriverAssignedEventPayload,
+  OrderStatusEventPayload,
+} from '@/core/websocket/types';
+import { useAuthStore } from '@/features/auth/store/auth.store';
 
 import { fetchOrders, fetchOrderTracking } from '../api/order.api';
 import type { Order, OrderTracking } from '../types';
@@ -93,6 +104,7 @@ type TrackingScreenState =
 interface OrderTrackingStore {
   trackingState: TrackingScreenState;
   intervalId: ReturnType<typeof setInterval> | null;
+  unsubscribeWebSocket: (() => void) | null;
 
   load: (uuid: string) => Promise<void>;
   refresh: (uuid: string) => Promise<void>;
@@ -104,6 +116,7 @@ interface OrderTrackingStore {
 export const useOrderTrackingStore = create<OrderTrackingStore>((set, get) => ({
   trackingState: { status: 'loading' },
   intervalId: null,
+  unsubscribeWebSocket: null,
 
   load: async (uuid) => {
     set({ trackingState: { status: 'loading' } });
@@ -140,18 +153,52 @@ export const useOrderTrackingStore = create<OrderTrackingStore>((set, get) => ({
   startPolling: (uuid) => {
     get().stopPolling();
 
+    // Primary: subscribe to the customer order channel and live-refresh the
+    // moment a status update arrives for this order.
+    const user = useAuthStore.getState().user;
+    if (user) {
+      const channel = buildOrderChannel(String(user.id ?? user.uuid));
+      webSocketClient.subscribe(channel);
+
+      const matchesOrder = (data: unknown): boolean => {
+        const payload = data as Partial<OrderStatusEventPayload & DriverAssignedEventPayload>;
+        return payload?.order_uuid === uuid;
+      };
+
+      const unsubscribeStatus = webSocketClient.on(ORDER_STATUS_EVENT, (data) => {
+        if (matchesOrder(data)) void get().refresh(uuid);
+      });
+      const unsubscribeAssigned = webSocketClient.on(DRIVER_ASSIGNED_EVENT, (data) => {
+        if (matchesOrder(data)) void get().refresh(uuid);
+      });
+
+      const unsubscribeWebSocket = () => {
+        unsubscribeStatus();
+        unsubscribeAssigned();
+        webSocketClient.unsubscribe(channel);
+      };
+      set({ unsubscribeWebSocket });
+    }
+
+    // Fallback: only poll while the WebSocket is not delivering live updates.
     const intervalId = setInterval(() => {
-      get().refresh(uuid);
+      if (!webSocketClient.isConnected()) {
+        void get().refresh(uuid);
+      }
     }, POLL_INTERVAL_MS);
 
     set({ intervalId });
   },
 
   stopPolling: () => {
-    const { intervalId } = get();
+    const { intervalId, unsubscribeWebSocket } = get();
     if (intervalId != null) {
       clearInterval(intervalId);
       set({ intervalId: null });
+    }
+    if (unsubscribeWebSocket != null) {
+      unsubscribeWebSocket();
+      set({ unsubscribeWebSocket: null });
     }
   },
 

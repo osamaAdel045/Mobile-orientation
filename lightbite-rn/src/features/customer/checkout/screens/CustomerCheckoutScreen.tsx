@@ -15,6 +15,12 @@ import { Skeleton } from '@/core/ui/Skeleton';
 import type { CartItem } from '@/features/customer/cart/types';
 
 import { useCustomerCheckout } from '../hooks/useCustomerCheckout';
+import type { PaymentMethod } from '../types';
+
+const PAYMENT_OPTIONS: { method: PaymentMethod; labelKey: string }[] = [
+  { method: 'cash_on_delivery', labelKey: 'customer.checkout.cashOnDelivery' },
+  { method: 'card', labelKey: 'customer.checkout.card' },
+];
 
 export default function CustomerCheckoutScreen() {
   const { t } = useTranslation();
@@ -34,6 +40,8 @@ export default function CustomerCheckoutScreen() {
     orderError,
     customerNote,
     setCustomerNote,
+    paymentMethod,
+    setPaymentMethod,
     placeOrder,
   } = useCustomerCheckout();
 
@@ -297,6 +305,77 @@ export default function CustomerCheckoutScreen() {
               />
             </View>
           )}
+        </Card>
+
+        {/* Payment method */}
+        <Card style={{ marginBottom: theme.spacing.md }}>
+          <Text
+            style={{
+              fontSize: theme.fontSize.lg,
+              fontWeight: theme.fontWeight.semibold,
+              color: theme.colors.neutral[900],
+              marginBottom: theme.spacing.md,
+            }}
+          >
+            {t('customer.checkout.paymentMethod')}
+          </Text>
+          {PAYMENT_OPTIONS.map((option) => {
+            const isSelected = paymentMethod === option.method;
+            return (
+              <TouchableOpacity
+                key={option.method}
+                onPress={() => setPaymentMethod(option.method)}
+                disabled={isPlacingOrder}
+                accessibilityRole="button"
+                accessibilityState={{ selected: isSelected }}
+                style={{
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  padding: theme.spacing.md,
+                  borderWidth: 1,
+                  borderColor: isSelected
+                    ? theme.colors.primary[500]
+                    : theme.colors.neutral[200],
+                  borderRadius: theme.radius.sm,
+                  marginBottom: theme.spacing.sm,
+                  backgroundColor: isSelected
+                    ? theme.colors.primary[50]
+                    : theme.colors.neutral[0],
+                }}
+              >
+                <View style={{ flex: 1, marginRight: theme.spacing.md }}>
+                  <Text
+                    style={{
+                      fontSize: theme.fontSize.base,
+                      fontWeight: theme.fontWeight.medium,
+                      color: theme.colors.neutral[900],
+                    }}
+                  >
+                    {t(option.labelKey)}
+                  </Text>
+                  {option.method === 'card' ? (
+                    <Text
+                      style={{
+                        fontSize: theme.fontSize.xs,
+                        color: theme.colors.neutral[400],
+                        marginTop: theme.spacing.xs,
+                      }}
+                    >
+                      {t('customer.checkout.cardSimulated')}
+                    </Text>
+                  ) : null}
+                </View>
+                <Text
+                  style={{
+                    fontSize: theme.fontSize.base,
+                    color: isSelected ? theme.colors.primary[500] : theme.colors.neutral[300],
+                  }}
+                >
+                  {isSelected ? '●' : '○'}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
         </Card>
 
         {/* Customer note */}

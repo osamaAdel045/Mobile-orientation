@@ -9,6 +9,7 @@ export async function confirmPickup(uuid: string): Promise<Result<null, AppError
     await apiClient.post(`/driver/jobs/${uuid}/pickup`);
     return ok(null);
   } catch (error) {
+    console.error('Failed to confirm pickup:', error);
     return err(mapApiError(error));
   }
 }
@@ -27,6 +28,7 @@ export async function confirmDelivery(uuid: string): Promise<Result<null, AppErr
     await apiClient.post(`/driver/jobs/${uuid}/deliver`);
     return ok(null);
   } catch (error) {
+    console.error('Failed to confirm delivery:', error);
     return err(mapApiError(error));
   }
 }

@@ -42,8 +42,8 @@ export const useDriverDeliveryStore = create<DriverDeliveryStore>((set, get) => 
 
     return result.match(
       () => {
-        set({ isConfirming: false, phase: 'delivering' });
-        useDriverHomeStore.getState().setActiveDelivery({ job, phase: 'delivering' });
+        set({ isConfirming: false, phase: 'picked_up' });
+        useDriverHomeStore.getState().setActiveDelivery({ job, phase: 'picked_up' });
         return true;
       },
       (error: AppError) => {

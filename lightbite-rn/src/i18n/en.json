@@ -123,6 +123,10 @@
       "changeAddress": "Change",
       "customerNote": "Customer Note",
       "customerNotePlaceholder": "Add a note for the restaurant (optional)",
+      "paymentMethod": "Payment Method",
+      "cashOnDelivery": "Cash on Delivery",
+      "card": "Card",
+      "cardSimulated": "Card payment is simulated in this demo",
       "placeOrder": "Place Order",
       "quantity": "Qty",
       "selectAddress": "Select Address",
@@ -250,6 +254,7 @@
       "online": "Online",
       "offline": "Offline",
       "waitingForJobs": "Waiting for jobs...",
+      "waitingForJobsLive": "Listening for jobs live...",
       "newJob": "New job available!",
       "activeDelivery": "Active Delivery",
       "pickup": "Pickup",
@@ -274,11 +279,13 @@
     },
     "delivery": {
       "pickupTitle": "Pickup Order",
+      "startDeliveryTitle": "Start Delivery",
       "deliveryTitle": "Deliver Order",
       "pickupFrom": "Pick up from",
       "deliverTo": "Deliver to",
       "navigate": "Navigate",
       "confirmPickup": "Confirm Pickup",
+      "startDelivery": "Start Delivery",
       "confirmDelivery": "Confirm Delivery",
       "jobEarnings": "Job Earnings",
       "distance": "Distance",
@@ -303,13 +310,23 @@
       "title": "Profile",
       "vehicle": "Vehicle",
       "vehicleComingSoon": "Vehicle details coming soon",
+      "vehicleType": "Type",
+      "vehiclePlate": "Plate",
+      "noVehicle": "No vehicle on file",
       "stats": "Stats",
       "totalTrips": "Total Trips",
       "rating": "Rating",
+      "noStats": "No driver stats available yet",
       "comingSoon": "Coming Soon",
       "logout": "Log Out",
       "logoutConfirmTitle": "Log Out?",
       "logoutConfirmMessage": "Are you sure you want to log out?"
     }
+  },
+  "theme": {
+    "darkMode": "Dark Mode",
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
   }
 }

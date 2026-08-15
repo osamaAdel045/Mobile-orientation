@@ -32,10 +32,17 @@ export default function DriverHomeScreen() {
     jobOffer,
     activeDelivery,
     pollingError,
+    isLive,
     handleToggleOnline,
     startPolling,
     stopPolling,
+    recoverActiveDelivery,
   } = useDriverHome();
+
+  // Recover active delivery after app restart.
+  useEffect(() => {
+    recoverActiveDelivery();
+  }, [recoverActiveDelivery]);
 
   // Poll for jobs while online, not on an active delivery, and the screen is focused.
   useFocusEffect(
@@ -65,7 +72,7 @@ export default function DriverHomeScreen() {
       const pathname = delivery.phase === 'pickup' ? '/(driver)/pickup' : '/(driver)/delivery';
       router.push({
         pathname,
-        params: { job: JSON.stringify(delivery.job) },
+        params: { job: JSON.stringify(delivery.job), phase: delivery.phase },
       });
     },
     [router],
@@ -139,7 +146,7 @@ export default function DriverHomeScreen() {
             marginBottom: theme.spacing.xs,
           }}
         >
-          {t('driver.homeScreen.waitingForJobs')}
+          {t(isLive ? 'driver.homeScreen.waitingForJobsLive' : 'driver.homeScreen.waitingForJobs')}
         </Text>
       ) : null}
       {isOnline && pollingError ? (

@@ -8,6 +8,7 @@ export function useDriverDelivery() {
   const error = useDriverDeliveryStore((s) => s.error);
   const setJob = useDriverDeliveryStore((s) => s.setJob);
   const confirmPickup = useDriverDeliveryStore((s) => s.confirmPickup);
+  const startDelivery = useDriverDeliveryStore((s) => s.startDelivery);
   const confirmDelivery = useDriverDeliveryStore((s) => s.confirmDelivery);
   const clear = useDriverDeliveryStore((s) => s.clear);
 
@@ -19,6 +20,7 @@ export function useDriverDelivery() {
     error,
     setJob,
     confirmPickup,
+    startDelivery,
     confirmDelivery,
     clear,
   };

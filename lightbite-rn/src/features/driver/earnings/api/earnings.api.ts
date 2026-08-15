@@ -12,6 +12,7 @@ export async function fetchDriverEarnings(): Promise<Result<DriverEarnings, AppE
     const response = await apiClient.get('/driver/earnings');
     const parsed = earningsResponseSchema.safeParse(response.data);
     if (!parsed.success) {
+      console.error('Failed to parse driver earnings response:', parsed.error);
       return err({ code: 'PARSE_ERROR', message: 'Invalid response format', statusCode: 0 });
     }
     return ok(parsed.data.data);

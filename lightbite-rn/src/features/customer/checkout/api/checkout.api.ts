@@ -16,7 +16,13 @@ function generateUUID(): string {
 
 export async function placeOrder(input: PlaceOrderRequest): Promise<Result<OrderResult, AppError>> {
   try {
-    const { restaurant_uuid: _, ...body } = input;
+    // `restaurant_uuid` is resolved server-side from the authenticated cart; the
+    // request body carries only delivery + payment details.
+    const body = {
+      delivery_address_uuid: input.delivery_address_uuid,
+      payment_method: input.payment_method,
+      customer_note: input.customer_note,
+    };
     const response = await apiClient.post<ApiResponse<OrderResult>>('/orders', body, {
       headers: { 'Idempotency-Key': generateUUID() },
     });

@@ -8,10 +8,12 @@ export function useDriverHome() {
   const jobOffer = useDriverHomeStore((s) => s.jobOffer);
   const activeDelivery = useDriverHomeStore((s) => s.activeDelivery);
   const pollingError = useDriverHomeStore((s) => s.pollingError);
+  const isLive = useDriverHomeStore((s) => s.isLive);
 
   const toggleOnline = useDriverHomeStore((s) => s.toggleOnline);
   const startPolling = useDriverHomeStore((s) => s.startPolling);
   const stopPolling = useDriverHomeStore((s) => s.stopPolling);
+  const recoverActiveDelivery = useDriverHomeStore((s) => s.recoverActiveDelivery);
 
   const handleToggleOnline = useCallback(() => {
     toggleOnline();
@@ -23,8 +25,10 @@ export function useDriverHome() {
     jobOffer,
     activeDelivery,
     pollingError,
+    isLive,
     handleToggleOnline,
     startPolling,
     stopPolling,
+    recoverActiveDelivery,
   };
 }

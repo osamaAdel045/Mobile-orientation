@@ -1,25 +1,24 @@
-import { err, ok, Result } from 'neverthrow';
+import { err, ok } from 'neverthrow';
+import type { Result } from 'neverthrow';
 
 import { apiClient } from '@/core/api/client';
 import { AppError, mapApiError } from '@/core/api/types';
 
-import type { DriverProfileItem, DriverProfileRequest } from '../types';
-
-export async function fetchDriverProfiles(): Promise<Result<DriverProfileItem[], AppError>> {
-  try {
-    const response = await apiClient.get<{ data: DriverProfileItem[] }>('/profiles');
-    return ok(response.data.data);
-  } catch (error) {
-    return err(mapApiError(error));
-  }
+interface DriverOrdersResponse {
+  data: unknown[];
+  meta?: { total?: number };
 }
 
-export async function createDriverProfile(
-  input: DriverProfileRequest,
-): Promise<Result<DriverProfileItem, AppError>> {
+/**
+ * Total completed trips for the driver. `GET /driver/orders` paginates over
+ * delivered/cancelled/rejected jobs and reports the full count in `meta.total`.
+ */
+export async function fetchDriverTotalTrips(): Promise<Result<number, AppError>> {
   try {
-    const response = await apiClient.post<{ data: DriverProfileItem }>('/profiles', input);
-    return ok(response.data.data);
+    const response = await apiClient.get<DriverOrdersResponse>('/driver/orders', {
+      params: { per_page: 1 },
+    });
+    return ok(response.data.meta?.total ?? 0);
   } catch (error) {
     return err(mapApiError(error));
   }

@@ -1,13 +1,14 @@
 import { create } from 'zustand';
 
 import { AppError } from '@/core/api/types';
+import { useAuthStore } from '@/features/auth/store/auth.store';
 
-import { fetchDriverProfiles } from '../api/profile.api';
-import type { DriverProfileItem } from '../types';
+import { fetchDriverTotalTrips } from '../api/profile.api';
+import type { DriverProfileSummary } from '../types';
 
 type ScreenState =
   | { status: 'loading' }
-  | { status: 'loaded'; data: DriverProfileItem[] }
+  | { status: 'loaded'; data: DriverProfileSummary }
   | { status: 'error'; message: string }
   | { status: 'empty' };
 
@@ -22,15 +23,25 @@ export const useDriverProfileStore = create<DriverProfileStore>((set) => ({
   load: async () => {
     set({ screenState: { status: 'loading' } });
 
-    const result = await fetchDriverProfiles();
+    const user = useAuthStore.getState().user;
+    const result = await fetchDriverTotalTrips();
 
     result.match(
-      (data) => {
-        if (data.length === 0) {
-          set({ screenState: { status: 'empty' } });
-        } else {
-          set({ screenState: { status: 'loaded', data } });
-        }
+      (totalTrips) => {
+        const vehicle =
+          user?.vehicle_type != null
+            ? { type: user.vehicle_type, plate_number: user.vehicle_plate ?? null }
+            : null;
+        const summary: DriverProfileSummary = {
+          total_trips: totalTrips,
+          rating: user?.rating ?? null,
+          vehicle,
+        };
+
+        const isEmpty = totalTrips === 0 && vehicle == null && summary.rating == null;
+        set({
+          screenState: isEmpty ? { status: 'empty' } : { status: 'loaded', data: summary },
+        });
       },
       (error: AppError) => {
         set({ screenState: { status: 'error', message: error.message } });

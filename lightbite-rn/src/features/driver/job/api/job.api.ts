@@ -9,6 +9,7 @@ export async function acceptDriverJob(uuid: string): Promise<Result<null, AppErr
     await apiClient.post(`/driver/jobs/${uuid}/accept`);
     return ok(null);
   } catch (error) {
+    console.error('Failed to accept driver job:', error);
     return err(mapApiError(error));
   }
 }

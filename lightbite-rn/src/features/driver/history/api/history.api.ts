@@ -12,6 +12,7 @@ export async function fetchDriverOrders(): Promise<Result<DriverOrder[], AppErro
     const response = await apiClient.get('/driver/orders');
     const parsed = historyListResponseSchema.safeParse(response.data);
     if (!parsed.success) {
+      console.error('Failed to parse driver orders response:', parsed.error);
       return err({ code: 'PARSE_ERROR', message: 'Invalid response format', statusCode: 0 });
     }
     return ok(parsed.data.data);
