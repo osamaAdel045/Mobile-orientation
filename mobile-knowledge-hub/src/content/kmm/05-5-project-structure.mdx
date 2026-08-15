@@ -117,3 +117,187 @@ import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
       imports, KMP's source set hierarchy makes platform boundaries explicit in the
       directory tree. Any file in `commonMain` must compile on all targets — this
       discipline keeps the shared module genuinely cross-platform.
+
+      ## LightBite Feature-First Structure
+
+      <StatGrid columns={3}>
+        <StatItem value=":shared" label="Pure Kotlin Logic" />
+        <StatItem value=":composeApp" label="Compose UI" />
+        <StatItem value="build-logic/" label="Convention Plugins" />
+      </StatGrid>
+
+      LightBite KMP follows a strict feature-first Clean Architecture. The
+      structure mirrors what we learned building the same app in React Native
+      and Flutter — each layer has a clear contract, and the module boundaries
+      are enforced by detekt, not convention.
+
+      ### Module Tree
+
+      ```text
+      lightbite-kmp/
+      ├── CLAUDE.md                          # PRESCRIPTIVE — enforced by tooling
+      ├── build.gradle.kts                   # Root project
+      ├── settings.gradle.kts                # Module declarations
+      ├── gradle.properties                  # Kotlin/Gradle flags
+      ├── gradle/
+      │   └── libs.versions.toml             # Single version catalog
+      ├── build-logic/                       # Convention plugins (applied to all modules)
+      │   ├── settings.gradle.kts
+      │   └── conventions/src/main/kotlin/
+      │       ├── kmp.shared.gradle.kts      # KMP targets + commonMain deps
+      │       ├── compose.multiplatform.gradle.kts  # Compose + Android config
+      │       ├── quality.gradle.kts         # detekt + ktlint + Kover gate
+      │       └── testing.gradle.kts         # JUnit5, MockK, Turbine, Compose Test
+      ├── shared/                            # Pure Kotlin — NO Compose, NO platform SDK
+      │   └── src/
+      │       ├── commonMain/kotlin/com/lightbite/shared/
+      │       │   ├── core/                  # Cross-cutting infrastructure
+      │       │   │   ├── api/               # Ktor HttpClient + interceptors
+      │       │   │   ├── realtime/          # WebSocket client + NetworkMonitor
+      │       │   │   ├── storage/           # SecureStorage (expect), DataStore
+      │       │   │   ├── connectivity/      # NetworkMonitor (expect/actual)
+      │       │   │   ├── di/                # Koin module registry
+      │       │   │   ├── errors/            # AppError sealed hierarchy
+      │       │   │   └── logger/            # AppLogger (expect/actual)
+      │       │   └── features/              # One package per feature
+      │       │       └── <feature>/
+      │       │           ├── domain/        # Entity, Repository interface, UseCase
+      │       │           └── data/          # RepositoryImpl, DTO, DataSource, DB table
+      │       ├── commonTest/kotlin/         # Shared tests (JVM + Native)
+      │       ├── androidMain/kotlin/        # actual implementations (Android)
+      │       └── iosMain/kotlin/            # actual implementations (iOS)
+      ├── composeApp/                        # Compose Multiplatform presentation
+      │   ├── src/
+      │   │   ├── commonMain/kotlin/com/lightbite/app/
+      │   │   │   ├── App.kt                # Root composable + navigation graph
+      │   │   │   ├── core/
+      │   │   │   │   ├── theme/             # LightBiteTheme (Material3 tokens)
+      │   │   │   │   ├── ui/                # Shared composables (Button, Card, Input…)
+      │   │   │   │   ├── i18n/              # String resource helpers
+      │   │   │   │   └── navigation/        # @Serializable route objects
+      │   │   │   └── features/<feature>/
+      │   │   │       └── presentation/      # Screen, ViewModel, UI state
+      │   │   ├── androidMain/
+      │   │   │   ├── AndroidManifest.xml
+      │   │   │   └── res/
+      │   │   │       ├── values/strings.xml
+      │   │   │       └── values-ar/strings.xml
+      │   │   ├── commonTest/kotlin/         # Shared UI tests
+      │   │   ├── androidUnitTest/kotlin/    # JVM UI tests
+      │   │   └── androidInstrumentedTest/   # Compose UI tests (emulator)
+      │   └── build.gradle.kts
+      ├── scripts/generate-feature/          # Scaffold templates
+      │   └── templates/
+      │       ├── domain/Entity.kt.hbs
+      │       ├── domain/Repository.kt.hbs
+      │       ├── data/RepositoryImpl.kt.hbs
+      │       ├── data/DataSource.kt.hbs
+      │       ├── presentation/ViewModel.kt.hbs
+      │       ├── presentation/Screen.kt.hbs
+      │       └── test/ViewModelTest.kt.hbs
+      └── .github/workflows/ci.yml           # quality → test → build
+      ```
+
+      ### Layer Rules (Enforced by detekt)
+
+      ```text
+      ┌─────────────────────────────────────────────────────┐
+      │ :composeApp                                          │
+      │   Screen (@Composable)                               │
+      │   → ViewModel (StateFlow<ScreenState<T>>)            │
+      │   → LightBiteTheme (colors, spacing, typography)     │
+      │   → stringResource(R.string.x)                       │
+      │   ✗ NO business logic                                │
+      │   ✗ NO network calls                                 │
+      │   ✗ NO storage access                                │
+      │   ✗ NO raw design values                             │
+      └──────────────┬──────────────────────────────────────┘
+                     │ depends on
+      ┌──────────────▼──────────────────────────────────────┐
+      │ :shared                                              │
+      │   domain/                                            │
+      │   → Entity (data class)                              │
+      │   → Repository (interface)                           │
+      │   → UseCase (operator fun invoke)                    │
+      │   ✗ NO framework imports (Ktor, SQLDelight, Koin)    │
+      │   data/                                              │
+      │   → RepositoryImpl                                  │
+      │   → DataSource (DTO → Entity mapping)                │
+      │   → DB table (SQLDelight .sq file)                   │
+      │   ✗ NO Compose imports                               │
+      │   ✗ NO platform SDK imports (except expect/actual)   │
+      └─────────────────────────────────────────────────────┘
+      ```
+
+      <Callout title="Why :shared is Pure Kotlin">
+        The RN audit found `CustomerSearchScreen` importing `fetchRestaurants()`
+        and `MMKVStorage` directly — bypassing hooks and stores entirely. When
+        data access is possible from the UI layer, it WILL happen. Separating
+        `:shared` (zero Compose, zero platform SDK) from `:composeApp` makes
+        this impossible: the `:composeApp` module cannot import Ktor, Room,
+        or SQLDelight because they are not in its dependency graph. The module
+        boundary is a compiler-enforced wall.
+      </Callout>
+
+      ### Feature Example: customer/cart
+
+      ```text
+      shared/src/commonMain/kotlin/com/lightbite/shared/features/customer/cart/
+      ├── domain/
+      │   ├── Cart.kt                   # data class Cart(val items: List<CartItem>, …)
+      │   ├── CartItem.kt               # data class CartItem(val menuItemUuid: String, …)
+      │   ├── AddToCartRequest.kt       # data class AddToCartRequest(val …)
+      │   └── CartRepository.kt         # interface CartRepository { suspend fun getCart(): AppResult<Cart>; … }
+      └── data/
+          ├── CartDto.kt                # @Serializable data class CartDto(…)
+          ├── CartRepositoryImpl.kt     # class CartRepositoryImpl(api: CartApi, db: CartTable) : CartRepository
+          ├── CartRemoteDataSource.kt   # class CartRemoteDataSource(private val client: HttpClient) { … }
+          └── CartTable.sq              # CREATE TABLE cart (uuid TEXT PRIMARY KEY, …)
+
+      composeApp/src/commonMain/kotlin/com/lightbite/app/features/customer/cart/presentation/
+      ├── CartScreen.kt                 # @Composable fun CartScreen(viewModel: CartViewModel, …)
+      ├── CartViewModel.kt             # class CartViewModel(repo: CartRepository) : ViewModel()
+      └── CartUiState.kt               # data class CartUiState(val items: List<CartItemUi>, …)
+      ```
+
+      ### Scaffold Script
+
+      ```bash
+      # Generate a new feature with the full stack — no manual file creation
+      ./gradlew generateFeature --feature=customer/search
+
+      # Generates:
+      # shared/.../features/customer/search/domain/SearchResult.kt
+      # shared/.../features/customer/search/domain/SearchRepository.kt
+      # shared/.../features/customer/search/data/SearchRepositoryImpl.kt
+      # shared/.../features/customer/search/data/SearchRemoteDataSource.kt
+      # composeApp/.../features/customer/search/presentation/SearchScreen.kt
+      # composeApp/.../features/customer/search/presentation/SearchViewModel.kt
+      # composeApp/.../features/customer/search/presentation/SearchUiState.kt
+      # composeApp/src/commonTest/.../features/customer/search/SearchViewModelTest.kt
+      # composeApp/src/commonTest/.../features/customer/search/SearchRepositoryTest.kt
+      ```
+
+      <Callout title="The Plop.js Lesson">
+        RN used Plop.js for feature scaffolding (`npm run generate:feature`),
+        which enforced the `api/store/hooks/screens/schemas/types.ts` structure
+        from the start. The feature that deviated most from the standard
+        (CustomerSearchScreen) was created manually. KMP's scaffold script is
+        **the only supported way** to create a feature — the detekt rules check
+        that every feature has the required files.
+      </Callout>
+
+      ### Core/ to RN src/core/ Mapping
+
+      | RN `src/core/` | KMP `shared/core/` | KMP `composeApp/core/` |
+      |---------------|-------------------|----------------------|
+      | `api/client.ts` (Axios singleton) | `api/HttpClientFactory.kt` (Ktor singleton) | — |
+      | `api/auth.interceptor.ts` | `api/AuthInterceptor.kt` (Ktor plugin) | — |
+      | `api/refresh.interceptor.ts` | `api/RefreshInterceptor.kt` (queue-safe, single-flight) | — |
+      | `storage/mmkv-storage.ts` | `storage/DataStoreFactory.kt` + `storage/SecureStorage.kt` (expect) | — |
+      | `websocket/client.ts` | `realtime/KtorRealtimeClient.kt` | — |
+      | `connectivity/store.ts` | `connectivity/NetworkMonitor.kt` (expect/actual) | — |
+      | `theme/tokens.ts` | — | `theme/LightBiteTheme.kt` (Material3) |
+      | `hooks/useTheme.ts` | — | `theme/LightBiteTheme.kt` (CompositionLocal) |
+      | `ui/Button.tsx` | — | `ui/LBButton.kt`, `ui/LBCard.kt`, … |
+      | `i18n/index.ts` | — | `i18n/StringResources.kt` + `res/values/strings.xml` |

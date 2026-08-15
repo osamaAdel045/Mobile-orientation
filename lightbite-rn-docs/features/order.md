@@ -8,26 +8,28 @@ Order history list with status badges, pagination, and real-time order tracking 
 ## Data Flow
 
 ```
-Order List:                    Order Tracking:
-GET /users/me/orders?page=1    GET /orders/{uuid}/tracking
-       |                              |
-order.api.ts                     order.api.ts
+Order List:                    Order Tracking (WebSocket primary):
+GET /orders?page=1             WebSocket: private-orders.{userId}
+       |                         → order.status_update
+order.api.ts                     → driver.assigned
        |                              |
 useCustomerOrderStore            useOrderTrackingStore
-  (ScreenState + pagination)       (load + 15s polling + cleanup)
+  (ScreenState + pagination)       (load + WebSocket + 15s polling fallback)
        |                              |
 CustomerOrderScreen              CustomerOrderTrackingScreen
 ```
 
+The tracking store subscribes to `order.status_update` and `driver.assigned` events on `private-orders.{userId}` via WebSocket. Status changes are pushed instantly — no delay. The 15-second polling interval only fires as a **fallback** when the WebSocket is disconnected.
+
 ## API Contract
 
-### `GET /users/me/orders` — Order History
+### `GET /orders` — Order History
 
-Paginated, filterable by status. Returns `{ data: Order[], meta: { current_page, total } }`.
+Paginated. Returns `{ data: Order[], meta: { current_page, total } }`.
 
-### `GET /orders/{uuid}/tracking` — Real-Time Tracking
+### `GET /orders/{uuid}/tracking` — Tracking (fallback)
 
-Returns status, status history timeline, driver info (only during delivering/picked_up), and ETA.
+Returns status, status history timeline, driver info (only during delivering/picked_up), and ETA. Used as HTTP fallback when WebSocket is disconnected.
 
 ```typescript
 interface OrderTracking {
@@ -61,11 +63,14 @@ Standard ScreenState with pagination: `load(page)` → `loadMore()` pattern, exa
 |---|---|---|
 | `trackingState` | ScreenState | loading, loaded(OrderTracking), error |
 | `load(uuid)` | Method | Initial fetch |
-| `startPolling(uuid)` | Method | 15s interval auto-refresh |
+| `startPolling(uuid)` | Method | Subscribe to WebSocket + 15s polling fallback |
 | `stopPolling()` | Method | Cleanup (called on unmount) |
 | `reset()` | Method | Clear state |
+| `unsubscribeWebSocket` | `(() => void) \| null` | WebSocket cleanup function |
 
-**Polling behavior:** Starts on mount, auto-stops when status is `delivered`/`rejected`/`cancelled`. Keeps last-good data on transient poll errors — no flickering.
+**Real-time (primary):** Subscribes to `private-orders.{userId}` via WebSocket. On `order.status_update` or `driver.assigned` events matching the current order UUID, calls `refresh(uuid)` to re-fetch tracking data instantly.
+
+**Polling behavior (fallback):** 15s interval. Only fires when WebSocket is disconnected. Auto-stops on terminal statuses. Keeps last-good data on transient errors — no flickering.
 
 ## UI Layout
 

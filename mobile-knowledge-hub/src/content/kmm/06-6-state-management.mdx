@@ -133,3 +133,207 @@ import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
       each platform as a **state consumer**. The boundary is the `StateFlow` type
       — which SKIE translates into Swift's `AsyncSequence` and Android observes
       natively with `Flow.collect()`. No serialization, no bridge overhead.
+
+      ## LightBite ScreenState Pattern
+
+      <StatGrid columns={3}>
+        <StatItem value="4 States" label="Sealed Interface" />
+        <StatItem value="AppResult<T>" label="Error Handling" />
+        <StatItem value="Rehydrate" label="DB Before Network" />
+      </StatGrid>
+
+      <Callout title="The RN State Lesson">
+        RN's CLAUDE.md mandated a discriminated union with four states: Loading,
+        Loaded (with typed data), Error (with message), and Empty. The audit
+        found only 8/16 stores used it correctly. 5 stores used ad-hoc flags
+        (isLoading, error string, etc.). Auth and checkout — the two stores
+        CLAUDE.md named explicitly — did not use the union at all. In KMP, the
+        ScreenState sealed interface is **the only allowed screen-state type**
+        in ViewModels. detekt flags any ViewModel that exposes a non-sealed
+        state type.
+      </Callout>
+
+      ### The Canonical ScreenState
+
+      ```kotlin
+      // shared/src/commonMain/.../core/errors/ScreenState.kt
+      // The ONLY screen-state type allowed in ViewModels.
+      // detekt rule: ViewModelMustUseScreenState — flags any ViewModel
+      // whose primary state property is not StateFlow<ScreenState<*>>
+
+      sealed interface ScreenState<out T> {
+          data object Loading : ScreenState<Nothing>
+          data class Loaded<T>(val data: T) : ScreenState<T>
+          data class Error(val message: String) : ScreenState<Nothing>
+          data object Empty : ScreenState<Nothing>
+      }
+      ```
+
+      ### The AppResult Type (Neverthrow Equivalent)
+
+      ```kotlin
+      // shared/src/commonMain/.../core/errors/AppResult.kt
+      // Every Repository method returns AppResult<T> — NEVER throws.
+      // ViewModels use when(result) { is AppResult.Success → … is AppResult.Failure → … }
+      // runCatching { } is BANNED in ViewModels (detekt: NoRunCatchingInViewModel)
+
+      sealed class AppResult<out T> {
+          data class Success<T>(val data: T) : AppResult<T>()
+          data class Failure(val error: AppError) : AppResult<Nothing>()
+
+          val isSuccess: Boolean get() = this is Success
+          val isFailure: Boolean get() = this is Failure
+
+          fun <R> map(transform: (T) -> R): AppResult<R> = when (this) {
+              is Success -> Success(transform(data))
+              is Failure -> this
+          }
+
+          fun getOrNull(): T? = when (this) {
+              is Success -> data
+              is Failure -> null
+          }
+      }
+
+      sealed class AppError(
+          open val message: String,
+          open val code: String? = null,
+      ) {
+          data class NetworkError(override val message: String) : AppError(message)
+          data class ServerError(override val message: String, override val code: String? = null) : AppError(message, code)
+          data class Unauthorized(override val message: String = "Session expired") : AppError(message)
+          data class ValidationError(override val message: String, val errors: Map<String, List<String>>) : AppError(message)
+          data class Unknown(override val message: String = "Something went wrong") : AppError(message)
+      }
+      ```
+
+      ### ViewModel Template — The Only Allowed Pattern
+
+      ```kotlin
+      // composeApp/.../features/<feature>/presentation/<Feature>ViewModel.kt
+      // THIS IS THE CANONICAL VIEWMODEL TEMPLATE.
+      // Scaffold generates this exact structure. Deviations fail detekt.
+
+      class FeatureViewModel(
+          private val repository: FeatureRepository,
+      ) : ViewModel() {
+
+          private val _screenState = MutableStateFlow<ScreenState<FeatureData>>(ScreenState.Loading)
+          val screenState: StateFlow<ScreenState<FeatureData>> = _screenState.asStateFlow()
+
+          init {
+              loadData()
+          }
+
+          fun loadData() {
+              viewModelScope.launch {
+                  _screenState.value = ScreenState.Loading
+                  repository.getData().let { result ->
+                      when (result) {
+                          is AppResult.Success -> {
+                              _screenState.value = if (result.data.isEmpty())
+                                  ScreenState.Empty
+                              else
+                                  ScreenState.Loaded(result.data)
+                          }
+                          is AppResult.Failure -> {
+                              _screenState.value = ScreenState.Error(result.error.message)
+                          }
+                      }
+                  }
+              }
+          }
+
+          fun refresh() {
+              viewModelScope.launch {
+                  // Keep last-good state visible during refresh
+                  repository.refreshData().let { result ->
+                      when (result) {
+                          is AppResult.Success -> {
+                              _screenState.value = if (result.data.isEmpty())
+                                  ScreenState.Empty
+                              else
+                                  ScreenState.Loaded(result.data)
+                          }
+                          is AppResult.Failure -> { /* Keep last-good data on transient error */ }
+                      }
+                  }
+              }
+          }
+      }
+      ```
+
+      ### With Persistence — The Rehydration Pattern
+
+      ```kotlin
+      // For features with cached data (cart, orders, restaurants, earnings):
+      // ViewModel rehydrates from SQLDelight BEFORE the first network call.
+
+      class CartViewModel(
+          private val cartRepo: CartRepository,
+      ) : ViewModel() {
+
+          private val _screenState = MutableStateFlow<ScreenState<Cart>>(ScreenState.Loading)
+          val screenState: StateFlow<ScreenState<Cart>> = _screenState.asStateFlow()
+
+          init {
+              viewModelScope.launch {
+                  // 1. REHYDRATE — instant, survives app restart
+                  cartRepo.getCachedCart()?.let { cart ->
+                      _screenState.value = if (cart.items.isEmpty())
+                          ScreenState.Empty
+                      else
+                          ScreenState.Loaded(cart)
+                  }
+                  // 2. REFRESH — network updates DB + state
+                  cartRepo.refreshCart()
+                      .onSuccess { cart ->
+                          _screenState.value = if (cart.items.isEmpty())
+                              ScreenState.Empty
+                          else
+                              ScreenState.Loaded(cart)
+                      }
+                      .onFailure { /* Keep cached data visible on transient error */ }
+              }
+          }
+      }
+      ```
+
+      ### Screen Consumption — The Only Allowed Pattern
+
+      ```kotlin
+      // Screen renders the ScreenState. That's it. No business logic.
+      @Composable
+      fun FeatureScreen(
+          viewModel: FeatureViewModel = koinViewModel(),
+          onNavigate: (id: String) -> Unit,
+      ) {
+          val screenState by viewModel.screenState.collectAsStateWithLifecycle()
+
+          when (val state = screenState) {
+              is ScreenState.Loading -> LoadingSkeleton()
+              is ScreenState.Loaded -> FeatureContent(
+                  data = state.data,
+                  onRefresh = viewModel::refresh,
+                  onItemClick = onNavigate,
+              )
+              is ScreenState.Empty -> EmptyState(
+                  message = stringResource(R.string.feature_empty),
+              )
+              is ScreenState.Error -> ErrorState(
+                  message = state.message,
+                  onRetry = viewModel::loadData,
+              )
+          }
+      }
+      ```
+
+      <Callout title="Why Sealed Interface, Not Enum">
+        Kotlin sealed interfaces allow `ScreenState.Loaded<T>` to carry typed
+        data while `ScreenState.Loading`/`Error`/`Empty` carry no data. This is
+        structurally identical to TypeScript's discriminated union but
+        compile-time exhaustive — `when` without all 4 branches is a compiler
+        error. RN's TypeScript discriminated union is runtime-only; nothing
+        enforced the `'empty'` branch in `restaurant.store.ts` and it was
+        silently missing.
+      </Callout>

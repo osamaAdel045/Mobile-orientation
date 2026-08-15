@@ -118,3 +118,254 @@ import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
       is KMP's unique testing advantage. Business logic iterates on JVM in
       milliseconds before committing to an iOS build — developer experience
       similar to server-side testing, available in mobile development.
+
+      ## LightBite Mandatory Test Matrix
+
+      <StatGrid columns={3}>
+        <StatItem value="6 Tiers" label="Per Feature Required" />
+        <StatItem value="80% / 70%" label="Kover Gate" />
+        <StatItem value="Auto-Generated" label="Scaffold Creates Tests" />
+      </StatGrid>
+
+      <Callout title="The RN Testing Lesson">
+        The React Native app had 35 test files and 126 tests — but coverage was
+        almost exclusively Zustand stores and Zod schemas. Zero hook tests, zero
+        screen tests, zero API tests, zero WebSocket tests, zero ThemeProvider
+        tests. MSW was installed but never used. **Two tests were failing at
+        audit time** with no one aware. In KMP, testing is not optional — it
+        is a build gate. The scaffold generates empty test files alongside source;
+        you fill them in, but you cannot forget them.
+      </Callout>
+
+      ### Mandatory Test Tiers per Feature
+
+      Every feature must have tests at these levels. The CI pipeline runs all
+      tiers; Kover enforces coverage thresholds. A feature is not "done" until
+      all tiers pass.
+
+      | Tier | What to test | Framework | Example assertion |
+      |------|-------------|-----------|-------------------|
+      | **1. ViewModel** | Every `ScreenState` transition + every public method | JUnit5 + MockK + Turbine | `loading → loaded with items`, `loading → error`, `removeItem decrements count` |
+      | **2. Repository** | Success + error path for every method | JUnit5 + MockEngine (Ktor) | `getCart returns parsed Cart on 200`, `getCart returns NetworkError on 500` |
+      | **3. DataSource** | Response parse + error mapping + envelope unwrap | JUnit5 + MockEngine | `CartDto maps to Cart entity`, `API error envelope unwraps to AppError.Unauthorized` |
+      | **4. Compose UI** | Every screen state (loading/loaded/error/empty) + interactions + i18n key check | AndroidX Compose Test | `shows EmptyState when cart is empty`, `clicking item navigates`, `displays Arabic text in ar locale` |
+      | **5. Realtime** | WS event → state update; fallback poll when disconnected | Turbine + FakeRealtimeClient | `order status event updates tracking screen`, `polling starts on disconnect` |
+      | **6. Token parity** | Theme values equal `system-desing/11-design-system.md` | JUnit5 | `primary[500] == 0xFFF97316`, `semantic.success == 0xFF16A34A` |
+
+      ### ViewModel Test Pattern (Mandatory)
+
+      ```kotlin
+      // composeApp/src/commonTest/.../cart/presentation/CartViewModelTest.kt
+      class CartViewModelTest {
+          private val fakeRepo = FakeCartRepository()
+          private val testScope = TestScope()
+          private val viewModel = CartViewModel(fakeRepo, testScope)
+
+          @Test
+          fun `initial state is Loading`() = testScope.runTest {
+              assertEquals(ScreenState.Loading, viewModel.screenState.value)
+          }
+
+          @Test
+          fun `loading → loaded when cart has items`() = testScope.runTest {
+              val cart = Cart(items = listOf(CartItem(/* … */)))
+              fakeRepo.setCart(cart)
+
+              viewModel.screenState.test {
+                  assertEquals(ScreenState.Loading, awaitItem())
+                  val loaded = awaitItem()
+                  assertIs<ScreenState.Loaded<Cart>>(loaded)
+                  assertEquals(1, (loaded as ScreenState.Loaded).data.items.size)
+                  cancelAndConsumeRemainingEvents()
+              }
+          }
+
+          @Test
+          fun `loading → empty when cart has no items`() = testScope.runTest {
+              fakeRepo.setCart(Cart(items = emptyList()))
+
+              viewModel.screenState.test {
+                  assertEquals(ScreenState.Loading, awaitItem())
+                  assertEquals(ScreenState.Empty, awaitItem())
+                  cancelAndConsumeRemainingEvents()
+              }
+          }
+
+          @Test
+          fun `loading → error when repository fails`() = testScope.runTest {
+              fakeRepo.setError(AppError.NetworkError("Connection refused"))
+
+              viewModel.screenState.test {
+                  assertEquals(ScreenState.Loading, awaitItem())
+                  val error = awaitItem()
+                  assertIs<ScreenState.Error>(error)
+                  assertEquals("Connection refused", (error as ScreenState.Error).message)
+                  cancelAndConsumeRemainingEvents()
+              }
+          }
+
+          @Test
+          fun `removeItem triggers reload and updates state`() = testScope.runTest {
+              val cart = Cart(items = listOf(CartItem(uuid = "item-1"), CartItem(uuid = "item-2")))
+              fakeRepo.setCart(cart)
+              fakeRepo.setRemoveResult(AppResult.success(Unit))
+
+              viewModel.removeItem("item-1")
+              // Verify reload was triggered — fakeRepo tracks calls
+              assertEquals(1, fakeRepo.removeItemCallCount)
+              assertEquals("item-1", fakeRepo.lastRemovedUuid)
+          }
+      }
+      ```
+
+      ### Repository Test Pattern (Mandatory)
+
+      ```kotlin
+      // shared/src/commonTest/.../cart/data/CartRepositoryImplTest.kt
+      class CartRepositoryImplTest {
+          private val mockEngine = MockEngine { request ->
+              when (request.url.encodedPath) {
+                  "/api/v1/cart" -> respond(
+                      content = ByteReadChannel(cartJson),
+                      status = HttpStatusCode.OK,
+                      headers = headersOf("Content-Type", "application/json"),
+                  )
+                  else -> respond(
+                      content = ByteReadChannel("""{"message":"Not found"}"""),
+                      status = HttpStatusCode.NotFound,
+                  )
+              }
+          }
+          private val client = HttpClient(mockEngine) { install(ContentNegotiation) { json() } }
+          private val fakeDb = FakeCartTable()
+          private val repo = CartRepositoryImpl(client, fakeDb)
+
+          @Test
+          fun `getCart returns parsed cart on 200`() = runTest {
+              val result = repo.getCart()
+              assertTrue(result.isSuccess)
+              assertEquals(2, result.getOrThrow().items.size)
+              assertEquals("Burger", result.getOrThrow().items.first().name)
+          }
+
+          @Test
+          fun `getCart caches to local DB`() = runTest {
+              repo.getCart()
+              val cached = fakeDb.getCart()
+              assertNotNull(cached)
+              assertEquals(2, cached!!.items.size)
+          }
+      }
+      ```
+
+      ### Compose UI Test Pattern (Mandatory)
+
+      ```kotlin
+      // composeApp/src/androidInstrumentedTest/.../cart/CartScreenTest.kt
+      class CartScreenTest {
+          @get:Rule
+          val composeTestRule = createComposeRule()
+
+          @Test
+          fun `shows loading skeleton initially`() {
+              composeTestRule.setContent {
+                  LightBiteTheme {
+                      CartScreen(
+                          viewModel = FakeCartViewModel(ScreenState.Loading),
+                          onCheckout = {},
+                          onMenuItemClick = {},
+                      )
+                  }
+              }
+              composeTestRule.onNodeWithTag("cart_loading_skeleton").assertIsDisplayed()
+          }
+
+          @Test
+          fun `shows empty state when cart is empty`() {
+              composeTestRule.setContent {
+                  LightBiteTheme {
+                      CartScreen(
+                          viewModel = FakeCartViewModel(ScreenState.Empty),
+                          onCheckout = {},
+                          onMenuItemClick = {},
+                      )
+                  }
+              }
+              composeTestRule.onNodeWithText(
+                  composeTestRule.activity.getString(R.string.cart_empty_title)
+              ).assertIsDisplayed()
+          }
+
+          @Test
+          fun `shows cart items when loaded`() {
+              val items = listOf(
+                  CartItemUi("1", "Burger", "Fresh beef patty", 45.0, 2, "https://…"),
+                  CartItemUi("2", "Fries", "Crispy golden", 15.0, 1, "https://…"),
+              )
+              composeTestRule.setContent {
+                  LightBiteTheme {
+                      CartScreen(
+                          viewModel = FakeCartViewModel(ScreenState.Loaded(CartUiState(items, 105.0))),
+                          onCheckout = {},
+                          onMenuItemClick = {},
+                      )
+                  }
+              }
+              composeTestRule.onNodeWithText("Burger").assertIsDisplayed()
+              composeTestRule.onNodeWithText("Fries").assertIsDisplayed()
+              composeTestRule.onNodeWithText(
+                  composeTestRule.activity.getString(R.string.cart_total, 105.0)
+              ).assertIsDisplayed()
+          }
+
+          @Test
+          fun `shows error state with retry button`() {
+              composeTestRule.setContent {
+                  LightBiteTheme {
+                      CartScreen(
+                          viewModel = FakeCartViewModel(ScreenState.Error("Network error")),
+                          onCheckout = {},
+                          onMenuItemClick = {},
+                      )
+                  }
+              }
+              composeTestRule.onNodeWithText("Network error").assertIsDisplayed()
+              composeTestRule.onNodeWithText(
+                  composeTestRule.activity.getString(R.string.common_retry)
+              ).assertIsDisplayed()
+          }
+      }
+      ```
+
+      ### Coverage Gate
+
+      ```kotlin
+      // build-logic/conventions/src/main/kotlin/quality.gradle.kts (excerpt)
+      kover {
+          reports {
+              verify {
+                  rule {
+                      bound {
+                          minBound = 80    // :shared must have ≥80% line coverage
+                          valueType = ValueType.LINE
+                      }
+                  }
+              }
+          }
+      }
+      // CI FAILS if coverage drops below threshold.
+      // Excludes DI module boilerplate (Koin module declarations).
+      ```
+
+      <Callout title="Scaffold Generates Tests">
+        Running `./gradlew generateFeature --feature=customer/search` creates
+        **empty test files** alongside every source file:
+        - `SearchViewModelTest.kt` (ViewModel tier — fill in state transitions)
+        - `SearchRepositoryTest.kt` (Repository tier — fill in success/error paths)
+        - `SearchScreenTest.kt` (UI tier — fill in screen state tests)
+        - `SearchDataSourceTest.kt` (DataSource tier — fill in parse tests)
+
+        You cannot forget tests because the scaffold creates them. The Kover
+        gate ensures you actually fill them in. This is the structural fix for
+        RN's "we installed testing libraries but never wrote tests" problem.
+      </Callout>

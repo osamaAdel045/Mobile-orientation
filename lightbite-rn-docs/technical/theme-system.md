@@ -4,7 +4,7 @@ LightBite React Native uses **typed design tokens** enforced by TypeScript and S
 
 ## Design Tokens
 
-Tokens match the cross-platform [design system spec](../../system-desing/11-design-system.md) exactly:
+Tokens match the cross-platform design system spec (`system-desing/11-design-system.md`) exactly:
 
 | Category | Token Scale |
 |---|---|

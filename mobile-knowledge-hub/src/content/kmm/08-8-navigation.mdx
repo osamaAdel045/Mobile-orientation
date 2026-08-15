@@ -147,3 +147,219 @@ import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
       KMP treats navigation as a **platform concern**, not a shared one. The shared
       module answers "where should we go?" while each platform answers "how do we
       get there?" This mirrors the core KMP philosophy — share intent, render natively.
+
+      ## LightBite Type-Safe Navigation
+
+      <StatGrid columns={3}>
+        <StatItem value="@Serializable" label="Route Objects" />
+        <StatItem value="Auth Guard" label="Root Redirect" />
+        <StatItem value="Thin Screens" label="Route → Screen" />
+      </StatGrid>
+
+      <Callout title="The RN Navigation Lesson">
+        RN used Expo Router (file-system routing) with an auth guard in the root
+        `_layout.tsx`. The audit found that `app/` routes were supposed to be
+        "thin — delegates to screens" but two routes contained full screen
+        implementations (214-line profile, 80-line order-confirmation). KMP's
+        navigation uses `@Serializable` route objects with Compose Navigation.
+        Each route composable is exactly one screen delegate call — no inline
+        implementations. detekt enforces a max line count on route files.
+      </Callout>
+
+      ### Route Definitions — @Serializable Objects
+
+      ```kotlin
+      // composeApp/.../core/navigation/routes.kt
+      // Type-safe routes using kotlinx.serialization.
+      // No string-based route names — compiler verifies all nav arguments.
+
+      import kotlinx.serialization.Serializable
+
+      // Auth graph
+      @Serializable sealed interface AuthRoute {
+          @Serializable data object Onboarding : AuthRoute
+          @Serializable data object Login : AuthRoute
+          @Serializable data object Register : AuthRoute
+      }
+
+      // Customer graph
+      @Serializable sealed interface CustomerRoute {
+          @Serializable data object Home : CustomerRoute       // Tab 1
+          @Serializable data object Search : CustomerRoute     // Tab 2
+          @Serializable data object Orders : CustomerRoute     // Tab 3
+          @Serializable data object Profile : CustomerRoute    // Tab 4
+          @Serializable data class Restaurant(val uuid: String) : CustomerRoute
+          @Serializable data object MenuItem : CustomerRoute
+          @Serializable data object Cart : CustomerRoute
+          @Serializable data object Checkout : CustomerRoute
+          @Serializable data object OrderConfirmation : CustomerRoute
+          @Serializable data class OrderTracking(val orderUuid: String) : CustomerRoute
+          @Serializable data class RateOrder(val orderUuid: String) : CustomerRoute
+          @Serializable data object AddressList : CustomerRoute
+          @Serializable data object AddressForm : CustomerRoute
+      }
+
+      // Driver graph
+      @Serializable sealed interface DriverRoute {
+          @Serializable data object Home : DriverRoute        // Tab 1
+          @Serializable data object Earnings : DriverRoute    // Tab 2
+          @Serializable data object History : DriverRoute     // Tab 3
+          @Serializable data object Profile : DriverRoute     // Tab 4
+          @Serializable data class JobOffer(val orderUuid: String) : DriverRoute
+          @Serializable data class Pickup(val orderUuid: String) : DriverRoute
+          @Serializable data class Delivery(val orderUuid: String) : DriverRoute
+      }
+      ```
+
+      ### Root Navigation + Auth Guard
+
+      ```kotlin
+      // composeApp/.../App.kt — root composable
+      @Composable
+      fun LightBiteApp() {
+          val authViewModel: AuthViewModel = koinViewModel()
+          val authState by authViewModel.authState.collectAsStateWithLifecycle()
+
+          LightBiteTheme {
+              when (authState) {
+                  is AuthState.Loading -> SplashScreen()
+                  is AuthState.Unauthenticated -> AuthNavGraph(
+                      onAuthenticated = { /* handled by state change */ }
+                  )
+                  is AuthState.Authenticated -> {
+                      when ((authState as AuthState.Authenticated).user.role) {
+                          UserRole.CUSTOMER -> CustomerNavGraph()
+                          UserRole.DRIVER -> DriverNavGraph()
+                      }
+                  }
+              }
+          }
+      }
+      ```
+
+      ### Customer Navigation Graph
+
+      ```kotlin
+      @Composable
+      fun CustomerNavGraph() {
+          val navController = rememberNavController()
+
+          NavHost(
+              navController = navController,
+              startDestination = CustomerRoute.Home,
+          ) {
+              // Tab destinations
+              composable<CustomerRoute.Home> {
+                  CustomerHomeScreen(
+                      onRestaurantClick = { uuid -> navController.navigate(CustomerRoute.Restaurant(uuid)) },
+                      onSearchClick = { navController.navigate(CustomerRoute.Search) },
+                  )
+              }
+              composable<CustomerRoute.Search> {
+                  CustomerSearchScreen(
+                      onRestaurantClick = { uuid -> navController.navigate(CustomerRoute.Restaurant(uuid)) },
+                      onBack = { navController.popBackStack() },
+                  )
+              }
+              composable<CustomerRoute.Orders> {
+                  CustomerOrderScreen(
+                      onOrderClick = { uuid -> navController.navigate(CustomerRoute.OrderTracking(uuid)) },
+                  )
+              }
+              composable<CustomerRoute.Profile> {
+                  CustomerProfileScreen(
+                      onAddressClick = { navController.navigate(CustomerRoute.AddressList) },
+                      onLogout = { authViewModel.logout() },
+                  )
+              }
+
+              // Stack destinations
+              composable<CustomerRoute.Restaurant> { backStackEntry ->
+                  val route: CustomerRoute.Restaurant = backStackEntry.toRoute()
+                  CustomerRestaurantScreen(
+                      restaurantUuid = route.uuid,
+                      onMenuItemClick = { /* nav to MenuItem */ },
+                      onBack = { navController.popBackStack() },
+                  )
+              }
+              composable<CustomerRoute.Cart> {
+                  CustomerCartScreen(
+                      onCheckout = { navController.navigate(CustomerRoute.Checkout) },
+                      onBack = { navController.popBackStack() },
+                  )
+              }
+              composable<CustomerRoute.Checkout> {
+                  CustomerCheckoutScreen(
+                      onOrderPlaced = { navController.navigate(CustomerRoute.OrderConfirmation) {
+                          popUpTo(CustomerRoute.Cart) { inclusive = true }
+                      }},
+                  )
+              }
+              composable<CustomerRoute.OrderConfirmation> {
+                  OrderConfirmationScreen(
+                      onViewOrder = { uuid -> navController.navigate(CustomerRoute.OrderTracking(uuid)) {
+                          popUpTo(CustomerRoute.Home)
+                      }},
+                      onBackToHome = { navController.navigate(CustomerRoute.Home) {
+                          popUpTo(CustomerRoute.Home) { inclusive = true }
+                      }},
+                  )
+              }
+              composable<CustomerRoute.OrderTracking> { backStackEntry ->
+                  val route: CustomerRoute.OrderTracking = backStackEntry.toRoute()
+                  CustomerOrderTrackingScreen(
+                      orderUuid = route.orderUuid,
+                      onRateOrder = { navController.navigate(CustomerRoute.RateOrder(route.orderUuid)) },
+                  )
+              }
+              composable<CustomerRoute.RateOrder> { backStackEntry ->
+                  val route: CustomerRoute.RateOrder = backStackEntry.toRoute()
+                  RateOrderScreen(orderUuid = route.orderUuid)
+              }
+              composable<CustomerRoute.AddressList> {
+                  CustomerAddressScreen(
+                      onAddAddress = { navController.navigate(CustomerRoute.AddressForm) },
+                      onEditAddress = { /* nav to AddressForm with params */ },
+                  )
+              }
+              composable<CustomerRoute.AddressForm> {
+                  CustomerAddressFormScreen(onBack = { navController.popBackStack() })
+              }
+          }
+      }
+      ```
+
+      ### Route → Screen Rule
+
+      ```text
+      Every route composable is EXACTLY ONE screen delegate call.
+      No inline implementations. No business logic. No conditional rendering.
+
+      ✅ CORRECT:
+        composable<CustomerRoute.Home> {
+            CustomerHomeScreen(onRestaurantClick = { ... }, onSearchClick = { ... })
+        }
+
+      ❌ WRONG (detekt flags route files > 20 lines):
+        composable<CustomerRoute.Home> {
+            val vm = koinViewModel<HomeViewModel>()
+            val state by vm.screenState.collectAsStateWithLifecycle()
+            when (state) { ... }  // ← inline screen implementation
+        }
+
+      Rule: If a route file exceeds 20 meaningful lines, the screen logic
+      must be extracted to a feature screen file.
+      ```
+
+      <Callout title="Route Map — Mirror of RN's app/ structure">
+        LightBite RN used Expo Router with file-system routes. RN's
+        `app/(customer)/restaurant/[uuid].tsx` maps to KMP's
+        `@Serializable data class Restaurant(val uuid: String)`. RN's
+        `app/(driver)/job-offer.tsx` maps to `@Serializable data class
+        JobOffer(val orderUuid: String)`. The full feature set is preserved
+        — auth (onboarding/login/register), customer (home/search/orders/
+        profile tabs + restaurant/menu-item/cart/checkout/order-tracking/
+        rate-order/address), driver (home/earnings/history/profile tabs +
+        job-offer/pickup/delivery). Type-safe routes mean the compiler
+        catches any mismatch between navigation calls and their arguments.
+      </Callout>

@@ -52,4 +52,4 @@ Status badge uses the shared `StatusBadge` component. Pull-to-refresh. Empty sta
 ## Next Steps
 
 - [Driver Home](./driver-home) — online/offline toggle
-- [Profile](./driver-profile) — driver info and logout
+- [Home](./driver-home) — driver info, online toggle, active delivery

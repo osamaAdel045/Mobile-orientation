@@ -1,15 +1,19 @@
 # API & Networking
 
-LightBite React Native uses **Axios** with a complete interceptor chain, **Zod** for response validation, and **Neverthrow** for error handling. This is a direct port of the Flutter app's Dio + dartz pattern.
+LightBite React Native uses **Axios** with a complete interceptor chain, **Zod** for response validation, **Neverthrow** for error handling, and a **WebSocket client** for real-time events. The HTTP layer is a direct port of the Flutter app's Dio + dartz pattern; the WebSocket layer connects to Laravel Reverb.
 
 ## Architecture
 
 ```
-API Call → Auth Interceptor → Refresh Interceptor → Backend
-                ↑                    ↑
-          Attaches Bearer      Handles 401 with
-          token (skip refresh) queue-safe refresh
+HTTP:  API Call → Auth Interceptor → Refresh Interceptor → Backend
+                      ↑                    ↑
+                Attaches Bearer      Handles 401 with
+                token (skip refresh) queue-safe refresh
+
+WS:    Reverb Socket → private-channel auth → event dispatch → stores
 ```
+
+All API functions return `Result<T, AppError>` from **Neverthrow** — see [Error Handling](#error-handling) below.
 
 ## Axios Client
 
@@ -115,6 +119,50 @@ export async function refreshInterceptor(error: AxiosError) {
 
 This is exactly the same logic as the Flutter `RefreshInterceptor` in `lib/core/network/refresh_interceptor.dart`.
 
+## WebSocket Client
+
+Real-time events use a **minimal Pusher-protocol client** for Laravel Reverb, living in `src/core/websocket/`. It speaks the Pusher wire protocol, so any Pusher-compatible backend would work.
+
+```
+src/core/websocket/
+├── client.ts     # Singleton WebSocketClient (connect, subscribe, on, reconnect)
+├── config.ts     # URL builder, env overrides, event names, channel builders
+├── hooks.ts      # useWebSocketStatus, useWebSocketEvent (React bindings)
+├── provider.tsx  # WebSocketProvider — auto-connect on auth, teardown on logout
+└── types.ts      # WebSocketStatus, event payloads
+```
+
+Key behaviors:
+
+- **Auto-reconnect with exponential backoff.** On socket drop, reconnects with `1s → 30s` backoff (base × 2^attempt, capped at `WS_RECONNECT_MAX_DELAY_MS`), then replays all subscribed channels.
+- **Private channel auth.** Subscriptions to `private-*` channels authenticate via `POST /broadcasting/auth` (the standard Pusher handshake) before the `pusher:subscribe` is sent.
+- **Keepalive pings.** Sends `pusher:ping` every 25s so proxies don't idle the socket out.
+- **Event dispatch.** Application events registered with `broadcastAs()` on the backend (e.g. `driver.new_job`) are dispatched to handlers registered via `on()`.
+
+```typescript
+// src/core/websocket/config.ts
+const REVERB_HOST = process.env.EXPO_PUBLIC_REVERB_HOST ?? 'localhost';
+const REVERB_PORT = process.env.EXPO_PUBLIC_REVERB_PORT ?? '8080';
+const REVERB_SCHEME = process.env.EXPO_PUBLIC_REVERB_SCHEME ?? 'ws';
+const REVERB_APP_KEY = process.env.EXPO_PUBLIC_REVERB_APP_KEY ?? 'lightbite';
+```
+
+The singleton `webSocketClient` is shared by feature stores (which call `subscribe` / `on` directly) and by `WebSocketProvider`, which wires auto-connect/disconnect to the auth lifecycle — connect once a session exists, tear down on logout.
+
+### WebSocket replaces polling
+
+- **Order tracking** (`useOrderTrackingStore.startPolling`) subscribes to `private-orders.{userId}` and live-refreshes on `order.status_update` and `driver.assigned`. Polling only fires while the socket is not connected.
+- **Driver job discovery** (`useDriverHomeStore.startPolling`) subscribes to `private-driver.{driverId}` and sets the `jobOffer` on `driver.new_job`. Polling is a fallback with exponential backoff, active only when `webSocketClient.isConnected()` is false.
+
+### Channels & Events
+
+| Channel | Event | Purpose |
+|---|---|---|
+| `private-orders.{userId}` | `order.status_update` | Order status changed |
+| `private-orders.{userId}` | `driver.assigned` | Driver assigned to order |
+| `private-driver.{driverId}` | `driver.new_job` | New job offer for driver |
+| `private-delivery.{orderUuid}` | `driver.location_update` | Live driver location |
+
 ## Error Handling
 
 All API errors are mapped to a typed `AppError`:
@@ -171,12 +219,28 @@ export type LoginInput = z.infer<typeof loginSchema>;
 
 Zod provides both **runtime validation** and **TypeScript types** from a single schema definition. This is the #1 advantage React Native has over Flutter for data layer safety — in Flutter, `fromJson`/`toJson` are hand-written and error-prone.
 
+## New Endpoints
+
+### `GET /driver/active-delivery`
+
+Recovers an in-progress delivery after an app restart. Returns the driver's current job plus the phase derived from its backend status:
+
+| Backend status | Phase |
+|---|---|
+| `assigned` | `pickup` |
+| `picked_up` | `picked_up` |
+| `delivering` | `delivering` |
+
+The driver home screen calls this on mount via `recoverActiveDelivery()` and restores the "Active Delivery" card (see [Driver Home](../features/driver-home)). Returns an empty body when the driver has no active delivery.
+
 ## Best Practices
 
-- **All API functions return `Result<T, AppError>`.** Never throw from API functions.
+- **All API functions return `Result<T, AppError>` from Neverthrow.** Never throw from API functions. Components and hooks consume via `.match()` — never try/catch.
 - **Validate requests with Zod before sending.** Catch validation errors at the edge, not in business logic.
 - **The refresh interceptor is the single source of truth for session expiry.** If it fails, it clears local state — consumers don't need to handle 401 separately.
 - **Don't use apiClient directly in components.** Always go through a feature's API module.
+- **WebSocket is the primary live signal; polling is the fallback.** Stores subscribe to Reverb channels and only poll while `webSocketClient.isConnected()` is false.
+- **Access the WebSocket through the store layer, not components.** Feature stores call `subscribe` / `on` on the singleton; screens read state. The `WebSocketProvider` owns connect/disconnect around the auth lifecycle.
 
 ## Next Steps
 

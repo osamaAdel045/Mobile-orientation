@@ -141,3 +141,53 @@ import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
       everything through an engine layer; KMP shares nothing through an engine
       and shares everything through the compiler. This architectural difference
       means KMP has no framework-induced performance ceiling.
+
+      ## KMP vs React Native: LightBite Audit Findings
+
+      <StatGrid columns={3}>
+        <StatItem value="8 RN Gaps" label="Found in Audit" />
+        <StatItem value="Kotlin" label="Compile-Time Safety" />
+        <StatItem value="detekt" label="AST-Level Rules" />
+      </StatGrid>
+
+      LightBite built the same app in React Native first. A comprehensive audit
+      revealed patterns that RN's tooling could not catch. Here is how KMP's
+      architecture prevents each gap:
+
+      | RN Audit Gap | Why RN Couldn't Catch It | How KMP Prevents It |
+      |-------------|------------------------|-------------------|
+      | Zero state persistence | Zustand `persist` is opt-in; no CI check for its absence | SQLDelight + DataStore wired into scaffold; ViewModel rehydrates by default |
+      | Stores-only tests (0 hook/screen/API/WS tests) | No coverage gate; test files are manually created | Kover 80%/70% gate fails the build; scaffold auto-generates test files |
+      | Screen bypassed architecture | `import { fetchRestaurants }` is a valid JS import — no compile check | detekt `NoDataAccessInComposable` inspects AST and blocks repo/network imports in `@Composable` |
+      | Raw hex/pixels in 17/17 screens | `StyleSheet.create({})` is invisible to Stylelint's `color-no-hex` | detekt `NoRawDesignValues` inspects composable AST; token parity test catches theme drift |
+      | Hardcoded strings in 8 screens | `eslint-plugin-i18next` misses template literals and `.replace()` calls | detekt `NoHardcodedStrings` bans ANY string literal inside `Text()`, `contentDescription` |
+      | Forbidden patterns without enforcement | ESLint/Stylelint rules don't cover composable-function patterns | Custom detekt rules per forbidden pattern; each mapped to a named rule in CI |
+      | Prescriptive docs without CI teeth | RN CLAUDE.md was prescriptive; StyleSheet blind spot = no check for raw values | Convention plugins + CI gate from commit zero; every rule has a failing build |
+      | Inconsistent WebSocket usage | No single realtime contract; screens could choose WS or polling | Single `RealtimeClient` interface; `NetworkMonitor` drives fallback transparently |
+
+      ```kotlin
+      // Concrete example: the same pattern in RN vs KMP
+      // RN — type-safe at runtime only (Zod), no compile check on import paths
+      // CustomerSearchScreen.tsx (audited):
+      //   import { fetchRestaurants } from '@/features/customer/home/api/home.api'
+      //   ← Cross-feature import, bypasses hooks/stores. ESLint: no rule for this.
+
+      // KMP — type-safe at compile time, detekt checks import paths
+      // SearchScreen.kt:
+      //   @Composable fun SearchScreen(vm: SearchViewModel = koinViewModel()) { ... }
+      //   ← detekt confirms no *Repository, *DataSource, HttpClient, DataStore
+      //   ← imported or called inside this file. Build FAILS if found.
+      ```
+
+      <Callout title="Verdict: KMP Wins on Enforcement">
+        RN and Flutter are capable of the same architectural quality — but both
+        rely on human discipline where KMP relies on compiler + detekt
+        enforcement. The RN audit proved that human discipline doesn't scale
+        across features and time. KMP's advantage is not a better language or
+        faster runtime — it's that **the rules that matter are checked by the
+        build, not by code review.** When RN's `StyleSheet.create({})` turned
+        out to be invisible to Stylelint, there was no fix short of migrating
+        to a different styling approach. When a detekt rule has a blind spot,
+        you write a new AST visitor in the same codebase and it applies
+        project-wide immediately.
+      </Callout>

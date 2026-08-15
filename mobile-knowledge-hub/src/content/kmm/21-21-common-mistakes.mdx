@@ -112,3 +112,252 @@ import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
       frameworks that own the full stack. KMP is a shared library pattern in
       a monorepo. When in doubt, ask: "would this design make sense if the
       shared module were a third-party library consumed by our apps?"
+
+      ## Mistakes LightBite Made in RN & Flutter — Don't Repeat
+
+      <StatGrid columns={3}>
+        <StatItem value="Zero Persist" label="Cart Lost on Restart" />
+        <StatItem value="Stores-Only" label="2 Tests/Feature" />
+        <StatItem value="Screen Bypass" label="API in Composable" />
+      </StatGrid>
+
+      <Callout title="The Audit Lesson">
+        LightBite built the same food-delivery app in Flutter (2024) and React
+        Native (2026). A comprehensive audit of the RN codebase against its own
+        CLAUDE.md standards revealed that **documented rules without automated
+        enforcement are silently broken**. These six mistakes are real — they
+        survived code review and CI because no check existed to catch them.
+        Every KMP prevention below has a named detekt rule that fails the build.
+      </Callout>
+
+      ### Mistake 7: Shipping Without Persistence
+
+      **The failure:** RN's CLAUDE.md required "Zustand persist middleware +
+      MMKV for cached data." A grep of the entire codebase returned **zero**
+      uses of `persist()`. The cart, addresses, order history, recent
+      searches, and driver online status were all lost on every app restart.
+      The `mmkv-storage.ts` wrapper was implemented on top of SecureStore
+      (not MMKV) and its async API was incompatible with Zustand's sync
+      `StateStorage` — it could never have worked even if someone tried.
+
+      ```kotlin
+      // KMP PREVENTION — DataStore + SQLDelight in the scaffold template
+      // Every feature's ViewModel rehydrates from the database by default.
+      // The scaffold generates this pattern; you must opt OUT of persistence,
+      // not opt IN.
+
+      // shared/src/commonMain/.../features/customer/cart/domain/CartRepository.kt
+      interface CartRepository {
+          fun getCachedCart(): Cart?                          // SQLDelight query
+          suspend fun refreshCart(): AppResult<Cart>          // Network → DB → emit
+          suspend fun addItem(request: AddToCartRequest): AppResult<Cart>
+      }
+
+      // composeApp/.../features/customer/cart/presentation/CartViewModel.kt
+      class CartViewModel(private val cartRepo: CartRepository) : ViewModel() {
+          init {
+              // 1. Instant — user sees data before network completes
+              cartRepo.getCachedCart()?.let { _screenState.value = ScreenState.Loaded(it) }
+              // 2. Network refresh updates DB + state
+              viewModelScope.launch { cartRepo.refreshCart() }
+          }
+      }
+
+      // detekt rule: ViewModelWithoutRehydration — flags ViewModels
+      // that call a network method in init without a preceding local-DB read
+      ```
+
+      <Callout title="Why Zustand persist Failed">
+        Zustand's `persist` middleware requires a synchronous `StateStorage`
+        adapter (`getItem`/`setItem`/`removeItem`). The RN team wrapped
+        `expo-secure-store` (which is async-only) and named it `mmkv-storage`.
+        The name suggested it was ready; the types showed it wasn't. In KMP,
+        SQLDelight is synchronous (driver provides threads) and the repository
+        interface makes the persistence contract explicit at the type level.
+      </Callout>
+
+      ### Mistake 8: Testing Only Stores and Schemas
+
+      **The failure:** RN's 35 test files covered only Zustand stores and Zod
+      schemas — 2 tests per feature. Zero hook tests, zero screen tests
+      (React Native Testing Library was installed but only 2 UI unit tests
+      existed), zero API tests (MSW was installed but never used), zero
+      WebSocket tests, zero ThemeProvider tests. **Two tests were failing**
+      at audit time with no one aware.
+
+      ```kotlin
+      // KMP PREVENTION — 6 mandatory test tiers, Kover gate, scaffold generates
+      // empty test files alongside every source file.
+
+      // 1. ViewModel test (Turbine) — MANDATORY
+      class CartViewModelTest {
+          @Test fun `loading → loaded with items`() = runTest { /* ... */ }
+          @Test fun `loading → empty when cart has no items`() = runTest { /* ... */ }
+          @Test fun `loading → error when network fails`() = runTest { /* ... */ }
+      }
+
+      // 2. Repository test (MockEngine) — MANDATORY
+      class CartRepositoryTest {
+          @Test fun `refreshCart returns parsed cart on 200`() = runTest { /* ... */ }
+          @Test fun `refreshCart returns NetworkError on 500`() = runTest { /* ... */ }
+      }
+
+      // 3. DataSource test — MANDATORY
+      // 4. Compose UI test — MANDATORY (every screen state + interactions)
+      // 5. Realtime test — MANDATORY for WS-dependent features
+      // 6. Token parity test — MANDATORY (theme values equal design spec)
+
+      // Kover gate in build-logic/conventions/quality.gradle.kts:
+      // :shared line coverage ≥ 80%, :composeApp line coverage ≥ 70%
+      // CI FAILS if coverage drops below threshold
+      ```
+
+      ### Mistake 9: Architecture Bypass in a Screen
+
+      **The failure:** `CustomerSearchScreen.tsx` imported `fetchRestaurants()`
+      directly from the home feature's API (cross-feature import), implemented
+      debounce + search state machine + MMKVStorage read/write all inside a
+      280-line screen file. The feature's own `useCustomerSearch` hook,
+      `search.store`, and `search.api` were **dead code** — written but never
+      called. This was the single worst architecture violation.
+
+      ```kotlin
+      // KMP PREVENTION — custom detekt rule blocks data access in @Composable
+      // The build FAILS if a Composable function calls:
+      // - Any HttpClient method (get/post/put/delete)
+      // - Koin.get() / getKoin().get()
+      // - DataStore / SQLDelight query methods
+      // - Any class ending in *Repository or *DataSource
+
+      // The scaffold generates the full unidirectional flow:
+      // Screen → ViewModel → Repository → DataSource
+      // Each arrow is a module boundary detekt can inspect.
+
+      // CORRECT — screen is thin, ViewModel owns all logic
+      @Composable
+      fun CustomerSearchScreen(
+          viewModel: SearchViewModel = koinViewModel(),
+          onRestaurantClick: (uuid: String) -> Unit,
+      ) {
+          val state by viewModel.screenState.collectAsStateWithLifecycle()
+          // Screen renders state, forwards events. That's it.
+          SearchContent(
+              query = viewModel.query.collectAsStateWithLifecycle().value,
+              onQueryChange = viewModel::onQueryChanged,     // debounce in VM
+              state = state,
+              onRestaurantClick = onRestaurantClick,
+          )
+      }
+      ```
+
+      ### Mistake 10: Raw Design Values Everywhere
+
+      **The failure:** RN's CLAUDE.md forbade raw hex colors and pixel values.
+      The audit found raw pixels in **every screen** (17/17 files) — `height:
+      44`, `fontSize: 56`, `width: 80, height: 80`, `borderRadius: 18`.
+      `rgba(0,0,0,0.3)` was found in `CustomerRestaurantScreen`. The Stylelint
+      `color-no-hex` rule couldn't parse `StyleSheet.create({})` objects, so
+      it silently let hex through. Emoji placeholders used `fontSize: 48/56/64`
+      instead of theme typography.
+
+      ```kotlin
+      // KMP PREVENTION — Material3 tokens + custom detekt rule
+      // Raw Color(0x…), N.dp, N.sp banned in @Composable
+
+      // CORRECT
+      Text(
+          text = stringResource(R.string.welcome_title),
+          style = LightBiteTheme.typography.displayLarge,
+          color = LightBiteTheme.colors.neutral[900],
+      )
+
+      // WRONG — detekt FAILS the build:
+      // Text("Welcome", fontSize = 48.sp, color = Color(0xFF111827))
+      // Box(modifier = Modifier.padding(16.dp).width(80.dp))
+
+      // Token parity test catches drift:
+      class ThemeTokenParityTest {
+          @Test fun `primary 500 matches design spec`() {
+              assertEquals(0xFFF97316, LightBiteColors.primary[500]) }
+      }
+      ```
+
+      ### Mistake 11: Hardcoded Strings in Production
+
+      **The failure:** Despite `eslint-plugin-i18next` in CI, the RN audit
+      found: `'Dubai Marina'` hardcoded as a location (no `t()` key), `min`/`km`
+      units concatenated as raw English strings in 5+ screens, cuisine labels
+      rendered via `cuisine.replace('_', ' ')` (English only, no Arabic path),
+      StatusBadge labels hardcoded in English inside the shared UI component,
+      and ErrorDisplay/OfflineBanner text hardcoded even though
+      `common.retry`/`common.noInternet` keys existed in `en.json`.
+
+      ```kotlin
+      // KMP PREVENTION — stringResource() everywhere, detekt bans string
+      // literals in Text(), contentDescription, and TextField(value=...)
+
+      // CORRECT
+      Text(stringResource(R.string.location_dubai_marina))
+      Text(stringResource(R.string.delivery_distance, distanceKm))
+      Text(stringResource(R.string.cuisine_${cuisineType.lowercase()}))
+
+      // WRONG — detekt FAILS the build:
+      // Text("Dubai Marina")
+      // Text("${distanceKm} km")
+      // Text(cuisine.replace("_", " "))
+
+      // strings.xml + values-ar/strings.xml from commit zero
+      ```
+
+      ### Mistake 12: Prescriptive Docs Without CI Enforcement
+
+      **The failure:** RN's CLAUDE.md was prescriptive, detailed, and
+      well-structured. But several of its rules had no corresponding CI check.
+      `StyleSheet.create` was invisible to Stylelint. `console.log` was
+      banned but ESLint's `no-console` rule was either missing or not
+      enforced — a `console.log` was found in production. The forbidden
+      patterns table had no automation column. **The document was a wishlist.**
+
+      ```kotlin
+      // KMP PREVENTION — convention plugins + CI from commit zero
+      // Every row in the Forbidden Patterns table has a named detekt rule.
+      // The CI pipeline (quality → test → build) runs on every commit.
+
+      // build-logic/conventions/src/main/kotlin/quality.gradle.kts
+      // Applied to EVERY module automatically — no per-module configuration
+      plugins {
+          id("io.gitlab.arturbosch.detekt")     // custom rules + defaults
+          id("org.jlleitschuh.gradle.ktlint")    // formatting
+          id("org.jetbrains.kotlinx.kover")      // coverage gate
+      }
+
+      // .github/workflows/ci.yml
+      // quality job FAILS if any detekt/ktlint rule triggers
+      // test job FAILS if Kover threshold not met
+      // build job FAILS if assembleDebug fails
+      // This ALL runs on the first commit — not retrofitted later.
+      ```
+
+      <Callout title="The Flutter Side — Same Pattern">
+        The Flutter audit found the same class of issues: `print()` in 5
+        production files, a Cubit that broke the sealed-state contract
+        (no `freezed` enforcement), and DI registration rules that were
+        documented but never verified. The pattern is universal: **a
+        documented standard is only as real as the check that fails the
+        build.** In KMP, detekt + ktlint + Kover are the enforcement
+        layer. The CLAUDE.md is the specification; the convention plugins
+        are the implementation.
+      </Callout>
+
+      ### Quick Reference: Audit Gap Prevention Map
+
+      | RN Audit Gap | Severity | How KMP Prevents It |
+      |-------------|----------|-------------------|
+      | Zero state persistence | 🔴 Critical | DataStore + SQLDelight wired into scaffold; ViewModel rehydrates by default |
+      | Stores-only tests (no hooks/screens/API/WS) | 🔴 Critical | 6 mandatory test tiers; Kover 80%/70% gate; tests auto-generated by scaffold |
+      | Screen bypassed architecture | 🔴 Critical | detekt `NoDataAccessInComposable` blocks repo/network/storage in screens |
+      | Raw hex/pixels in every screen | 🟠 High | Material3 tokens + detekt `NoRawDesignValues` + token parity test |
+      | Hardcoded strings (units, labels, badges) | 🟠 High | `stringResource()` + detekt `NoHardcodedStrings` |
+      | Forbidden patterns without enforcement | 🟠 High | Named detekt rule per row in the Forbidden Patterns table |
+      | Prescriptive docs without CI teeth | 🟠 High | Convention plugins + CI gate from commit zero |
+      | Inconsistent WebSocket usage | 🟡 Medium | Single `RealtimeClient` contract; `NetworkMonitor`-driven fallback |

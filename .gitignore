@@ -29,6 +29,9 @@ dist/
 *.log
 storage/logs/
 
+# Test credentials
+TEST_USERS.md
+
 # Test coverage
 coverage/
 
@@ -40,3 +43,7 @@ coverage/
 android/app/google-services.json
 ios/Podfile.lock
 ios/Pods/
+
+# Sensitive — internal (do not publish)
+system-desing/self-assessments/
+DEMO_GUIDE.md

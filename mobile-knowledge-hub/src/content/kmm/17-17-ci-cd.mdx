@@ -101,3 +101,224 @@ import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
       CI does not need to "know" about KMP — it runs the same Gradle tasks
       as any native project. Complexity lives in coordinating artifact versions
       across platforms.
+
+      ## LightBite Enforcement Pipeline
+
+      <StatGrid columns={3}>
+        <StatItem value="detekt + ktlint" label="Quality Gate" />
+        <StatItem value="80% / 70%" label="Coverage Gate" />
+        <StatItem value="Convention Plugins" label="Zero Config per Module" />
+      </StatGrid>
+
+      <Callout title="The Enforcement Lesson">
+        LightBite's RN CLAUDE.md was prescriptive and detailed — but several
+        rules had no corresponding CI check. `StyleSheet.create` objects were
+        invisible to Stylelint. `console.log` was banned but found in
+        production. The forbidden patterns table had no automation column.
+        In KMP, **every rule in CLAUDE.md maps to a named detekt/ktlint/Gradle
+        check that fails the build.** A documented standard without
+        enforcement is a wishlist. The convention plugins in `build-logic/`
+        ensure no module can escape the quality gates.
+      </Callout>
+
+      ### CI Pipeline
+
+      ```yaml
+      # .github/workflows/ci.yml
+      name: LightBite KMP CI
+      on:
+        push:
+          branches: [main]
+        pull_request:
+          branches: [main]
+
+      jobs:
+        quality:
+          name: "Quality (detekt + ktlint)"
+          runs-on: ubuntu-latest
+          timeout-minutes: 10
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-java@v4
+              with: { java-version: "17", distribution: "temurin" }
+            - uses: gradle/actions/setup-gradle@v4
+            - run: ./gradlew detekt ktlintCheck --continue
+            # FAILS if ANY detekt rule triggers or ANY ktlint violation found
+
+        test:
+          name: "Test + Coverage"
+          runs-on: ubuntu-latest
+          timeout-minutes: 20
+          needs: quality
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-java@v4
+              with: { java-version: "17", distribution: "temurin" }
+            - uses: gradle/actions/setup-gradle@v4
+            - run: |
+                ./gradlew :shared:allTests \
+                           :composeApp:testDebugUnitTest \
+                           koverReport \
+                           koverVerify
+            # FAILS if any test fails or Kover threshold not met
+            # :shared ≥ 80% line coverage, :composeApp ≥ 70% line coverage
+
+        build:
+          name: "Build"
+          runs-on: ubuntu-latest
+          timeout-minutes: 30
+          needs: test
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-java@v4
+              with: { java-version: "17", distribution: "temurin" }
+            - uses: gradle/actions/setup-gradle@v4
+            - run: ./gradlew :composeApp:assembleDebug
+            # FAILS if the app doesn't compile
+
+        ui-test:
+          name: "UI Tests (Emulator)"
+          runs-on: ubuntu-latest
+          timeout-minutes: 45
+          needs: build
+          if: github.event_name == 'pull_request'  # PRs only; nightly for full suite
+          strategy:
+            matrix:
+              api-level: [34]
+          steps:
+            - uses: actions/checkout@v4
+            - uses: actions/setup-java@v4
+              with: { java-version: "17", distribution: "temurin" }
+            - uses: gradle/actions/setup-gradle@v4
+            - name: Run Compose UI tests
+              uses: reactivecircus/android-emulator-runner@v2
+              with:
+                api-level: ${{ matrix.api-level }}
+                arch: x86_64
+                script: ./gradlew :composeApp:connectedDebugAndroidTest
+      ```
+
+      ### Convention Plugins — Zero Config per Module
+
+      ```kotlin
+      // build-logic/conventions/src/main/kotlin/quality.gradle.kts
+      // Applied to :shared and :composeApp via `plugins { id("lightbite.quality") }`
+      // No per-module configuration — every module gets the same rules automatically.
+
+      plugins {
+          id("io.gitlab.arturbosch.detekt")
+          id("org.jlleitschuh.gradle.ktlint")
+          id("org.jetbrains.kotlinx.kover")
+      }
+
+      detekt {
+          config.from(rootProject.file("config/detekt/detekt.yml"))
+          buildUponDefaultConfig = true
+          allRules = true
+          // Custom rules live in config/detekt/custom/
+          // NoDataAccessInComposable, NoRawDesignValues, NoHardcodedStrings,
+          // NoRunCatchingInViewModel, ViewModelWithoutRehydration
+      }
+
+      ktlint {
+          version("1.5.0")
+          verbose.set(true)
+          outputToConsole.set(true)
+          filter {
+              exclude { element -> element.file.path.contains("generated/") }
+          }
+      }
+
+      kover {
+          reports {
+              verify {
+                  rule {
+                      isEnabled = true
+                      bound {
+                          minBound = 80
+                          valueType = ValueType.LINE
+                      }
+                      // Applied to :shared (80%)
+                  }
+              }
+              filters {
+                  excludes {
+                      classes("*.di.*")     // Koin module declarations
+                      classes("*.expect.*")  // expect declarations (no logic)
+                  }
+              }
+          }
+      }
+      ```
+
+      ### Defekt Custom Rules — Mapped to Forbidden Patterns
+
+      ```yaml
+      # config/detekt/detekt.yml — custom rules section
+      lightbite:
+        NoDataAccessInComposable:
+          active: true
+          # Blocks: HttpClient.*, Koin.get, DataStore.*, SQLDelight queries, *Repository, *DataSource
+          # inside any @Composable or @Composable function
+          severity: error
+        NoRawDesignValues:
+          active: true
+          # Blocks: Color(0x, N.dp, N.sp, RoundedCornerShape(N.dp)
+          # inside @Composable functions
+          severity: error
+        NoHardcodedStrings:
+          active: true
+          # Blocks: string literals in Text(), contentDescription, TextField(value=)
+          # inside @Composable functions
+          severity: error
+        NoRunCatchingInViewModel:
+          active: true
+          # Blocks: runCatching { } inside classes ending in *ViewModel
+          severity: error
+        ViewModelWithoutRehydration:
+          active: true
+          # Flags ViewModels whose init calls a network method without
+          # a preceding local-DB read
+          severity: warning
+      ```
+
+      <Callout title="Why Convention Plugins">
+        RN's tooling required per-file or per-directory configuration — ESLint,
+        Stylelint, TypeScript, Jest, Plop all needed their own config files.
+        When `StyleSheet.create({})` turned out to be invisible to Stylelint's
+        `color-no-hex` rule, there was no single place to add enforcement.
+        Convention plugins solve this: every module gets the same detekt/ktlint/
+        Kover rules automatically. Adding a new rule to `quality.gradle.kts`
+        applies it project-wide immediately. No module can opt out.
+      </Callout>
+
+      ### Local Development Checks
+
+      ```bash
+      # Run everything CI runs — commit gate before pushing
+      ./gradlew detekt ktlintCheck          # Quality (seconds)
+      ./gradlew :shared:allTests             # Shared tests (seconds on JVM)
+      ./gradlew :composeApp:testDebugUnitTest # Unit tests (seconds)
+      ./gradlew koverVerify                  # Coverage gate (seconds)
+      ./gradlew :composeApp:assembleDebug    # Build (minutes)
+
+      # Auto-fix formatting
+      ./gradlew ktlintFormat
+      ```
+
+      ### The Golden Rule
+
+      | Principle | Enforcement |
+      |-----------|------------|
+      | "No raw design values" | detekt `NoRawDesignValues` — fails build |
+      | "No hardcoded strings" | detekt `NoHardcodedStrings` — fails build |
+      | "No data access in screens" | detekt `NoDataAccessInComposable` — fails build |
+      | "No runCatching in ViewModels" | detekt `NoRunCatchingInViewModel` — fails build |
+      | "80% shared / 70% compose coverage" | Kover `koverVerify` — fails build |
+      | "Consistent formatting" | ktlint `ktlintCheck` — fails build |
+      | "No println in production" | detekt `ForbiddenMethodCall` — fails build |
+      | "One version catalog for all deps" | Gradle version catalog — fails resolution |
+
+      **Every row in the Forbidden Patterns table has a named rule. Every named
+      rule runs in CI. CI fails the build on any violation. This is the
+      structural fix for RN's "documented but not enforced" problem.**

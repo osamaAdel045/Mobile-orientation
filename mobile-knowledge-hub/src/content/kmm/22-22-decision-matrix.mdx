@@ -127,3 +127,42 @@ import { StatGrid, StatItem, Callout, DecisionMatrix } from '@/components/mdx'
       It is a strategic technology choice that pays off over years of maintenance
       rather than months of initial development. The decision matrix clarifies
       that KMP is best for established native teams, not startups seeking speed.
+
+      ## LightBite Audit Context
+
+      <StatGrid columns={3}>
+        <StatItem value="8 Gaps" label="Found in RN Audit" />
+        <StatItem value="5/5" label="KMP Prevention Score" />
+        <StatItem value="detekt" label="Enforcement Layer" />
+      </StatGrid>
+
+      <Callout title="In Practice — LightBite Ran This in RN + Flutter">
+        LightBite built the same food-delivery app in Flutter (2024) and React
+        Native (2026). A comprehensive audit of both codebases against their own
+        CLAUDE.md standards revealed that **documented rules without automated
+        enforcement are silently broken**. KMP's decisive advantage is that one
+        shared `:shared` module means the enforcement lesson is implemented once,
+        not twice per platform.
+      </Callout>
+
+      ### Additional Decision Dimension
+
+      | Criteria | KMP | Flutter | React Native |
+      |----------|-----|---------|-------------|
+      | Engineering quality ceiling | Enforced by detekt + type system (Kotlin null-safety, sealed classes) | Human-reviewed + linter-only (Dart analysis not blocking) | Human-reviewed + linter-only (StyleSheet invisible to Stylelint) |
+      | Persistence guarantee | Compile-time: SQLDelight queries are type-checked; DataStore schema enforces structure | Runtime: shared_preferences has no schema; drift (SQLite) is optional | Runtime: Zustand persist is opt-in (never used in LightBite RN) |
+      | Architecture enforcement | detekt `NoDataAccessInComposable` blocks repo/network/storage in UI | Bloc layer rule is convention-only (no compile check) | Screen → hook → store is convention-only (broken in 1 screen) |
+      | Design token compliance | detekt `NoRawDesignValues` + token parity test | ThemeData tokens are convention (raw hex found in 3 screens) | useTheme() tokens + Stylelint (raw hex found in 17/17 screens) |
+      | i18n compliance | detekt `NoHardcodedStrings` + `stringResource()` | ARB gen-l10n is convention (hardcoded strings found in 5 files) | `eslint-plugin-i18next` (hardcoded strings found in 8 screens) |
+
+      <Callout title="The KMP Enforcement Advantage">
+        RN and Flutter both had prescriptive CLAUDE.md documents with identical
+        structure. Both had linters. Both had CI. The difference KMP brings is
+        that Kotlin's type system + custom detekt rules can enforce patterns
+        that JavaScript and Dart linters cannot. `NoDataAccessInComposable`
+        inspects the AST to confirm no repository/network/storage class is
+        accessed inside a `@Composable` function — this is structurally
+        impossible to enforce in JavaScript (dynamic imports) or Dart (no
+        composable-function annotation equivalent). KMP converts "remember to
+        follow the standard" into "the compiler and detekt enforce it."
+      </Callout>

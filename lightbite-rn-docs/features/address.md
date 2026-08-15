@@ -8,7 +8,7 @@ Saved delivery addresses with CRUD, default badge, and checkout selection suppor
 ## Data Flow
 
 ```
-GET /users/me/addresses
+GET /addresses
        |
 address.api.ts
        |
@@ -23,10 +23,10 @@ AddressScreen / AddressForm / AddressPicker
 
 | Endpoint | Method | Purpose |
 |---|---|---|
-| `/users/me/addresses` | GET | List paginated addresses |
-| `/users/me/addresses` | POST | Create address |
-| `/users/me/addresses/{id}` | PUT | Update address |
-| `/users/me/addresses/{id}` | DELETE | Delete (409 if default) |
+| `/addresses` | GET | List addresses |
+| `/addresses` | POST | Create address |
+| `/addresses/{uuid}` | PUT | Update address |
+| `/addresses/{uuid}` | DELETE | Delete (409 if default) |
 
 ## Store Design
 
@@ -38,7 +38,7 @@ AddressScreen / AddressForm / AddressPicker
 | `add(input)` | Method | Create → returns `AppError \| null` |
 | `update(uuid, input)` | Method | Edit → returns `AppError \| null` |
 | `remove(uuid)` | Method | Delete — surfaces 409 for default address |
-| `select(uuid)` | Method | Set selectedUuid for checkout |
+| `selectAddress(uuid)` | Method | Set selectedUuid for checkout |
 
 **Key decision:** Mutations return `AppError | null` instead of `boolean` — lets the UI display the specific 409 "cannot delete default" message from the server.
 
