@@ -10,6 +10,18 @@
           <LteCommandPalette :menu="sidebarMenu" />
           <LteFullscreenToggle />
           <LteColorModeToggle />
+          <!-- Realtime indicator -->
+          <a
+            href="#"
+            class="nav-link d-flex align-items-center gap-2"
+            :title="realtimeLabel"
+            @click.prevent="toggleRealtime"
+          >
+            <span class="d-flex align-items-center gap-1 small">
+              <span class="realtime-dot" :class="'realtime-' + realtimeStatus"></span>
+              <span class="d-none d-lg-inline">{{ realtimeLabel }}</span>
+            </span>
+          </a>
           <!-- User dropdown -->
           <ul class="navbar-nav ms-auto">
             <li class="nav-item dropdown">
@@ -47,11 +59,34 @@
 import { RouterLink } from 'vue-router';
 import { useAuthStore } from './stores/auth';
 import { useRouter } from 'vue-router';
+import { realtimeStatus, getEcho, disconnectEcho } from './echo';
 
 const auth = useAuthStore();
 const router = useRouter();
 
+import { computed, onMounted } from 'vue';
+
+// Establish the Reverb socket as soon as the admin app boots while authenticated,
+// so the realtime indicator is "Live" from the start and events are captured
+// even before a view subscribes to a channel.
+onMounted(() => {
+  if (auth.isAuthenticated) getEcho();
+});
+
+const realtimeLabel = computed(() => ({
+  connecting: 'Connecting…',
+  connected: 'Live',
+  disconnected: 'Offline',
+  error: 'Connection error',
+}[realtimeStatus.value] || 'Connecting…'));
+
+function toggleRealtime() {
+  // Reconnect attempt if the socket dropped.
+  if (realtimeStatus.value !== 'connected') getEcho();
+}
+
 function logout() {
+  disconnectEcho();
   auth.logout();
   router.push('/admin/login');
 }

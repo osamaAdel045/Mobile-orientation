@@ -7,11 +7,11 @@
     <div class="card shadow-sm mb-3">
       <div class="card-body py-2">
         <div class="row g-2 align-items-center">
-          <div class="col-sm-6">
-            <input v-model="search" @input="debounceSearch" placeholder="Search by action or resource&hellip;" class="form-control form-control-sm" />
+          <div class="col-sm-3">
+            <input v-model="search" @input="debounceSearch" placeholder="Search action / resource&hellip;" class="form-control form-control-sm" />
           </div>
-          <div class="col-sm-4">
-            <select v-model="actionFilter" @change="fetchLogs" class="form-select form-select-sm">
+          <div class="col-sm-3">
+            <select v-model="actionFilter" @change="fetchLogs(1)" class="form-select form-select-sm">
               <option value="">All Actions</option>
               <option value="user.">User Actions</option>
               <option value="restaurant.">Restaurant Actions</option>
@@ -19,7 +19,15 @@
               <option value="dispute.">Dispute Actions</option>
               <option value="order.">Order Actions</option>
               <option value="settings">Settings</option>
+              <option value="admin.">Admin Role Actions</option>
             </select>
+          </div>
+          <div class="col-sm-3">
+            <input v-model="adminFilter" @input="debounceSearch" placeholder="Filter by admin user&hellip;" class="form-control form-control-sm" />
+          </div>
+          <div class="col-sm-3 d-flex gap-2">
+            <div class="flex-grow-1"><input type="date" v-model="dateFrom" @change="fetchLogs(1)" class="form-control form-control-sm" /></div>
+            <div class="flex-grow-1"><input type="date" v-model="dateTo" @change="fetchLogs(1)" class="form-control form-control-sm" /></div>
           </div>
         </div>
       </div>
@@ -63,7 +71,8 @@ import api from '../stores/api';
 
 const loading = ref(true); const logs = ref([]);
 const total = ref(0); const page = ref(1); const lastPage = ref(1);
-const search = ref(''); const actionFilter = ref('');
+const search = ref(''); const actionFilter = ref(''); const adminFilter = ref('');
+const dateFrom = ref(''); const dateTo = ref('');
 let searchTimer = null;
 
 async function fetchLogs(p = 1) {
@@ -71,6 +80,9 @@ async function fetchLogs(p = 1) {
   const params = { page: p };
   if (search.value) params.search = search.value;
   if (actionFilter.value) params.action = actionFilter.value;
+  if (adminFilter.value) params.admin = adminFilter.value;
+  if (dateFrom.value) params.date_from = dateFrom.value;
+  if (dateTo.value) params.date_to = dateTo.value;
   try {
     const { data } = await api.get('/admin/audit-logs', { params });
     logs.value = data.data.data || [];

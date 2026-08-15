@@ -23,8 +23,6 @@ Route::prefix('v1')->group(function () {
     Route::post('auth/forgot-password', [AuthController::class, 'forgotPassword']);
     Route::put('auth/reset-password', [AuthController::class, 'resetPassword']);
     Route::get('restaurants', [RestaurantController::class, 'index']);
-    Route::get('restaurants/{uuid}', [RestaurantController::class, 'show']);
-    Route::get('restaurants/{uuid}/menu', [RestaurantController::class, 'menu']);
     Route::get('theme', [ThemeController::class, 'show']);
     Route::get('theme/config', [ThemeController::class, 'show']);
     Route::get('health', fn () => response()->json(['status' => 'ok', 'timestamp' => now()->toISOString(), 'services' => ['database' => 'ok', 'cache' => 'ok']]));
@@ -41,6 +39,7 @@ Route::prefix('v1')->group(function () {
         // Admin
         Route::prefix('admin')->middleware('admin.ip')->group(function () {
             Route::get('dashboard', [ScreenController::class, 'adminDashboard']);
+            Route::post('broadcast-auth', [AdminController::class, 'broadcastAuth']);
             Route::get('dashboard/revenue-chart', [AdminController::class, 'revenueChart']);
             Route::get('dashboard/order-volume', [AdminController::class, 'orderVolume']);
             Route::get('dashboard/top-restaurants', [AdminController::class, 'topRestaurants']);
@@ -119,6 +118,7 @@ Route::prefix('v1')->group(function () {
         Route::post('driver/jobs/{orderUuid}/deliver', [DriverController::class, 'confirmDelivery']);
         Route::get('driver/earnings', [DriverController::class, 'earnings']);
         Route::get('driver/orders', [DriverController::class, 'orderHistory']);
+        Route::get('driver/active-delivery', [DriverController::class, 'activeDelivery']);
 
         // Addresses
         Route::get('addresses', [AddressController::class, 'index']);
@@ -158,5 +158,10 @@ Route::prefix('v1')->group(function () {
             Route::patch('menu-items/{item}/toggle', [RestaurantDashboardController::class, 'toggleItem']);
             Route::post('toggle-pause', [RestaurantDashboardController::class, 'togglePause']);
         });
+
+        // Public restaurant detail routes — MUST be after /restaurants/dashboard/*
+        // to prevent "dashboard" from matching the {uuid} parameter.
+        Route::get('restaurants/{uuid}', [RestaurantController::class, 'show']);
+        Route::get('restaurants/{uuid}/menu', [RestaurantController::class, 'menu']);
     });
 });

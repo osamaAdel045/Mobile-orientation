@@ -160,23 +160,52 @@ class DriverController extends Controller
             ->orderBy('created_at', 'desc')
             ->paginate(20);
 
-        $data = $orders->map(fn (Order $order) => [
+        $data = collect($orders->items())->map(fn (Order $order) => [
             'uuid'          => $order->uuid,
             'order_number'  => $order->order_number,
             'restaurant'    => ['name' => $order->restaurant->name],
             'earnings'      => $order->driver_earnings_fils !== null
                 ? 'AED ' . number_format($order->driver_earnings_fils / 100, 2)
                 : null,
-            'distance_km'   => null,
+            'distance_km'   => 0,
             'status'        => $order->status->value,
             'completed_at'  => $order->updated_at?->toISOString(),
-        ]);
+        ])->values();
 
         return response()->json([
             'data' => $data,
             'meta' => [
                 'current_page' => $orders->currentPage(),
                 'total'        => $orders->total(),
+            ],
+        ]);
+    }
+
+    public function activeDelivery(Request $request): JsonResponse
+    {
+        $order = $request->user()->driverOrders()
+            ->with(['restaurant', 'items'])
+            ->whereIn('status', ['assigned', 'picked_up', 'delivering'])
+            ->latest()
+            ->first();
+
+        if (! $order) {
+            return response()->json(['data' => null]);
+        }
+
+        return response()->json([
+            'data' => [
+                'uuid' => $order->uuid,
+                'order_number' => $order->order_number,
+                'status' => $order->status->value,
+                'restaurant' => [
+                    'name' => $order->restaurant->name,
+                    'lat' => $order->restaurant->lat,
+                    'lng' => $order->restaurant->lng,
+                ],
+                'delivery_address' => $order->delivery_address_snapshot,
+                'estimated_earnings' => number_format(($order->driver_earnings_fils ?? 0) / 100, 2),
+                'created_at' => $order->created_at->toISOString(),
             ],
         ]);
     }

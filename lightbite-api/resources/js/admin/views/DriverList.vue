@@ -70,13 +70,20 @@
             <div class="col-sm-6">
               <input v-model="search" @input="debounceSearch" placeholder="Search by name, email, phone&hellip;" class="form-control form-control-sm" />
             </div>
-            <div class="col-sm-4">
-              <select v-model="statusFilter" @change="fetchDrivers" class="form-select form-select-sm">
+            <div class="col-sm-3">
+              <select v-model="statusFilter" @change="fetchDrivers(1)" class="form-select form-select-sm">
                 <option value="">All Statuses</option>
                 <option value="verified">Verified</option>
                 <option value="pending_verification">Pending</option>
                 <option value="suspended">Suspended</option>
                 <option value="deactivated">Deactivated</option>
+              </select>
+            </div>
+            <div class="col-sm-3">
+              <select v-model="onlineFilter" @change="fetchDrivers(1)" class="form-select form-select-sm">
+                <option value="">All Availability</option>
+                <option value="online">Online now</option>
+                <option value="offline">Offline</option>
               </select>
             </div>
           </div>
@@ -89,16 +96,25 @@
       </div>
       <div v-else class="card shadow-sm">
         <div class="table-responsive">
-          <table class="table table-hover mb-0">
+          <table class="table table-hover mb-0 align-middle">
             <thead class="table-light">
-              <tr><th>Name</th><th>Email</th><th>Status</th><th>Online</th><th>Deliveries</th><th></th></tr>
+              <tr><th>Name</th><th>Email</th><th>Status</th><th>Availability</th><th>Active Delivery</th><th>Deliveries</th><th></th></tr>
             </thead>
             <tbody>
               <tr v-for="d in drivers" :key="d.uuid">
                 <td class="fw-medium small">{{ d.name }}</td>
                 <td class="small text-body-secondary">{{ d.email }}</td>
                 <td><span class="badge text-capitalize" :class="statusBadge(d.status)">{{ formatStatus(d.status) }}</span></td>
-                <td><span class="badge" :class="d.is_online ? 'bg-success' : 'bg-secondary'">{{ d.is_online ? 'Online' : 'Offline' }}</span></td>
+                <td>
+                  <span class="d-inline-flex align-items-center gap-1">
+                    <span class="realtime-dot" :class="d.is_online ? 'realtime-connected' : 'realtime-disconnected'"></span>
+                    <span class="small" :class="d.is_online ? 'text-success' : 'text-body-secondary'">{{ d.is_online ? 'Online' : 'Offline' }}</span>
+                  </span>
+                </td>
+                <td>
+                  <span v-if="d.active_delivery > 0" class="badge bg-primary"><i class="bi bi-bicycle me-1"></i>{{ d.active_delivery }} active</span>
+                  <span v-else class="small text-body-secondary">—</span>
+                </td>
                 <td class="small">{{ d.deliveries }}</td>
                 <td><router-link :to="`/admin/drivers/${d.uuid}`" class="btn btn-sm btn-outline-warning">View</router-link></td>
               </tr>
@@ -125,7 +141,7 @@ const tab = ref('all');
 const drivers = ref([]); const pending = ref([]);
 const totalAll = ref(0); const totalPending = ref(0);
 const page = ref(1); const lastPage = ref(1);
-const search = ref(''); const statusFilter = ref('');
+const search = ref(''); const statusFilter = ref(''); const onlineFilter = ref('');
 const loading = ref(true); const loadingP = ref(true);
 const rejecting = ref(null); const rejectReason = ref('');
 let searchTimer = null;
@@ -135,6 +151,7 @@ async function fetchDrivers(p = 1) {
   const params = { page: p };
   if (search.value) params.search = search.value;
   if (statusFilter.value) params.status = statusFilter.value;
+  if (onlineFilter.value) params.online = onlineFilter.value;
   try {
     const { data } = await api.get('/admin/drivers', { params });
     drivers.value = data.data.data || [];

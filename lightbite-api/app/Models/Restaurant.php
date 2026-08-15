@@ -19,7 +19,11 @@ class Restaurant extends Model
     protected static function booted(): void
     {
         static::saving(function (Restaurant $restaurant) {
-            if ($restaurant->isDirty(['lat', 'lng'])) {
+            // location_point is a MySQL-only spatial column (added in the migration
+            // only for the mysql driver). Guard the write so other drivers (e.g.
+            // sqlite used by the test suite) do not attempt to insert a column
+            // that does not exist.
+            if (DB::getDriverName() === 'mysql' && $restaurant->isDirty(['lat', 'lng'])) {
                 $restaurant->location_point = DB::raw("POINT({$restaurant->lat}, {$restaurant->lng})");
             }
         });

@@ -6,6 +6,7 @@ namespace App\Services;
 
 use App\Enums\OrderStatus;
 use App\Enums\PaymentStatus;
+use App\Events\DriverAssigned;
 use App\Events\OrderStatusChanged;
 use App\Models\Order;
 use App\Models\OrderItem;
@@ -172,12 +173,19 @@ class OrderService
     {
         $this->assertTransition($order, OrderStatus::Ready, OrderStatus::Assigned);
 
+        $estimatedEarnings = $this->calculateDriverEarnings($order);
+
         $order->update([
             'status' => OrderStatus::Assigned,
             'driver_id' => $driver->id,
+            'driver_earnings_fils' => max($estimatedEarnings, 0),
+            'dispatch_expires_at' => null, // job accepted — stop the dispatch clock
         ]);
 
         $this->logStatus($order, OrderStatus::Ready, OrderStatus::Assigned, 'system');
+
+        // Notify customer + restaurant that a driver is on the way
+        DriverAssigned::dispatch($order->fresh(['driver', 'restaurant']));
 
         return $order;
     }
@@ -263,6 +271,30 @@ class OrderService
         return $order;
     }
 
+    /**
+     * Cancel a ready order because no driver could be found to fulfill it.
+     *
+     * Triggered when every candidate driver declines, or when no driver accepts
+     * within the 15-minute dispatch window. The captured payment is refunded in full.
+     */
+    public function cancelNoDriver(Order $order): Order
+    {
+        $this->assertTransition($order, OrderStatus::Ready, OrderStatus::Cancelled);
+
+        $order->update([
+            'status' => OrderStatus::Cancelled,
+            'dispatch_expires_at' => null,
+        ]);
+
+        if ($order->payment) {
+            $this->paymentService->refund($order->payment, $order->payment->amount_fils, 'No driver available.');
+        }
+
+        $this->logStatus($order, OrderStatus::Ready, OrderStatus::Cancelled, 'system', note: 'No driver available.');
+
+        return $order;
+    }
+
     public function modify(Order $order, User $customer, array $addItems = [], array $removeItemIds = [], array $updateQuantities = []): Order
     {
         if ($order->status !== OrderStatus::Pending) {
@@ -336,10 +368,17 @@ class OrderService
         $perKmRate = (int) (\App\Models\AppConfig::get('driver_per_km', 200)); // AED 2.00/km default
 
         $address = $order->delivery_address_snapshot;
-        $distance = $this->haversine(
-            (float) $order->restaurant->lat, (float) $order->restaurant->lng,
-            (float) ($address['lat'] ?? 0), (float) ($address['lng'] ?? 0)
-        );
+        $restLat = (float) $order->restaurant->lat;
+        $restLng = (float) $order->restaurant->lng;
+        $custLat = (float) ($address['lat'] ?? 0);
+        $custLng = (float) ($address['lng'] ?? 0);
+
+        // Guard against bad coordinates — fallback to a 5km estimate
+        if ($custLat === 0.0 && $custLng === 0.0) {
+            $distance = 5.0;
+        } else {
+            $distance = $this->haversine($restLat, $restLng, $custLat, $custLng);
+        }
 
         return $basePay + (int) round($distance * $perKmRate);
     }

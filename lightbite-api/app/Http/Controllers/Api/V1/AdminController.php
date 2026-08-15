@@ -19,10 +19,35 @@ use App\Services\PaymentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Broadcast;
 use Illuminate\Support\Facades\Storage;
 
 class AdminController extends Controller
 {
+    /**
+     * WebSocket channel authorization for the admin panel.
+     *
+     * The admin SPA authenticates with a JWT bearer token, but Laravel's
+     * default /broadcasting/auth route uses the session guard. This custom
+     * endpoint reuses Laravel's Pusher/Reverb broadcaster to produce the
+     * signature, so it stays byte-for-byte compatible with Reverb.
+     */
+    public function broadcastAuth(Request $request)
+    {
+        $this->authorizeAdmin();
+
+        $channel = $request->input('channel_name', '');
+        if (! str_starts_with($channel, 'private-admin')) {
+            abort(403, 'Channel not permitted.');
+        }
+
+        // Resolve the authenticated admin for the channel callback using the API (JWT) guard.
+        // PusherBroadcaster::auth() returns an array that Laravel serializes to JSON.
+        $request->setUserResolver(fn () => $request->user('api'));
+
+        return Broadcast::connection('reverb')->auth($request);
+    }
+
     public function pendingRestaurants(): JsonResponse { $this->authorizeAdmin();
         $data = Restaurant::where('status', RestaurantStatus::PendingVerification)->latest()->get()->map(fn ($r) => [
             'uuid' => $r->uuid, 'name' => $r->name, 'cuisine_types' => $r->cuisine_types,
@@ -147,7 +172,7 @@ class AdminController extends Controller
     // ─── Order Management ─────────────────────────────────
 
     public function orders(Request $request): JsonResponse { $this->authorizeAdmin();
-        $q = Order::with(['customer', 'restaurant', 'driver']);
+        $q = Order::with(['customer', 'restaurant', 'driver', 'statusLog']);
 
         if ($status = $request->input('status')) {
             $q->where('status', $status);
@@ -158,6 +183,9 @@ class AdminController extends Controller
                   ->orWhereHas('customer', fn ($q) => $q->where('name', 'like', "%{$search}%"))
                   ->orWhereHas('restaurant', fn ($q) => $q->where('name', 'like', "%{$search}%"));
             });
+        }
+        if ($restaurant = $request->input('restaurant')) {
+            $q->whereHas('restaurant', fn ($q) => $q->where('name', 'like', "%{$restaurant}%"));
         }
         if ($dateFrom = $request->input('date_from')) {
             $q->whereDate('created_at', '>=', $dateFrom);
@@ -176,14 +204,16 @@ class AdminController extends Controller
                 'customer_name'   => $o->customer->name,
                 'restaurant_name' => $o->restaurant->name,
                 'driver_name'     => $o->driver?->name,
+                'driver_uuid'     => $o->driver?->uuid,
                 'total'           => number_format($o->total_fils / 100, 2),
                 'created_at'      => $o->created_at->toISOString(),
+                'status_at'       => $o->statusLog->sortByDesc('created_at')->first()?->created_at?->toISOString() ?? $o->updated_at->toISOString(),
             ])
         );
     }
 
     public function orderDetail(Request $request, string $uuid): JsonResponse { $this->authorizeAdmin();
-        $o = Order::where('uuid', $uuid)->with(['customer', 'restaurant', 'driver', 'items', 'statusLog', 'payment'])->firstOrFail();
+        $o = Order::where('uuid', $uuid)->with(['customer', 'restaurant', 'driver.driverLocation', 'items', 'statusLog', 'payment'])->firstOrFail();
 
         return response()->json([
             'data' => [
@@ -192,7 +222,14 @@ class AdminController extends Controller
                 'status'          => $o->status->value,
                 'customer'        => ['uuid' => $o->customer->uuid, 'name' => $o->customer->name, 'email' => $o->customer->email, 'phone' => $o->customer->phone],
                 'restaurant'      => ['uuid' => $o->restaurant->uuid, 'name' => $o->restaurant->name, 'phone' => $o->restaurant->phone],
-                'driver'          => $o->driver ? ['uuid' => $o->driver->uuid, 'name' => $o->driver->name, 'phone' => $o->driver->phone] : null,
+                'driver'          => $o->driver ? [
+                    'uuid'    => $o->driver->uuid,
+                    'name'    => $o->driver->name,
+                    'phone'   => $o->driver->phone,
+                    'lat'     => $o->driver->driverLocation?->lat,
+                    'lng'     => $o->driver->driverLocation?->lng,
+                    'bearing' => $o->driver->driverLocation?->bearing,
+                ] : null,
                 'subtotal'        => number_format($o->subtotal_fils / 100, 2),
                 'delivery_fee'    => number_format($o->delivery_fee_fils / 100, 2),
                 'tax'             => number_format($o->tax_fils / 100, 2),
@@ -685,6 +722,9 @@ class AdminController extends Controller
         if ($status = $request->input('status')) {
             $q->where('status', $status);
         }
+        if ($online = $request->input('online')) {
+            $q->whereHas('driverLocation', fn ($q) => $q->where('is_online', $online === 'true' || $online === '1'));
+        }
         if ($search = $request->input('search')) {
             $q->where(function ($q) use ($search) {
                 $q->where('name', 'like', "%{$search}%")
@@ -697,14 +737,15 @@ class AdminController extends Controller
 
         return response()->json(
             $drivers->through(fn ($d) => [
-                'uuid'       => $d->uuid,
-                'name'       => $d->name,
-                'email'      => $d->email,
-                'phone'      => $d->phone,
-                'status'     => $d->status->value,
-                'is_online'  => $d->driverLocation?->is_online ?? false,
-                'deliveries' => $d->driverOrders()->where('status', 'delivered')->count(),
-                'created_at' => $d->created_at->toISOString(),
+                'uuid'            => $d->uuid,
+                'name'            => $d->name,
+                'email'           => $d->email,
+                'phone'           => $d->phone,
+                'status'          => $d->status->value,
+                'is_online'       => $d->driverLocation?->is_online ?? false,
+                'deliveries'      => $d->driverOrders()->where('status', 'delivered')->count(),
+                'active_delivery' => $d->driverOrders()->whereIn('status', ['assigned', 'picked_up', 'delivering'])->count(),
+                'created_at'      => $d->created_at->toISOString(),
             ])
         );
     }
@@ -955,6 +996,15 @@ class AdminController extends Controller
 
         if ($action = $request->input('action')) {
             $q->where('action', 'like', "%{$action}%");
+        }
+        if ($admin = $request->input('admin')) {
+            $q->whereHas('user', fn ($q) => $q->where('name', 'like', "%{$admin}%"));
+        }
+        if ($dateFrom = $request->input('date_from')) {
+            $q->whereDate('created_at', '>=', $dateFrom);
+        }
+        if ($dateTo = $request->input('date_to')) {
+            $q->whereDate('created_at', '<=', $dateTo);
         }
         if ($search = $request->input('search')) {
             $q->where(function ($q) use ($search) {

@@ -10,3 +10,7 @@ Artisan::command('inspire', function () {
 
 // Auto-expire pending orders every 60 seconds
 Schedule::command('orders:expire-pending')->everyMinute();
+
+// Advance driver dispatch: move timed-out offers to the next driver and cancel
+// orders that cannot find a driver. Runs every 30 seconds for snappy handoffs.
+Schedule::command('orders:process-dispatch')->everyThirtySeconds();

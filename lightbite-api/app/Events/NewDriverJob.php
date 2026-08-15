@@ -19,7 +19,10 @@ class NewDriverJob implements ShouldBroadcast
 
     public function broadcastOn(): array
     {
-        return [new Channel("private-driver.{$this->driverId}")];
+        return [
+            new Channel("private-driver.{$this->driverId}"),
+            new Channel('private-admin'),
+        ];
     }
 
     public function broadcastAs(): string
@@ -30,10 +33,12 @@ class NewDriverJob implements ShouldBroadcast
     public function broadcastWith(): array
     {
         return [
-            'order_uuid' => $this->order->uuid,
-            'restaurant_name' => $this->order->restaurant->name,
+            'order_uuid'       => $this->order->uuid,
+            'order_number'     => $this->order->order_number,
+            'driver_uuid'      => $this->order->driver?->uuid,
+            'restaurant_name'  => $this->order->restaurant?->name,
             'estimated_earnings' => number_format(($this->order->driver_earnings_fils ?? 800) / 100, 2),
-            'timeout_seconds' => 30,
+            'timeout_seconds'  => 30,
         ];
     }
 }

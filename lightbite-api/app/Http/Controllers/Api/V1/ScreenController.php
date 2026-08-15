@@ -17,6 +17,7 @@ use App\Services\DriverService;
 use App\Services\ThemeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ScreenController extends Controller
 {
@@ -233,6 +234,11 @@ class ScreenController extends Controller
         $openDisputes = Dispute::where('status', 'open')->count();
         $todayRevenue = Order::whereDate('created_at', today())->whereIn('status', ['delivered', 'resolved', 'refunded'])->sum('total_fils');
         $completedToday = Order::whereDate('created_at', today())->where('status', 'delivered')->count();
+        $totalToday = Order::whereDate('created_at', today())->count();
+        $ordersPendingAcceptance = Order::whereIn('status', ['pending', 'confirmed'])
+            ->where('created_at', '<', now()->subMinutes(2))
+            ->count();
+        $completionRate = $totalToday > 0 ? (int) round($completedToday / $totalToday * 100) : 0;
 
         // Status breakdown for pie/donut chart
         $orderStatusBreakdown = [
@@ -270,6 +276,22 @@ class ScreenController extends Controller
                 'total' => Order::whereDate('created_at', $date)->count(),
                 'delivered' => Order::whereDate('created_at', $date)->where('status', 'delivered')->count(),
                 'cancelled' => Order::whereDate('created_at', $date)->where('status', 'cancelled')->count(),
+            ];
+        }
+
+        // Orders by hour — today
+        // HOUR() is MySQL-only; use strftime() on sqlite so the admin dashboard
+        // works across both drivers (MySQL for production, sqlite for tests).
+        $ordersByHour = [];
+        $hourExpr = DB::getDriverName() === 'sqlite'
+            ? "CAST(strftime('%H', created_at) AS INTEGER)"
+            : 'HOUR(created_at)';
+        for ($h = 0; $h < 24; $h++) {
+            $ordersByHour[] = [
+                'hour'  => $h.':00',
+                'count' => Order::whereDate('created_at', today())
+                    ->whereRaw("{$hourExpr} = ?", [$h])
+                    ->count(),
             ];
         }
 
@@ -327,6 +349,59 @@ class ScreenController extends Controller
                 'stuck_since' => $o->created_at->diffForHumans(),
             ]);
 
+        // Live orders — active orders for the real-time dashboard section
+        $liveOrders = Order::whereIn('status', ['pending', 'confirmed', 'preparing', 'ready', 'assigned', 'picked_up', 'delivering'])
+            ->with('restaurant:id,name', 'driver:id,uuid,name')
+            ->latest()
+            ->limit(12)
+            ->get()
+            ->map(fn ($o) => [
+                'uuid'            => $o->uuid,
+                'order_number'    => $o->order_number,
+                'status'          => $o->status->value,
+                'restaurant_name' => $o->restaurant->name,
+                'driver_name'     => $o->driver?->name,
+                'total'           => number_format($o->total_fils / 100, 2),
+                'age_min'         => $o->created_at->diffInMinutes(now()),
+                'created_at'      => $o->created_at->toISOString(),
+            ]);
+
+        // Needs attention — orders awaiting a driver for > 5 minutes
+        $awaitingDriver = Order::where('status', 'ready')
+            ->whereNull('driver_id')
+            ->where('updated_at', '<', now()->subMinutes(5))
+            ->with('restaurant')
+            ->limit(10)
+            ->get()
+            ->map(fn ($o) => [
+                'uuid' => $o->uuid,
+                'order_number' => $o->order_number,
+                'restaurant_name' => $o->restaurant->name,
+                'awaiting_since' => $o->updated_at->diffForHumans(),
+                'updated_at' => $o->updated_at->toISOString(),
+            ]);
+
+        // Needs attention — restaurants with a high rejection rate
+        // whereHas(..., null, '>=', 5) is used instead of having('orders_count', '>=', 5)
+        // because sqlite rejects HAVING on a non-aggregate query.
+        $highRejectionRestaurants = Restaurant::withCount([
+            'orders',
+            'orders as rejected_count' => fn ($q) => $q->where('status', 'rejected'),
+        ])
+            ->whereHas('orders', null, '>=', 5)
+            ->get()
+            ->filter(fn ($r) => $r->orders_count > 0 && ($r->rejected_count / $r->orders_count) >= 0.4)
+            ->sortByDesc(fn ($r) => $r->rejected_count / $r->orders_count)
+            ->take(5)
+            ->values()
+            ->map(fn ($r) => [
+                'uuid'           => $r->uuid,
+                'name'           => $r->name,
+                'rejected'       => $r->rejected_count,
+                'total'          => $r->orders_count,
+                'rejection_rate' => (int) round($r->rejected_count / $r->orders_count * 100),
+            ]);
+
         return response()->json([
             'data' => [
                 'theme' => $this->themeService->getTheme(),
@@ -336,6 +411,9 @@ class ScreenController extends Controller
                     'active_restaurants' => $activeRestaurants,
                     'today_revenue' => number_format($todayRevenue / 100, 2),
                     'completed_today' => $completedToday,
+                    'orders_today' => $totalToday,
+                    'orders_pending_acceptance' => $ordersPendingAcceptance,
+                    'completion_rate' => $completionRate,
                     'pending_restaurant_verifications' => $pendingRestaurantVerifications,
                     'pending_driver_verifications' => $pendingDriverVerifications,
                     'open_disputes' => $openDisputes,
@@ -343,11 +421,22 @@ class ScreenController extends Controller
                 'charts' => [
                     'revenue' => $revenueChart,
                     'volume' => $volumeChart,
+                    'orders_by_hour' => $ordersByHour,
                     'status_breakdown' => $orderStatusBreakdown,
                     'top_restaurants' => $topRestaurants,
                 ],
                 'recent_activity' => $activityFeed,
                 'stuck_orders' => $stuckOrders,
+                'live_orders' => $liveOrders,
+                'needs_attention' => [
+                    'awaiting_driver' => $awaitingDriver,
+                    'high_rejection_restaurants' => $highRejectionRestaurants,
+                    'pending_verifications' => [
+                        'restaurants' => $pendingRestaurantVerifications,
+                        'drivers' => $pendingDriverVerifications,
+                        'total' => $pendingRestaurantVerifications + $pendingDriverVerifications,
+                    ],
+                ],
             ],
             'meta' => ['trace_id' => $request->header('X-Trace-Id', '')],
         ]);

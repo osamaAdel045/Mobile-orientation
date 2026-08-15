@@ -113,16 +113,16 @@ class OrderController extends Controller
 
     public function history(Request $request): JsonResponse
     {
-        $orders = $request->user()->customerOrders()
+        $paginator = $request->user()->customerOrders()
             ->with(['restaurant', 'items'])
             ->latest()
             ->paginate(20);
 
         return response()->json([
-            'data' => $orders->through(fn ($o) => $this->formatOrder($o)),
+            'data' => collect($paginator->items())->map(fn ($o) => $this->formatOrder($o))->values(),
             'meta' => [
-                'current_page' => $orders->currentPage(),
-                'total' => $orders->total(),
+                'current_page' => $paginator->currentPage(),
+                'total' => $paginator->total(),
                 'trace_id' => $request->header('X-Trace-Id', ''),
             ],
         ]);

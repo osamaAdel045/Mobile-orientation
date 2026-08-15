@@ -234,14 +234,14 @@ class RestaurantDashboardController extends Controller
 
     public function orders(Request $request): JsonResponse
     {
-        $orders = $request->user()->restaurant->orders()
+        $paginator = $request->user()->restaurant->orders()
             ->with(['items', 'customer:id,uuid,name'])
             ->when($request->status, fn ($q) => $q->whereIn('status', explode(',', $request->status)))
             ->latest()
             ->paginate(20);
 
         return response()->json([
-            'data' => $orders->through(fn ($o) => [
+            'data' => collect($paginator->items())->map(fn ($o) => [
                 'uuid' => $o->uuid,
                 'order_number' => $o->order_number,
                 'status' => $o->status->value,
@@ -249,8 +249,8 @@ class RestaurantDashboardController extends Controller
                 'items_summary' => $o->items->pluck('name')->join(', '),
                 'total' => number_format($o->total_fils / 100, 2),
                 'created_at' => $o->created_at->toISOString(),
-            ]),
-            'meta' => ['current_page' => $orders->currentPage(), 'total' => $orders->total()],
+            ])->values(),
+            'meta' => ['current_page' => $paginator->currentPage(), 'total' => $paginator->total()],
         ]);
     }
 

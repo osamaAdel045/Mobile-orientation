@@ -22,6 +22,7 @@ class OrderStatusChanged implements ShouldBroadcast
         return [
             new Channel("private-orders.{$this->order->customer_id}"),
             new Channel("private-orders.{$this->order->restaurant->owner_id}"),
+            new Channel('private-admin'),
         ];
     }
 
@@ -32,6 +33,16 @@ class OrderStatusChanged implements ShouldBroadcast
 
     public function broadcastWith(): array
     {
-        return ['order_uuid' => $this->order->uuid, 'order_number' => $this->order->order_number, 'from_status' => $this->fromStatus, 'to_status' => $this->toStatus, 'note' => $this->note];
+        return [
+            'order_uuid'      => $this->order->uuid,
+            'order_number'    => $this->order->order_number,
+            'from_status'     => $this->fromStatus,
+            'to_status'       => $this->toStatus,
+            'note'            => $this->note,
+            'customer_name'   => $this->order->customer?->name,
+            'restaurant_name' => $this->order->restaurant?->name,
+            'total'           => number_format($this->order->total_fils / 100, 2),
+            'updated_at'      => $this->order->updated_at->toISOString(),
+        ];
     }
 }

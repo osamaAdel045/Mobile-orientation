@@ -22,6 +22,7 @@ class DriverAssigned implements ShouldBroadcast
         return [
             new Channel("private-orders.{$this->order->customer_id}"),
             new Channel("private-orders.{$this->order->restaurant->owner_id}"),
+            new Channel('private-admin'),
         ];
     }
 
@@ -32,6 +33,13 @@ class DriverAssigned implements ShouldBroadcast
 
     public function broadcastWith(): array
     {
-        return ['order_uuid' => $this->order->uuid, 'driver_name' => $this->order->driver->name];
+        return [
+            'order_uuid'      => $this->order->uuid,
+            'order_number'    => $this->order->order_number,
+            'driver_uuid'     => $this->order->driver?->uuid,
+            'driver_name'     => $this->order->driver?->name,
+            'restaurant_name' => $this->order->restaurant?->name,
+            'updated_at'      => $this->order->updated_at->toISOString(),
+        ];
     }
 }

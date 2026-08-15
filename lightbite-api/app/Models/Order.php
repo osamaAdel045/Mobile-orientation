@@ -31,6 +31,10 @@ class Order extends Model
         'actual_delivery_min',
         'customer_note',
         'lock_version',
+        'dispatch_attempts',
+        'dispatched_driver_ids',
+        'dispatch_started_at',
+        'dispatch_expires_at',
     ];
 
     protected function casts(): array
@@ -38,6 +42,9 @@ class Order extends Model
         return [
             'status' => OrderStatus::class,
             'delivery_address_snapshot' => 'array',
+            'dispatched_driver_ids' => 'array',
+            'dispatch_started_at' => 'datetime',
+            'dispatch_expires_at' => 'datetime',
         ];
     }
 
